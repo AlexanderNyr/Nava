@@ -1,0 +1,4 @@
+fn main() {
+    let a = []
+    print(len(a))
+}

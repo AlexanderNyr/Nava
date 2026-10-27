@@ -11,15 +11,19 @@ from .model import Location, Token
 KEYWORDS = {
     "fn": "FN", "let": "LET", "if": "IF", "else": "ELSE",
     "while": "WHILE", "return": "RETURN", "true": "TRUE", "false": "FALSE",
+    "mut": "MUT",
 }
 TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||"}
-ONE_CHAR = set("(){}:,+-*/%=!<>;")
+ONE_CHAR = set("(){}[],:+-*/%=!<>;")
 
 def lex(source: str) -> list[Token]:
     source = source.replace("\r\n", "\n").replace("\r", "\n")
     tokens: list[Token] = []
     i, line, col = 0, 1, 1
-    parens: list[Location] = []
+    # Open `(` and `[` delimiters, innermost last. A newline inside either is
+    # not a statement separator, so an argument list or an array literal may
+    # be split across lines; outside them it is.
+    open_delimiters: list[tuple[str, Location]] = []
     n = len(source)
 
     while i < n:
@@ -29,7 +33,7 @@ def lex(source: str) -> list[Token]:
             i += 1
             col += 1
         elif ch == "\n":
-            if not parens:
+            if not open_delimiters:
                 tokens.append(Token("NL", "\n", loc))
             i += 1
             line += 1
@@ -97,19 +101,30 @@ def lex(source: str) -> list[Token]:
             i += 2
             col += 2
         elif ch in ONE_CHAR:
-            if ch == "(":
-                parens.append(loc)
-            elif ch == ")":
-                if not parens:
-                    raise make("E0109", "unmatched ')'", loc, loc.advance(")"))
-                parens.pop()
+            if ch in "([":
+                open_delimiters.append((ch, loc))
+            elif ch in ")]":
+                closing = ")" if ch == ")" else "]"
+                expected = "(" if ch == ")" else "["
+                if not open_delimiters or open_delimiters[-1][0] != expected:
+                    code = "E0109" if ch == ")" else "E0112"
+                    hint = None
+                    if open_delimiters and open_delimiters[-1][0] != expected:
+                        hint = (f"the '{open_delimiters[-1][0]}' opened at line "
+                                f"{open_delimiters[-1][1].line} is still open")
+                    raise make(code, f"unmatched {closing!r}", loc, loc.advance(closing), hint)
+                open_delimiters.pop()
             tokens.append(Token(ch, ch, loc))
             i += 1
             col += 1
         else:
             raise make("E0101", f"unexpected character {ch!r}", loc, loc.advance(ch),
                        "identifiers use ASCII letters, digits and '_'")
-    if parens:
-        raise make("E0110", "unclosed '('", parens[-1], parens[-1].advance("("))
+    if open_delimiters:
+        kind, where = open_delimiters[-1]
+        if kind == "(":
+            raise make("E0110", "unclosed '('", where, where.advance("("))
+        raise make("E0113", "unclosed '['", where, where.advance("["),
+                   "close the array literal or type with ']'")
     tokens.append(Token("EOF", "", Location(line, col)))
     return tokens

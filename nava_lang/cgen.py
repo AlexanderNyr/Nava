@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from .model import (
-    Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If, Let,
-    Number, Program, Return, String, Unary, Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If,
+    Index, IndexAssign, Let, Number, Program, Return, String, Unary, Variable,
+    While,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -102,9 +103,144 @@ static int64_t nv_read_i64(void) {
     }
     return (int64_t)value;
 }
+
+/* --- arrays ------------------------------------------------------------
+   One representation per element type. Every allocation size and every index
+   is checked, so an out-of-range access is a deterministic runtime error
+   instead of undefined behaviour. Storage is owned by one binding and freed at
+   the end of the block that declared it, including on an early `return`. */
+
+#define NV_MAX_ARRAY_ELEMENTS INT64_C(4194304)
+
+#ifdef NAVA_TRACK_ALLOCS
+/* Instrumentation for the tests: `-DNAVA_TRACK_ALLOCS` reports how many arrays
+   were still owned when the process ended, so a missing release is visible. */
+static int64_t nv_live_arrays = 0;
+static void nv_report_live_arrays(void) {
+    fprintf(stderr, "nava: live arrays at exit: %" PRId64 "\n", nv_live_arrays);
+}
+static void nv_note_array_alloc(void) {
+    static bool registered = false;
+    if (!registered) { atexit(nv_report_live_arrays); registered = true; }
+    nv_live_arrays += 1;
+}
+static void nv_note_array_free(void) { nv_live_arrays -= 1; }
+#else
+static inline void nv_note_array_alloc(void) { }
+static inline void nv_note_array_free(void) { }
+#endif
+
+static void nv_array_length_error(int64_t count) {
+    fprintf(stderr,
+            "nava runtime error: array length %" PRId64 " exceeds the limit of %" PRId64 "\n",
+            count, NV_MAX_ARRAY_ELEMENTS);
+    exit(1);
+}
+
+static void *nv_array_alloc(int64_t count, size_t element_size) {
+    if (count < 0) nv_fail("array length must not be negative");
+    if (count > NV_MAX_ARRAY_ELEMENTS) nv_array_length_error(count);
+    if (count > 0 && (uint64_t)count > (uint64_t)(SIZE_MAX / element_size))
+        nv_fail("array size overflows the platform size type");
+    if (count == 0) return NULL;
+    void *data = calloc((size_t)count, element_size);
+    if (data == NULL) nv_fail("out of memory allocating an array");
+    nv_note_array_alloc();
+    return data;
+}
+
+static int64_t nv_check_index(int64_t index, int64_t length) {
+    if (index < 0 || index >= length) {
+        fprintf(stderr,
+                "nava runtime error: array index %" PRId64
+                " is out of bounds for length %" PRId64 "\n",
+                index, length);
+        exit(1);
+    }
+    return index;
+}
+
+typedef struct { int64_t *data; int64_t len; } nv_arr_i64;
+typedef struct { bool *data; int64_t len; } nv_arr_bool;
+typedef struct { const char **data; int64_t len; } nv_arr_str;
+
+static nv_arr_i64 nv_arr_i64_new(int64_t len) {
+    nv_arr_i64 result;
+    result.len = len;
+    result.data = (int64_t *)nv_array_alloc(len, sizeof(int64_t));
+    return result;
+}
+static nv_arr_i64 nv_arr_i64_init(int64_t len, const int64_t *items) {
+    nv_arr_i64 result = nv_arr_i64_new(len);
+    if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(int64_t));
+    return result;
+}
+static inline int64_t nv_arr_i64_get(nv_arr_i64 array, int64_t index) {
+    return array.data[nv_check_index(index, array.len)];
+}
+static inline void nv_arr_i64_set(nv_arr_i64 *array, int64_t index, int64_t value) {
+    array->data[nv_check_index(index, array->len)] = value;
+}
+static void nv_arr_i64_free(nv_arr_i64 *array) {
+    if (array->data != NULL) { free(array->data); nv_note_array_free(); }
+    array->data = NULL;
+    array->len = 0;
+}
+
+static nv_arr_bool nv_arr_bool_new(int64_t len) {
+    nv_arr_bool result;
+    result.len = len;
+    result.data = (bool *)nv_array_alloc(len, sizeof(bool));
+    return result;
+}
+static nv_arr_bool nv_arr_bool_init(int64_t len, const bool *items) {
+    nv_arr_bool result = nv_arr_bool_new(len);
+    if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(bool));
+    return result;
+}
+static inline bool nv_arr_bool_get(nv_arr_bool array, int64_t index) {
+    return array.data[nv_check_index(index, array.len)];
+}
+static inline void nv_arr_bool_set(nv_arr_bool *array, int64_t index, bool value) {
+    array->data[nv_check_index(index, array->len)] = value;
+}
+static void nv_arr_bool_free(nv_arr_bool *array) {
+    if (array->data != NULL) { free(array->data); nv_note_array_free(); }
+    array->data = NULL;
+    array->len = 0;
+}
+
+static nv_arr_str nv_arr_str_new(int64_t len) {
+    nv_arr_str result;
+    result.len = len;
+    result.data = (const char **)nv_array_alloc(len, sizeof(const char *));
+    return result;
+}
+static nv_arr_str nv_arr_str_init(int64_t len, const char *const *items) {
+    nv_arr_str result = nv_arr_str_new(len);
+    if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(const char *));
+    return result;
+}
+static inline const char *nv_arr_str_get(nv_arr_str array, int64_t index) {
+    return array.data[nv_check_index(index, array.len)];
+}
+static inline void nv_arr_str_set(nv_arr_str *array, int64_t index, const char *value) {
+    array->data[nv_check_index(index, array->len)] = value;
+}
+static void nv_arr_str_free(nv_arr_str *array) {
+    if (array->data != NULL) { free(array->data); nv_note_array_free(); }
+    array->data = NULL;
+    array->len = 0;
+}
 '''
 
-C_TYPES = {"i64": "int64_t", "bool": "bool", "str": "const char *", "void": "void"}
+C_TYPES = {"i64": "int64_t", "bool": "bool", "str": "const char *", "void": "void",
+           "[i64]": "nv_arr_i64", "[bool]": "nv_arr_bool", "[str]": "nv_arr_str"}
+#: Runtime name suffix per array type.
+ARRAY_TAG = {"[i64]": "i64", "[bool]": "bool", "[str]": "str"}
+#: C type of the compound literal that carries an array literal's items.
+ARRAY_LITERAL = {"[i64]": "const int64_t", "[bool]": "const bool",
+                 "[str]": "const char *const"}
 ARITHMETIC = {"+": "nv_add", "-": "nv_sub", "*": "nv_mul", "/": "nv_div", "%": "nv_rem"}
 
 
@@ -120,6 +256,13 @@ class CGenerator:
         self.lines: list[str] = []
         self.indent = 0
         self.temp_index = 0
+        #: Owned arrays per open block, innermost last. Used to emit exactly one
+        #: release per binding, on the normal path and before every `return`.
+        self.owned: list[list[tuple[str, str]]] = []
+        #: Arrays created for the statement being emitted (a literal or
+        #: `array_zeros` in argument position). They live until the end of that
+        #: statement, which is the shortest lifetime that keeps evaluation order.
+        self.temporaries: list[tuple[str, str]] = []
 
     def line(self, text: str = "") -> None:
         self.lines.append("    " * self.indent + text)
@@ -143,7 +286,10 @@ class CGenerator:
         for function in self.program.functions:
             self.line(self.signature(function) + " {")
             self.indent += 1
+            self.owned = [[]]
             self.statements(function.body)
+            self.release(0)
+            self.owned = []
             self.indent -= 1
             self.line("}")
             self.line()
@@ -160,11 +306,65 @@ class CGenerator:
         self.line("}")
         return "\n".join(self.lines) + "\n"
 
+    def release(self, since: int = 0) -> None:
+        """Emit one `free` per owned array, innermost block and binding last-first."""
+        for frame in reversed(self.owned[since:]):
+            for cname, typ in reversed(frame):
+                self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+
+    def release_temporaries(self) -> None:
+        for cname, typ in reversed(self.temporaries):
+            self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+        self.temporaries = []
+
+    def new_array(self, expr) -> str:
+        """An array initializer that binds storage directly, with no temporary."""
+        if isinstance(expr, ArrayLiteral):
+            values = [self.expression(item) for item in expr.items]
+            tag = ARRAY_TAG[expr.typ]
+            if not values:
+                return f"nv_arr_{tag}_init(INT64_C(0), NULL)"
+            items = ", ".join(values)
+            return (f"nv_arr_{tag}_init(INT64_C({len(values)}), "
+                    f"({ARRAY_LITERAL[expr.typ]}[]){{{items}}})")
+        assert isinstance(expr, Call) and expr.name == "array_zeros", (
+            "the checker must reject an array initializer that is neither a literal "
+            "nor array_zeros (E0331); reaching this point is a compiler bug")
+        length = self.expression(expr.args[0])
+        return f"nv_arr_i64_new({length})"
+
+    def block(self, statements) -> None:
+        """A nested block owns the arrays declared directly in it."""
+        self.owned.append([])
+        self.statements(statements)
+        for cname, typ in reversed(self.owned[-1]):
+            self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+        self.owned.pop()
+
     def statements(self, statements) -> None:
         for statement in statements:
+            active = self.temporaries
+            self.temporaries = []
+            self.statement(statement)
+            self.release_temporaries()
+            self.temporaries = active
+
+    def statement(self, statement) -> None:
             if isinstance(statement, Let):
-                value = self.expression(statement.value)
+                value = (self.new_array(statement.value)
+                         if statement.symbol.typ in ARRAY_TAG else self.expression(statement.value))
                 self.line(f"{C_TYPES[statement.symbol.typ]} {statement.symbol.cname} = {value};")
+                if statement.symbol.typ in ARRAY_TAG:
+                    self.owned[-1].append((statement.symbol.cname, statement.symbol.typ))
+            elif isinstance(statement, IndexAssign):
+                # The index is checked before the value is evaluated, so a failed
+                # write has no observable side effect, matching the documented
+                # "a runtime error stops the program immediately".
+                index = self.expression(statement.index)
+                tag = ARRAY_TAG[statement.symbol.typ]
+                checked = self.temp("i64", f"nv_check_index({index}, {statement.symbol.cname}.len)")
+                value = self.expression(statement.value)
+                self.line(f"nv_arr_{tag}_set(&{statement.symbol.cname}, {checked}, {value});")
             elif isinstance(statement, Assign):
                 value = self.expression(statement.value)
                 self.line(f"{statement.symbol.cname} = {value};")
@@ -172,31 +372,44 @@ class CGenerator:
                 self.expression(statement.expr)
             elif isinstance(statement, Return):
                 if statement.value is None:
+                    self.release_temporaries()
+                    self.release()
                     self.line("return;")
                 else:
+                    # The result is materialised before the arrays are released,
+                    # so no released storage can appear in the returned value.
                     value = self.expression(statement.value)
+                    self.release_temporaries()
+                    self.release()
                     self.line(f"return {value};")
             elif isinstance(statement, If):
                 condition = self.expression(statement.condition)
+                self.release_temporaries()
                 self.line(f"if ({condition}) {{")
                 self.indent += 1
-                self.statements(statement.then_body)
+                self.block(statement.then_body)
                 self.indent -= 1
                 if statement.else_body is None:
                     self.line("}")
                 else:
                     self.line("} else {")
                     self.indent += 1
-                    self.statements(statement.else_body)
+                    self.block(statement.else_body)
                     self.indent -= 1
                     self.line("}")
             elif isinstance(statement, While):
                 # Evaluate the condition on every iteration, including any calls.
+                # Temporaries it creates are released on every iteration too,
+                # before the loop can leave.
                 self.line("while (true) {")
                 self.indent += 1
+                saved = self.temporaries
+                self.temporaries = []
                 condition = self.expression(statement.condition)
+                self.release_temporaries()
+                self.temporaries = saved
                 self.line(f"if (!({condition})) break;")
-                self.statements(statement.body)
+                self.block(statement.body)
                 self.indent -= 1
                 self.line("}")
             else:
@@ -211,6 +424,18 @@ class CGenerator:
             return "true" if expr.value else "false"
         if isinstance(expr, Variable):
             return expr.symbol.cname
+        if isinstance(expr, ArrayLiteral):
+            # Every item is materialised first, so left-to-right evaluation and
+            # a single allocation are both preserved. In value position the new
+            # array is a temporary of the enclosing statement.
+            name = self.temp(expr.typ, self.new_array(expr))
+            self.temporaries.append((name, expr.typ))
+            return name
+        if isinstance(expr, Index):
+            base = self.expression(expr.array)
+            index = self.expression(expr.index)
+            tag = ARRAY_TAG[expr.array.typ]
+            return self.temp(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
         if isinstance(expr, Call):
             # Materialize calls as statements, ensuring left-to-right evaluation.
             args = [self.expression(arg) for arg in expr.args]
@@ -219,6 +444,12 @@ class CGenerator:
                 return None
             if expr.name == "read_i64":
                 return self.temp("i64", "nv_read_i64()")
+            if expr.name == "len":
+                return self.temp("i64", f"({args[0]}).len")
+            if expr.name == "array_zeros":
+                name = self.temp("[i64]", f"nv_arr_i64_new({args[0]})")
+                self.temporaries.append((name, "[i64]"))
+                return name
             call = f"{expr.target.cname}({', '.join(args)})"
             if expr.typ == "void":
                 self.line(call + ";")

@@ -1,0 +1,39 @@
+fn sort(a: mut [i64]) {
+    let i = 1
+    while i < len(a) {
+        let key = a[i]
+        let j = i - 1
+        while j >= 0 && a[j] > key {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+        i = i + 1
+    }
+}
+
+fn show(a: [i64]) {
+    let i = 0
+    while i < len(a) {
+        print(a[i])
+        i = i + 1
+    }
+}
+
+fn main() {
+    let empty: [i64] = []
+    sort(empty)
+    print(len(empty))
+
+    let single: [i64] = [4]
+    sort(single)
+    show(single)
+
+    let duplicates: [i64] = [3, 1, 3, 1, 3]
+    sort(duplicates)
+    show(duplicates)
+
+    let scrambled: [i64] = [5, -2, 9, 0, -2, 7]
+    sort(scrambled)
+    show(scrambled)
+}

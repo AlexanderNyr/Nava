@@ -74,6 +74,43 @@ still alive, killed again and reported as `survivors: true`.
 - `nava run` streams the program's standard streams to your terminal, so the
   output cap does not apply there; the evaluator captures output and does cap it.
 
+## Memory safety of generated programs
+
+Arrays (phase N4) are the first construct that allocates. The guarantees are in
+the generated C and are tested, not asserted:
+
+- **Checked allocation.** `array_zeros(n)` rejects a negative length, a length
+  above `MAX_ARRAY_ELEMENTS` (4194304) and a failed allocation with a
+  deterministic `nava runtime error:` and exit status 1. The generated C also
+  refuses a size that would overflow `size_t`, although the element limit is
+  reached first on every supported platform.
+- **Checked indexing.** Every read and write goes through
+  `nv_arr_<type>_get`/`nv_arr_<type>_set`, each of which calls `nv_check_index`.
+  There is no pointer arithmetic in the language and no way to request an
+  unchecked access. `tests/test_arrays.py` fails if generated code ever indexes
+  a buffer without the check, and fails again when the check is deleted on
+  purpose: the resulting read is a `heap-buffer-overflow` under
+  AddressSanitizer, which is exactly the outcome the check exists to prevent.
+- **One owner, no aliasing.** An array is created by one `let` binding, cannot
+  be copied or reassigned, cannot be returned, and cannot be reached from two
+  mutable borrows at once (`E0331`, `E0332`, `E0330`, `E0342`). A parameter is
+  a borrow that cannot outlive the call, so there are no dangling references to
+  reason about.
+- **Release.** Exactly one `free` per binding on the normal path and before
+  every `return`, including returns from inside loops and nested blocks;
+  `-DNAVA_TRACK_ALLOCS` makes the runtime report the number of arrays still
+  owned at exit, and the tests require that number to be zero.
+
+**Known gap, stated rather than hidden:** a runtime error (for example an
+out-of-bounds index) stops the program with `exit(1)` instead of unwinding, so
+arrays owned at that moment are reclaimed by the operating system when the
+process ends rather than by a `free` call. `tests/test_arrays.py` asserts this
+exact behaviour (`live arrays at exit: 1`) so it cannot change silently. Under
+the sandbox the whole process is killed anyway, so the practical exposure is a
+process that holds memory until it exits — not a leak that grows across runs.
+The alternative, propagating a failure through every expression, would change
+the language's error model; it is not part of 0.1.
+
 ## Platform support
 
 | Platform | `namespaces` | Notes |
@@ -101,6 +138,10 @@ backends:
 | write to the allowed directory, to the host `/tmp`, to `/usr`, to `/etc` | allowed write succeeds; the rest denied (`denied=3`) under `namespaces`; the host write **succeeds** under `rlimits`, and the test asserts that gap rather than hiding it |
 | connect to a local listener | `DENIED` under `namespaces`; `CONNECTED` under `rlimits`, asserted as a documented gap |
 | `--isolation required` with `unshare` removed from `PATH` | refuse, exit 2, `E0601`, `"available": false` |
+| array allocation at, below and above `MAX_ARRAY_ELEMENTS`, and a negative length | documented runtime error, exit 1, no truncation (`tests/test_arrays.py`) |
+| out-of-range read and write, negative index, empty array | documented runtime error, no value printed, later statements not run |
+| sorting, sieve and ownership programs under `-fsanitize=address,undefined` | no sanitizer report |
+| array programs built with `-DNAVA_TRACK_ALLOCS` | `live arrays at exit: 0` on every normal and early-return path |
 
 Disabling any one mechanism makes its test fail; this was verified by removing
 `--net`, the timeout kill, the fail-closed branch, the read-only minimal root and

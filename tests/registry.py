@@ -74,7 +74,41 @@ REGISTERED_TESTS = {
         "test_public_gcd_samples_pass_and_bad_candidate_fails",
         "test_c_candidate_passes_and_reports_labelled_semantics",
         "test_other_public_tasks",
+        "test_array_tasks_pass_the_evaluator",
         "test_prompt_contains_task_and_language",
+    },
+    "ArrayFrontendTests": {
+        "test_index_rules",
+        "test_only_a_variable_is_indexed",
+        "test_arrays_cannot_be_copied_or_reassigned",
+        "test_arrays_cannot_be_returned",
+        "test_borrow_rules",
+        "test_an_owned_array_may_be_mutated",
+        "test_literal_rules",
+        "test_builtin_rules",
+        "test_arrays_are_not_scalars",
+        "test_array_types_are_restricted",
+        "test_a_literal_may_span_lines_inside_the_brackets",
+        "test_bracket_diagnostics",
+    },
+    "ArrayRuntimeTests": {
+        "test_literals_len_and_elements",
+        "test_mutation_through_a_mutable_borrow_is_visible",
+        "test_nested_scopes_loops_and_early_returns",
+        "test_zeros_allocation_and_length_checks",
+        "test_out_of_range_access_fails_predictably",
+        "test_a_failed_write_has_no_side_effect",
+        "test_sorting_matches_an_independent_reference",
+        "test_sieve_matches_an_independent_reference",
+        "test_index_access_goes_through_the_checked_helpers",
+    },
+    "ArrayMemoryTests": {
+        "test_every_normal_path_releases_its_storage",
+        "test_release_happens_once_per_iteration",
+        "test_an_error_path_ends_the_process_with_the_storage_still_owned",
+        "test_arrays_are_memory_safe_under_sanitizers",
+        "test_a_disabled_bounds_check_is_caught",
+        "test_the_runtime_documents_its_own_limit",
     },
     "BenchTests": {
         "test_json_record_has_environment_samples_and_missing_model_fields",
@@ -193,6 +227,8 @@ REGISTERED_TASKS = {
     "digit_sum": 6,
     "max_of_three": 6,
     "collatz_steps": 6,
+    "sort_numbers": 8,
+    "sieve_count": 8,
 }
 
 #: Candidate languages the evaluator must support, with a labelled arithmetic
@@ -201,8 +237,8 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 47,
-    "tests/fixtures/positive": 12,
+    "tests/fixtures/negative": 66,
+    "tests/fixtures/positive": 16,
     "tests/fixtures/warnings": 1,
 }
 
@@ -241,14 +277,15 @@ def discovered_tests() -> dict[str, set[str]]:
     """Test-method names per class, imported from the real test module."""
     if str(ROOT / "tests") not in sys.path:
         sys.path.insert(0, str(ROOT / "tests"))
-    import test_nava  # noqa: PLC0415  (import after sys.path setup)
+    import test_arrays  # noqa: PLC0415  (import after sys.path setup)
+    import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_nava, test_registry, test_sandbox, test_spec, test_study):
+    for module in (test_arrays, test_nava, test_registry, test_sandbox, test_spec, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -296,6 +333,17 @@ def check_skip_state() -> list[str]:
         class_object = getattr(test_nava, class_name)
         if getattr(class_object, "__unittest_skip__", False):
             problems.append(f"{class_name} is skipped on this host; required tool: {required}")
+    import test_arrays  # noqa: PLC0415
+    for class_name, required in (("ArrayRuntimeTests", "cc"), ("ArrayMemoryTests", "cc")):
+        class_object = getattr(test_arrays, class_name)
+        if getattr(class_object, "__unittest_skip__", False):
+            problems.append(f"{class_name} is skipped on this host; required tool: {required}")
+    if not test_arrays.SANITIZERS:
+        problems.append(
+            "the address/undefined-behaviour sanitizers are unavailable: the array "
+            "memory-safety gate would be skipped (install the compiler's sanitizer "
+            "runtime; do not treat a skipped memory test as a pass)"
+        )
     return problems
 
 

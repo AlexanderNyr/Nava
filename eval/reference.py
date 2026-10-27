@@ -25,6 +25,12 @@ def _ints(stdin: str) -> list[int]:
     return [int(token) for token in stdin.split()]
 
 
+def _ints_allow_empty(stdin: str) -> list[int]:
+    """For tasks whose input may legitimately be empty after the count."""
+    tokens = stdin.split()
+    return [int(token) for token in tokens]
+
+
 def gcd(stdin: str) -> str:
     a, b = _ints(stdin)
     while b != 0:
@@ -90,6 +96,28 @@ def collatz_steps(stdin: str) -> str:
     return f"{steps}\n"
 
 
+def sort_numbers(stdin: str) -> str:
+    values = _ints_allow_empty(stdin)
+    count, numbers = values[0], values[1:]
+    if len(numbers) != count:
+        raise ValueError(f"expected {count} numbers, got {len(numbers)}")
+    return "".join(f"{value}\n" for value in sorted(numbers))
+
+
+def sieve_count(stdin: str) -> str:
+    (limit,) = _ints(stdin)
+    if limit < 0:
+        raise ValueError("the limit is negative")
+    flags = [True] * (limit + 1)
+    count = 0
+    for value in range(2, limit + 1):
+        if flags[value]:
+            count += 1
+            for multiple in range(value * value, limit + 1, value):
+                flags[multiple] = False
+    return f"{count}\n"
+
+
 REFERENCE: dict[str, Callable[[str], str]] = {
     "gcd": gcd,
     "sum_to_n": sum_to_n,
@@ -99,6 +127,8 @@ REFERENCE: dict[str, Callable[[str], str]] = {
     "digit_sum": digit_sum,
     "max_of_three": max_of_three,
     "collatz_steps": collatz_steps,
+    "sort_numbers": sort_numbers,
+    "sieve_count": sieve_count,
 }
 
 

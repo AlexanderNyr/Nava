@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+Phase N4 of `PLAN.md` (arrays and ownership).
+
+- Arrays: `[i64]`, `[bool]` and `[str]`, created by an array literal or
+  `array_zeros(n)`, read with `len(a)`, `a[i]` and written with `a[i] = value`.
+  The length is fixed at creation; there is no resizing, copying or nested
+  array.
+- Ownership: one owner per array, no copies (`E0331`, `E0332`), no array
+  results (`E0330`), read-only `[T]` and mutable `mut [T]` parameters that
+  cannot outlive the call (`E0333`, `E0336`, `E0342`), and statement-scoped
+  temporaries for literals used as arguments.
+- Checked runtime: allocation length (negative, above `MAX_ARRAY_ELEMENTS`,
+  or unallocatable) and every index are checked, with deterministic
+  `nava runtime error:` messages and exit status 1. Release is emitted by the
+  compiler: exactly one `free` per binding on the normal path and before every
+  `return`. A runtime error releases by process exit, which `SECURITY.md`
+  states and a test asserts.
+- Diagnostics: `E0112`, `E0113` and `E0328`–`E0342` (17 new codes, 70 in
+  total), each with a fixture, a `LANGUAGE.md` table row and a title.
+- `LANGUAGE.md`: specification sections for arrays, ownership, storage release
+  and the new builtins; grammar, limits (`MAX_ARRAY_ELEMENTS`) and the
+  "not implemented" list updated. 13 new executable documentation examples.
+- Tests: `tests/test_arrays.py` (27 tests: type rules, runtime behaviour
+  against independent references, release accounting with
+  `-DNAVA_TRACK_ALLOCS`, sanitizer runs, a deliberately disabled bounds check),
+  plus array fixtures (19 negative, 4 positive) and the `sort_numbers` and
+  `sieve_count` public tasks with reference answers. Tests: 104 -> 132.
+- `tests/registry.py` also fails when the address/undefined-behaviour
+  sanitizers are unavailable, so the memory-safety gate cannot pass by being
+  skipped.
+
 Phase N3 of `PLAN.md` (real model evaluation). **No model was run**: this
 release adds the harness and the honesty rules, not a result.
 

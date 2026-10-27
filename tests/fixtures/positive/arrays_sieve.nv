@@ -1,0 +1,25 @@
+fn count_primes(limit: i64) -> i64 {
+    if limit < 2 {
+        return 0
+    }
+    let composite: [i64] = array_zeros(limit + 1)
+    let count = 0
+    let i = 2
+    while i <= limit {
+        if composite[i] == 0 {
+            count = count + 1
+            let multiple = i * i
+            while multiple <= limit {
+                composite[multiple] = 1
+                multiple = multiple + i
+            }
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn main() {
+    let n = read_i64()
+    print(count_primes(n))
+}

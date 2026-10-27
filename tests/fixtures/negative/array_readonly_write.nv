@@ -1,0 +1,8 @@
+fn fill(a: [i64]) {
+    a[0] = 1
+}
+
+fn main() {
+    let a: [i64] = [0]
+    fill(a)
+}

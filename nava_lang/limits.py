@@ -17,5 +17,10 @@ MAX_NESTING = 200
 #: of range (i64 needs at most 19).  Raised as E0108.
 MAX_LITERAL_DIGITS = 19
 
+#: Maximum number of elements in one array, checked by the generated runtime
+#: before allocating.  Exceeding it is a runtime error, never a truncation.
+#: LANGUAGE.md states the value and `tests/test_spec.py` compares the two.
+MAX_ARRAY_ELEMENTS = 4 * 1024 * 1024
+
 I64_MIN = -(2**63)
 I64_MAX = 2**63 - 1

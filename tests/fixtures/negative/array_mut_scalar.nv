@@ -1,0 +1,8 @@
+fn bump(n: mut i64) {
+    n = n + 1
+}
+
+fn main() {
+    let x = 1
+    bump(x)
+}

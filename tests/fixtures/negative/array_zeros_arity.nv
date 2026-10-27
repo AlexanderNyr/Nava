@@ -1,0 +1,4 @@
+fn main() {
+    let a: [i64] = array_zeros(1, 2)
+    print(len(a))
+}

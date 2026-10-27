@@ -39,15 +39,17 @@ as a guaranteed return.
 
 - **Whitespace** — spaces, tabs, form feeds and vertical tabs separate tokens
   and are otherwise ignored.
-- **Newlines** — a newline separates statements. Inside parentheses a newline
-  is ignored, so an expression may continue on the next line only while it is
-  inside `(` `)`. Outside parentheses an expression cannot be split across
-  lines.
+- **Newlines** — a newline separates statements. Inside `(` `)` and `[` `]` a
+  newline is ignored, so an expression, an argument list or an array literal
+  may continue on the next line only while it is inside one of those
+  delimiters. Outside them an expression cannot be split across lines.
 - **Comments** — `#` or `//` to the end of the line.
-- **Keywords** — `fn`, `let`, `if`, `else`, `while`, `return`, `true`, `false`.
+- **Keywords** — `fn`, `let`, `if`, `else`, `while`, `return`, `true`, `false`,
+  `mut` (only in a parameter type, see [Arrays and ownership](#arrays-and-ownership)).
 - **Identifiers** — ASCII letters, digits and `_`, not starting with a digit.
-- **Types** — `i64`, `bool`, `str`, `void`. Any other name in a type position
-  is `E0203`.
+- **Types** — `i64`, `bool`, `str`, `void`, and the array types `[i64]`,
+  `[bool]`, `[str]`. Any other name in a type position is `E0203`; so are
+  `[void]` and a nested array such as `[[i64]]`.
 - **Integer literals** — decimal digits, optionally separated by single
   underscores (`1_000_000`). A literal must fit in `i64`
   (-9223372036854775808 to 9223372036854775807). The single negation
@@ -58,8 +60,10 @@ as a guaranteed return.
   `\uXXXX`, and the other JSON escapes). A literal newline inside a string is
   `E0103`; an invalid escape is `E0104`; NUL is `E0105`; an unpaired surrogate
   is `E0106`.
-- **Operators** — `( ) { } : , + - * / % = ! < > ;` and the two-character
-  `->`, `<=`, `>=`, `==`, `!=`, `&&`, `||`.
+- **Operators** — `( ) [ ] { } : , + - * / % = ! < > ;` and the two-character
+  `->`, `<=`, `>=`, `==`, `!=`, `&&`, `||`. Delimiters must match: an unmatched
+  `)` is `E0109`, an unmatched `]` is `E0112`, an unclosed `(` is `E0110` and
+  an unclosed `[` is `E0113`.
 
 ## Grammar
 
@@ -70,14 +74,16 @@ or `;`; a separator is not required before `}`.
 program        = { function } end_of_file ;
 function       = "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
 parameters     = parameter { "," parameter } ;
-parameter      = IDENT ":" type ;
-type           = "i64" | "bool" | "str" | "void" ;
+parameter      = IDENT ":" [ "mut" ] type ;
+type           = "i64" | "bool" | "str" | "void"
+               | "[" ( "i64" | "bool" | "str" ) "]" ;
 block          = "{" { separator } { statement { separator } } "}" ;
-statement      = let | assignment | if_statement | while_statement
-               | return_statement | call ;
+statement      = let | assignment | element_assignment | if_statement
+               | while_statement | return_statement | call ;
 
 let            = "let" IDENT [ ":" type ] "=" expression ;
 assignment     = IDENT "=" expression ;
+element_assignment = IDENT "[" expression "]" "=" expression ;
 if_statement   = "if" expression block [ "else" ( if_statement | block ) ] ;
 while_statement= "while" expression block ;
 return_statement = "return" [ expression ] ;
@@ -91,8 +97,10 @@ ordering       = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = unary { ( "*" | "/" | "%" ) unary } ;
 unary          = ( "-" | "!" ) unary | primary ;
-primary        = NUMBER | STRING | "true" | "false" | IDENT | call
-               | "(" expression ")" ;
+primary        = NUMBER | STRING | "true" | "false" | "(" expression ")"
+               | IDENT | call | element | array_literal ;
+element        = IDENT "[" expression "]" ;
+array_literal  = "[" [ expression { "," expression } ] "]" ;
 call           = IDENT "(" [ arguments ] ")" ;
 arguments      = expression { "," expression } ;
 ```
@@ -108,11 +116,14 @@ statement (`E0313` otherwise).
 | `bool` | `true` and `false`. Conditions require `bool`; integers are not converted. |
 | `str` | Double-quoted UTF-8 strings. NUL is not allowed. |
 | `void` | No function result; not a variable or parameter type. |
+| `[i64]`, `[bool]`, `[str]` | A fixed-length sequence of one element type. The length is set when the array is created and never changes. |
 
 Strings can be passed to functions, returned, printed and compared for
 equality. Equality compares UTF-8 bytes without Unicode normalization.
-Concatenation, indexing, length and string input are not implemented. There are
-no implicit conversions between `i64`, `bool` and `str`.
+Concatenation, string indexing, string length and string input are not
+implemented: `len` accepts an array, not a `str`. There are
+no implicit conversions between `i64`, `bool` and `str`, and no conversions
+between element types.
 
 ## Variables and scope
 
@@ -167,6 +178,171 @@ fn main() {
 Output: `false`, `true`, `evaluated`, `true`. The first two lines never call
 `probe`; see `tests/fixtures/positive/short_circuit.nv`.
 
+## Arrays and ownership
+
+An array is a fixed-length sequence of one element type. It is created with an
+array literal or with `array_zeros(n)`, it belongs to exactly one binding, and
+its elements are read and written with a checked index.
+
+```nava
+fn main() {
+    let scores: [i64] = [10, 20, 30]
+    print(len(scores))
+    print(scores[0] + scores[2])
+    scores[1] = scores[0] * 2
+    print(scores[1])
+    let empty: [i64] = []
+    let words: [str] = ["alpha", "beta"]
+    let flags: [bool] = [true, false]
+    print(len(empty))
+    print(words[1])
+    print(flags[0])
+}
+```
+
+Output: `3`, `40`, `20`, `0`, `beta`, `true`. See
+`tests/fixtures/positive/arrays_basic.nv`.
+
+### Creating an array
+
+- An array literal `[a, b, c]` creates a new array. Every item must have the
+  same element type (`E0334`); the length is the number of items.
+- An empty literal needs an annotation, because its element type cannot be
+  inferred: `let a: [i64] = []` is valid, `let a = []` is `E0335`.
+- `array_zeros(n)` allocates `n` elements of type `i64`, all zero. The length is
+  checked at run time: a negative length, a length above the documented limit
+  or an allocation failure is a runtime error, never a truncated array. There is
+  no `[bool]` or `[str]` allocation: use an `[i64]` array of `0` and `1` flags,
+  or a literal.
+- The length never changes. Resizing, appending, slicing and concatenation are
+  not part of Nava 0.1.
+
+```nava
+fn main() {
+    let n = read_i64()
+    let counts: [i64] = array_zeros(n)
+    let i = 0
+    while i < n {
+        counts[i] = i * i
+        i = i + 1
+    }
+    print(len(counts))
+}
+```
+
+### Reading and writing elements
+
+- `a[i]` reads one element; the result has the element type. Only a variable
+  can be indexed (`E0329`), and the index must be `i64` (`E0328`).
+- `a[i] = value` writes one element; the value must have the element type
+  (`E0312`).
+- Every access is bounds checked at run time. A negative index or an index at
+  or beyond the length is a runtime error:
+  `nava runtime error: array index 5 is out of bounds for length 3`, exit
+  status 1. There is no way to disable the check, and there are no raw
+  pointers in the language.
+- Element writes are allowed only on an array this function owns. Writing
+  through a read-only parameter is `E0336`.
+
+### Passing an array: borrows, not copies
+
+A parameter of type `[T]` is a **read-only borrow**; a parameter of type
+`mut [T]` is a **mutable borrow**, so a function can fill or sort the caller's
+array. `mut` on a non-array parameter is `E0341`: scalar parameters are already
+mutable locals inside the function, so `mut` would only suggest a copy-back that
+does not happen.
+
+```nava
+fn fill(a: mut [i64], value: i64) {
+    let i = 0
+    while i < len(a) {
+        a[i] = value
+        i = i + 1
+    }
+}
+
+fn total(a: [i64]) -> i64 {
+    let sum = 0
+    let i = 0
+    while i < len(a) {
+        sum = sum + a[i]
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() {
+    let a: [i64] = [0, 0, 0]
+    fill(a, 7)
+    print(total(a))
+}
+```
+
+Output: `21`. `fill` writes through the borrow, so the caller sees the result;
+nothing is copied in or out.
+
+The rules that make this safe are small enough to state completely:
+
+1. **One owner.** An array is created by a `let` binding (from a literal or
+   `array_zeros`) and is released when that binding's block ends.
+2. **No copies.** `let b = a` is `E0331` and `a = b` is `E0332`: an array name
+   always refers to the same storage for its whole life. Copying would either
+   duplicate the buffer or create two owners, and Nava has neither.
+3. **No array results.** A function cannot return an array (`E0330`): the
+   result would outlive the storage that produced it. Write into a `mut [T]`
+   parameter instead.
+4. **A borrow cannot be extended.** A parameter is a borrow, so it cannot be
+   returned, stored in another array, or handed on as a `mut` borrow (`E0333`).
+   Nothing in the language can keep a borrow alive after the call, which is why
+   there are no lifetime annotations.
+5. **A mutable borrow is exclusive.** The same variable cannot be passed to two
+   `mut` parameters of one call (`E0342`).
+6. **A temporary lives until the end of its statement.** An array literal or
+   `array_zeros(n)` used as an argument, as in `total([1, 2, 3])`, is released
+   at the end of the statement that created it.
+
+### Storage release
+
+Release is deterministic and emitted by the compiler, not left to a garbage
+collector:
+
+- On the normal path, and before every `return` (including a `return` from
+  inside a loop or a nested block), each owned array is released exactly once.
+  An array declared inside a loop body is released on every iteration.
+- A runtime error such as an out-of-bounds index stops the program with exit
+  status 1. The storage is then reclaimed by the operating system when the
+  process exits; it is not released by a `free` call. This is a deliberate
+  trade-off recorded in `SECURITY.md`, not an oversight.
+- Compiling the generated C with `-DNAVA_TRACK_ALLOCS` makes the runtime report
+  `nava: live arrays at exit: N` on `stderr`. The test suite uses it to show
+  that every normal and early-return path releases everything.
+
+```nava
+fn first_positive(a: [i64]) -> i64 {
+    let i = 0
+    while i < len(a) {
+        if a[i] > 0 {
+            let pair: [i64] = [a[i], a[i] * 10]
+            return pair[1]
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+fn main() {
+    print(first_positive([0 - 1, 3]))
+}
+```
+
+Output: `30`. `pair` is owned by the loop body and released before the early
+`return` leaves the function. See
+`tests/fixtures/positive/arrays_borrow.nv`.
+
+Sorting and a sieve of Eratosthenes are in
+`tests/fixtures/positive/arrays_sort.nv` and
+`tests/fixtures/positive/arrays_sieve.nv`.
+
 ## Statements and control flow
 
 ```nava
@@ -205,7 +381,10 @@ functions.
 
 - overflow in `+`, `-`, `*` and unary `-`;
 - division or remainder by zero;
-- `-9223372036854775808 / -1` and `-9223372036854775808 % -1`.
+- `-9223372036854775808 / -1` and `-9223372036854775808 % -1`;
+- an array index that is negative or at least the length;
+- an array length that is negative, above `MAX_ARRAY_ELEMENTS`, or that cannot
+  be allocated.
 
 Division truncates toward zero and the remainder takes the sign of the
 dividend, so `-7 / 3` is `-2` and `-7 % 3` is `-1`. A runtime error stops the
@@ -230,7 +409,10 @@ fn main() {
 - `print(value)` accepts exactly one `i64`, `bool` or `str` and prints it
   followed by a newline. Booleans print as `true` or `false`. `print` returns
   `void` and cannot be used as a value (`E0309`, `E0314`).
-- Both names are reserved: they cannot be redefined (`E0301`).
+- `len(a: [T]) -> i64` returns the number of elements (`E0337`, `E0338`).
+- `array_zeros(n: i64) -> [i64]` allocates `n` zeroed elements and checks the
+  length (`E0339`, `E0340`).
+- All five names are reserved: they cannot be redefined (`E0301`).
 
 ## Diagnostics
 
@@ -284,6 +466,8 @@ never changes meaning; a new condition gets a new code.
 | `E0109` | error | unmatched ')' | `tests/fixtures/negative/lex_unmatched_paren.nv` |
 | `E0110` | error | unclosed '(' | `tests/fixtures/negative/lex_unclosed_paren.nv` |
 | `E0111` | error | source is not valid UTF-8 | — |
+| `E0112` | error | unmatched ']' | `tests/fixtures/negative/lex_unmatched_bracket.nv` |
+| `E0113` | error | unclosed '[' | `tests/fixtures/negative/lex_unclosed_bracket.nv` |
 
 **Parser**
 
@@ -291,7 +475,7 @@ never changes meaning; a new condition gets a new code.
 |---|---|---|---|
 | `E0201` | error | unexpected token | `tests/fixtures/negative/parse_expected_token.nv` |
 | `E0202` | error | missing statement separator | `tests/fixtures/negative/parse_missing_separator.nv` |
-| `E0203` | error | unknown type | `tests/fixtures/negative/parse_unknown_type.nv` |
+| `E0203` | error | unknown type (also `[void]` and `[[i64]]`) | `tests/fixtures/negative/parse_unknown_type.nv`, `array_nested_type.nv`, `array_of_void.nv` |
 | `E0204` | error | unclosed block | `tests/fixtures/negative/parse_unclosed_block.nv` |
 | `E0205` | error | expected an expression | `tests/fixtures/negative/parse_expected_expression.nv` |
 
@@ -326,6 +510,21 @@ never changes meaning; a new condition gets a new code.
 | `E0325` | error | unknown function | `tests/fixtures/negative/sem_unknown_function.nv` |
 | `E0326` | error | wrong number of arguments | `tests/fixtures/negative/sem_argument_count.nv` |
 | `E0327` | error | argument type mismatch | `tests/fixtures/negative/sem_argument_type.nv` |
+| `E0328` | error | array index must be i64 | `tests/fixtures/negative/array_index_type.nv` |
+| `E0329` | error | only an array can be indexed | `tests/fixtures/negative/array_index_scalar.nv` |
+| `E0330` | error | array returned or passed by value | `tests/fixtures/negative/array_return.nv` |
+| `E0331` | error | arrays cannot be copied | `tests/fixtures/negative/array_copy.nv` |
+| `E0332` | error | array variable cannot be reassigned | `tests/fixtures/negative/array_reassign.nv` |
+| `E0333` | error | mutable array argument must be an owned variable | `tests/fixtures/negative/array_mut_from_borrow.nv` |
+| `E0334` | error | array literal element type mismatch | `tests/fixtures/negative/array_literal_mixed.nv` |
+| `E0335` | error | empty array literal needs a type annotation | `tests/fixtures/negative/array_literal_empty.nv` |
+| `E0336` | error | element assignment through a read-only borrow | `tests/fixtures/negative/array_readonly_write.nv` |
+| `E0337` | error | wrong number of arguments to len | `tests/fixtures/negative/array_len_arity.nv` |
+| `E0338` | error | len expects an array | `tests/fixtures/negative/array_len_type.nv` |
+| `E0339` | error | wrong number of arguments to array_zeros | `tests/fixtures/negative/array_zeros_arity.nv` |
+| `E0340` | error | array_zeros expects an i64 length | `tests/fixtures/negative/array_zeros_type.nv` |
+| `E0341` | error | mut on a non-array parameter | `tests/fixtures/negative/array_mut_scalar.nv` |
+| `E0342` | error | the same array borrowed mutably twice | `tests/fixtures/negative/array_double_mut.nv` |
 
 **Resource limits**
 
@@ -382,6 +581,7 @@ See `tests/fixtures/warnings/unreachable.nv`.
 |---|---|---|
 | Nesting limit (`MAX_NESTING`) | 200 | `E0401` |
 | Literal digit limit (`MAX_LITERAL_DIGITS`) | 19 | `E0108` |
+| Array element limit (`MAX_ARRAY_ELEMENTS`) | 4194304 | runtime error, exit status 1 |
 
 The nesting counter is shared by function bodies and blocks, parenthesised
 subexpressions, unary operator chains and the depth of the expression tree
@@ -406,9 +606,11 @@ program's, not the compiler's.
 
 ## Not implemented
 
-There are no arrays, collections, floating-point values, string input,
-concatenation, file APIs, language-level dynamic allocation, modules, imports
-or FFI. This version cannot express all ordinary C or C++ tasks. Save generated
+There are no resizable collections, arrays of arrays, array copies, array
+results from functions, floating-point values, string indexing, string
+concatenation, string input, file APIs, pointers, modules, imports or FFI.
+Array length is fixed at creation and the element types are exactly `i64`,
+`bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated
 C with `nava emit-c`; building requires C11 and the C standard library. GCC and
 Clang can use built-in overflow checks; a portable C11 fallback is also
 provided.

@@ -21,6 +21,11 @@ explicit function types, inferred local types and checked arithmetic.
 ### Implemented
 
 - `i64`, `bool` and `str`; mutable locals and parameters with block scope.
+- Fixed-length arrays `[i64]`, `[bool]` and `[str]`: array literals,
+  `array_zeros(n)`, `len(a)`, checked indexing with `a[i]` and `a[i] = value`,
+  read-only `[T]` and mutable `mut [T]` parameters. One owner per array, no
+  copies, no array results, deterministic release on every normal and early
+  return, and a bounds check that cannot be disabled.
 - Functions and recursion; `if` / `else if` / `else`, `while` and `return`.
 - Arithmetic, comparisons, `!`, `&&` and `||`, with left-to-right evaluation
   and short-circuiting.
@@ -33,8 +38,11 @@ explicit function types, inferred local types and checked arithmetic.
 - Stable diagnostic codes with source ranges and hints, plus `--format json`
   for machine-readable diagnostics (`nava_lang/diagnostics.py`).
 - An executable specification: every example in [`LANGUAGE.md`](LANGUAGE.md)
-  type-checks, 47 invalid fixtures assert the exact code and location, and 12
+  type-checks, 66 invalid fixtures assert the exact code and location, and 16
   positive fixtures assert output and exit status (`tests/test_spec.py`).
+- Array gates (`tests/test_arrays.py`): ownership rules, checked allocation and
+  indexing, release accounting, and the generated C compiled under the address
+  and undefined-behaviour sanitizers.
 - Isolated compilation and execution (`nava_lang/sandbox.py`): Linux user,
   mount, PID and network namespaces with a read-only minimal root and one
   writable directory, or a labelled rlimits-only fallback. `--isolation
@@ -42,9 +50,10 @@ explicit function types, inferred local types and checked arithmetic.
 
 ### Not implemented
 
-Arrays, collections, `for`, floating-point numbers, GPU computation, file
-operations, third-party libraries and a package system are not available in
-0.1. Nava is not yet a general-purpose language in the production sense.
+Resizable collections, arrays of arrays, array copies and array-returning
+functions, `for`, floating-point numbers, GPU computation, file operations,
+third-party libraries and a package system are not available in 0.1. Nava is
+not yet a general-purpose language in the production sense.
 See [`LANGUAGE.md`](LANGUAGE.md) for the implemented semantics and limits.
 
 ---
@@ -209,6 +218,7 @@ is not, on which platforms, and how each claim is tested.
 | `tests/registry.py` | Suite and fixture registry guard; fails on missing tests, fixtures, codes or tools |
 | `tests/test_spec.py` | Executable specification: documented examples, fixtures, limits, fuzzing |
 | `tests/test_sandbox.py` | Isolation gate: hostile programs, fail-closed behaviour, honest labels |
+| `tests/test_arrays.py` | Array gate: ownership rules, checked access, release accounting, sanitizers |
 | `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |

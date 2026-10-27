@@ -77,6 +77,11 @@ class Symbol:
     name: str
     typ: str
     cname: str
+    #: False for a read-only array parameter: its elements cannot be assigned.
+    mutable: bool = True
+    #: False for any parameter: a borrow never owns storage, so it cannot be
+    #: handed on as a mutable borrow.
+    owned: bool = True
 
 
 @dataclass
@@ -98,6 +103,21 @@ class String(Expr):
 @dataclass
 class Boolean(Expr):
     value: bool
+
+
+@dataclass
+class ArrayLiteral(Expr):
+    """`[a, b, c]`: a new owned array. The element type comes from the items."""
+
+    items: list[Expr]
+
+
+@dataclass
+class Index(Expr):
+    """`a[i]`: a checked read of one element. Only a variable can be indexed."""
+
+    array: "Variable"
+    index: Expr
 
 
 @dataclass
@@ -148,6 +168,17 @@ class Assign(Stmt):
 
 
 @dataclass
+class IndexAssign(Stmt):
+    """`a[i] = value`: write one element of a mutable array."""
+
+    name: str
+    index: Expr
+    value: Expr
+    name_loc: Optional[Location] = None
+    symbol: Optional[Symbol] = field(default=None, init=False)
+
+
+@dataclass
 class ExprStmt(Stmt):
     expr: Expr
 
@@ -175,6 +206,8 @@ class Param:
     name: str
     typ: str
     loc: Location
+    #: True for `mut [T]`: a mutable borrow, so element writes are allowed.
+    mutable: bool = False
     symbol: Optional[Symbol] = field(default=None, init=False)
 
 

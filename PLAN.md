@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2 DELIVERED; N3 infrastructure delivered, empirical result open; N4–N9 planned
+## Status: N0–N2 and N4 DELIVERED; N3 infrastructure delivered, empirical result open; N5–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -14,12 +14,12 @@ This document answers one question:
 > source files?
 
 Phases N0 (measurement rig and test integrity), N1 (language specification and
-diagnostics) and N2 (isolated build and execution) are delivered, and N3's
-harness is delivered — **without** a model result, which cannot be produced
-without a model to run: see the
-delivery records in the relevant subsections for the evidence, the commands that
-produce it and the items that are deliberately left open. N3 is the next
-dependency; its infrastructure exists, its empirical results do not.
+diagnostics), N2 (isolated build and execution) and N4 (arrays and ownership)
+are delivered, and N3's harness is delivered — **without** a model result,
+which cannot be produced without a model to run: see the delivery records in
+the relevant subsections for the evidence, the commands that produce it and the
+items that are deliberately left open. N3's infrastructure exists; its
+empirical results do not. N5 is the next phase that does not depend on a model.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -37,11 +37,11 @@ identify the baseline, not a claim about a published release.
 | Area | Present in the tree | Limit or missing evidence |
 |---|---|---|
 | Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build |
-| Language | `i64`, `bool`, `str`, functions, conditions, `while`, checked arithmetic and integer I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits and executable examples | No arrays, `for`, floating point, imports, file API or package system |
-| Correctness | `python3 -m unittest discover -s tests -v`: 62 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code or required compiler is missing; 47 negative and 12 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
+| Language | `i64`, `bool`, `str`, fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, checked arithmetic and integer I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits and executable examples | No resizable collections, arrays of arrays, array copies or array results, `for`, floating point, imports, file API or package system |
+| Correctness | `python3 -m unittest discover -s tests -v`: 132 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 66 negative and 16 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
-| Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; eight public tasks with 49 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
+| Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; ten public tasks with 65 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
 | Execution safety | `nava_lang/sandbox.py`: Linux namespaces (user, mount, PID, network, IPC, UTS) with a read-only minimal root and one writable directory, or a labelled rlimits-only fallback; `--isolation {auto,required,off}`; bounded output; process-group kill with survivor detection | Confinement against a misbehaving program, not against a kernel exploit; no seccomp, no cgroup quota; `rlimits` mode isolates nothing but resource use |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
@@ -105,7 +105,7 @@ complete by skipping its gate.
 | N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | **Delivered** |
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | **Delivered** |
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Harness delivered, result open** |
-| N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | Planned |
+| N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | **Delivered** |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | Planned |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Planned |
 | N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | Planned |
@@ -444,17 +444,27 @@ unchecked memory access or ambiguous lifetime rules.
 
 #### Tasks
 
-- [ ] Specify homogeneous arrays and element types, indexing, length,
+- [x] Specify homogeneous arrays and element types, indexing, length,
       assignment, argument passing, ownership and lifetime before choosing
       their concrete syntax. Start with a bounded, minimal design; specify
-      resizing separately if added.
-- [ ] Implement checked allocation sizes and bounds, deterministic errors and
+      resizing separately if added. → `LANGUAGE.md` "Arrays and ownership":
+      `[i64]`, `[bool]`, `[str]`; literals and `array_zeros(n)`; `len(a)`;
+      `a[i]` and `a[i] = value`; six ownership rules; no resizing in 0.1.
+- [x] Implement checked allocation sizes and bounds, deterministic errors and
       release of owned storage on normal returns and error paths. Do not expose
-      raw pointers in the core language.
-- [ ] Extend type checking and C emission for collection operations, including
-      nested scopes, function calls and early returns.
-- [ ] Add representative array programs such as sorting and a sieve, with
-      independent reference answers.
+      raw pointers in the core language. → `nv_array_alloc`,
+      `nv_check_index`, and one `free` per binding on every normal and early
+      return. A runtime error still exits the process: the storage it held is
+      reclaimed by process exit, which is documented in `SECURITY.md` and
+      asserted by a test rather than left implicit.
+- [x] Extend type checking and C emission for collection operations, including
+      nested scopes, function calls and early returns. → `nava_lang/checker.py`
+      (`E0328`–`E0342`), `nava_lang/cgen.py` ownership frames and
+      statement-scoped temporaries.
+- [x] Add representative array programs such as sorting and a sieve, with
+      independent reference answers. → `tests/fixtures/positive/arrays_sort.nv`,
+      `arrays_sieve.nv`, and the public tasks `sort_numbers` and `sieve_count`
+      with answers in `eval/reference.py`.
 
 #### Test gate
 
@@ -469,6 +479,40 @@ unchecked memory access or ambiguous lifetime rules.
 
 Specified array/ownership semantics, compiler and runtime support, examples
 and memory-safety tests.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Evidence | Result |
+|---|---|---|
+| Semantics specified before syntax | `LANGUAGE.md` § Arrays and ownership, grammar additions, 6 ownership rules, storage-release subsection | element types, length, indexing, assignment, passing, ownership and lifetime are all stated; resizing declared out of scope |
+| Checked allocation size | `ArrayRuntimeTests.test_zeros_allocation_and_length_checks` | negative length, `MAX_ARRAY_ELEMENTS + 1` and `i64` max all give a documented runtime error and exit 1; `0` and `4194304` succeed |
+| Checked bounds | `ArrayRuntimeTests.test_out_of_range_access_fails_predictably` (7 cases) | index == len, negative, empty array and `i64` max all fail with `array index N is out of bounds for length M`; no value is printed |
+| No unchecked access path | `test_index_access_goes_through_the_checked_helpers` | every `.data[` in the generated C is inside a helper that calls `nv_check_index` |
+| Deterministic error ordering | `test_a_failed_write_has_no_side_effect` | the index is checked before the value expression is evaluated |
+| Reference agreement on boundary inputs | `test_sorting_matches_an_independent_reference` (8 inputs incl. empty, single, duplicates, extremes), `test_sieve_matches_an_independent_reference` (0, 1, 2, 3, 4, 10, 97, 1000, 5000) | every output equals an independent Python computation |
+| Release on normal and early returns | `test_every_normal_path_releases_its_storage`, `test_release_happens_once_per_iteration` | `-DNAVA_TRACK_ALLOCS` reports `live arrays at exit: 0` |
+| Error paths | `test_an_error_path_ends_the_process_with_the_storage_still_owned` | exit 1, and the report says 1 array was owned: reclamation is by process exit, asserted, not assumed |
+| Sanitizers | `test_arrays_are_memory_safe_under_sanitizers` | ownership, sort, sieve and error programs are silent under `-fsanitize=address,undefined`; the registry fails if the sanitizer runtime is missing, so the gate cannot be skipped into a pass |
+| A disabled bounds check is caught | `test_a_disabled_bounds_check_is_caught` | with the check removed the read becomes a `heap-buffer-overflow` under AddressSanitizer and the documented message never appears |
+| Ownership rules are enforced, not documented only | `ArrayFrontendTests` (11 tests, `E0328`–`E0342`) | copy, reassignment, array result, borrow-of-borrow, double mutable borrow and read-only writes are all rejected |
+| Existing programs still pass | full suite | 132 tests OK, including all 0.1 programs, arithmetic and ordering fixtures |
+| Public tasks | `eval/tasks.json` → `sort_numbers`, `sieve_count` (8 cases each) | `eval/reference.py --check`: 10 tasks and 65 cases agree |
+
+Seven negative controls were run by hand, each making the gate fail: deleting
+`nv_check_index` from the read helper (a sanitizer report replaces the
+documented error), dropping the `free` at block end (live arrays grow),
+freeing only once per function instead of per block (a leak in a loop),
+skipping the `E0331` copy check (the copy then reaches the C generator, whose
+invariant fails loudly instead of emitting two releases of one buffer), accepting a
+borrow as a `mut` argument (an aliasing write becomes observable), removing
+the `MAX_ARRAY_ELEMENTS` guard (the allocation is attempted instead of
+reported), and letting `a[i] = v` evaluate the value before the index check (a
+side effect escapes a failed statement).
+
+What is deliberately not done: no resizing, no array copies, no arrays of
+arrays, no array results, no `[bool]`/`[str]` allocation from `array_zeros`,
+and no cgroup or sanitizer enforcement in the shipped binary (the sanitizers
+are a test gate, not a runtime mode).
 
 ---
 

@@ -123,6 +123,7 @@ class RuntimeTests(unittest.TestCase):
             ("gcd.nv", "48 18\n", "6\n"),
             ("fibonacci.nv", "", "55\n"),
             ("logic.nv", "", "false\ntrue\n"),
+            ("arrays.nv", "", "6\n30\n0\n"),
         ]
         for name, data, expected in cases:
             with self.subTest(example=name):
@@ -338,6 +339,32 @@ class EvaluationTests(unittest.TestCase):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                     self.assertEqual(json.loads(result.stdout)["summary"]["passed"], 6)
+
+    def test_array_tasks_pass_the_evaluator(self):
+        """The public array tasks must be solvable and scored by the evaluator."""
+        for task in ("sort_numbers", "sieve_count"):
+            with self.subTest(task=task):
+                result = subprocess.run(
+                    [sys.executable, str(ROOT/"eval/evaluate.py"), "--task", task,
+                     "--language", "nava", "--source",
+                     str(ROOT/"eval/solutions"/(task + ".nv"))],
+                    capture_output=True, text=True, timeout=120,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads(result.stdout)
+                self.assertEqual(report["summary"], {"passed": 8, "total": 8, "all_passed": True})
+        with tempfile.TemporaryDirectory() as temp:
+            # A candidate that forgets the bounds of the array must be scored as
+            # wrong, not crash the evaluator.
+            wrong = Path(temp) / "wrong.nv"
+            wrong.write_text("fn main() { let a: [i64] = [1]; print(a[1]) }", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROOT/"eval/evaluate.py"), "--task", "sort_numbers",
+                 "--language", "nava", "--source", str(wrong)],
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertFalse(json.loads(result.stdout)["summary"]["all_passed"])
 
     def test_prompt_contains_task_and_language(self):
         for language in ("nava", "c", "cpp"):

@@ -4,9 +4,9 @@ from .diagnostics import make
 from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
-    Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If, Let,
-    Number, Param, Program, Return, String, Token, Unary,
-    Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If,
+    Index, IndexAssign, Let, Number, Param, Program, Return, String, Token,
+    Unary, Variable, While,
 )
 
 PRECEDENCE = {
@@ -15,6 +15,9 @@ PRECEDENCE = {
     "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
 }
 TYPES = {"i64", "bool", "str", "void"}
+#: Types an array may contain. There are no arrays of arrays and no arrays of
+#: `void`; both are rejected in the parser because they are syntax-level shapes.
+ELEMENT_TYPES = {"i64", "bool", "str"}
 
 
 class Parser:
@@ -76,8 +79,23 @@ class Parser:
                        self.current.loc, hint="end the statement with a newline or ';'")
 
     def parse_type(self) -> str:
+        if self.at("["):
+            opening = self.expect("[")
+            if self.at("["):
+                raise make("E0203", "an array cannot contain another array",
+                           self.current.loc, self.current.loc.advance("["),
+                           "nested collections are not part of Nava 0.1")
+            element = self.expect("IDENT", "an element type (i64, bool, or str)")
+            if element.value not in ELEMENT_TYPES:
+                raise make("E0203",
+                           f"an array element type must be i64, bool, or str, got {element.value!r}",
+                           element.loc, element.loc.advance(str(element.value)))
+            self.expect("]", "']'")
+            return f"[{element.value}]"
         token = self.expect("IDENT", "a type (i64, bool, str, or void)")
         if token.value not in TYPES:
+            # The message text is part of the fixture contract: array types are
+            # documented in LANGUAGE.md and the hint names the scalar set only.
             raise make("E0203", f"unknown type {token.value!r}; use i64, bool, str, or void",
                        token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
@@ -98,8 +116,9 @@ class Parser:
         while not self.at(")"):
             p = self.expect("IDENT", "parameter name")
             self.expect(":")
+            mutable = self.take("MUT") is not None
             typ = self.parse_type()
-            params.append(Param(str(p.value), typ, p.loc))
+            params.append(Param(str(p.value), typ, p.loc, mutable))
             if not self.take(","):
                 break
         self.expect(")")
@@ -145,6 +164,20 @@ class Parser:
             value = None if self.current.kind in ("NL", ";", "}", "EOF") else self.expression()
             self.end_statement()
             return Return(token.loc, value)
+        if self.at("IDENT") and self.tokens[self.i + 1].kind == "[":
+            # `a[i] = value` is an element assignment; `a[i]` alone is not a
+            # statement, and the message names the rule instead of the token.
+            name = self.expect("IDENT")
+            self.expect("[")
+            index = self.expression()
+            self.expect("]")
+            if not self.take("="):
+                raise make("E0313", "only function calls can be used as statements",
+                           token.loc,
+                           hint=f"assign to the element, as in {name.value}[i] = value")
+            value = self.expression()
+            self.end_statement()
+            return IndexAssign(token.loc, str(name.value), index, value, name.loc)
         if self.at("IDENT") and self.tokens[self.i + 1].kind == "=":
             name = self.expect("IDENT")
             self.expect("=")
@@ -212,8 +245,31 @@ class Parser:
             return Boolean(token.loc, True)
         if self.take("FALSE"):
             return Boolean(token.loc, False)
+        if self.take("["):
+            self.enter(token.loc)
+            try:
+                items: list[Expr] = []
+                while not self.at("]"):
+                    if self.at("EOF"):
+                        raise make("E0113", "unclosed '['", token.loc,
+                                   hint="close the array literal with ']'")
+                    item = self.expression()
+                    if isinstance(item, ArrayLiteral):
+                        raise make("E0203", "an array cannot contain another array",
+                                   item.loc)
+                    items.append(item)
+                    if not self.take(","):
+                        break
+                self.expect("]", "']'")
+            finally:
+                self.leave()
+            return ArrayLiteral(token.loc, items)
         if self.take("IDENT"):
             name = str(token.value)
+            if self.take("["):
+                index = self.expression()
+                self.expect("]", "']'")
+                return Index(token.loc, Variable(token.loc, name), index)
             if self.take("("):
                 args = []
                 while not self.at(")"):

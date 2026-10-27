@@ -1,0 +1,12 @@
+fn clear(a: mut [i64]) {
+    a[0] = 0
+}
+
+fn wrapper(a: [i64]) {
+    clear(a)
+}
+
+fn main() {
+    let a: [i64] = [1]
+    wrapper(a)
+}

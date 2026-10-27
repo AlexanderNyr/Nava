@@ -104,6 +104,8 @@ class SpecDocumentationTests(unittest.TestCase):
             (r"\| Nesting limit \(`MAX_NESTING`\) \| (\d+) \|", limits.MAX_NESTING, "MAX_NESTING"),
             (r"\| Literal digit limit \(`MAX_LITERAL_DIGITS`\) \| (\d+) \|",
              limits.MAX_LITERAL_DIGITS, "MAX_LITERAL_DIGITS"),
+            (r"\| Array element limit \(`MAX_ARRAY_ELEMENTS`\) \| (\d+) \|",
+             limits.MAX_ARRAY_ELEMENTS, "MAX_ARRAY_ELEMENTS"),
         ):
             match = re.search(pattern, text)
             self.assertIsNotNone(match, f"{name} is not documented in LANGUAGE.md")
@@ -349,7 +351,8 @@ class FuzzTests(unittest.TestCase):
     TOKENS = ["fn", "main", "(", ")", "{", "}", "let", "x", "=", "1", "0", "+", "-", "*", "/",
               "%", "if", "else", "while", "return", "true", "false", "print", "read_i64", "->",
               "i64", "bool", "str", '"a"', '"\\q"', '"\\u0000"', ";", "\n", "# comment\n", "&&",
-              "||", "!", "==", "<", ":", ",", "void", "_", "1_0", "1__0", "@", "9999999999999999999"]
+              "||", "!", "==", "<", ":", ",", "void", "_", "1_0", "1__0", "@", "9999999999999999999",
+              "[", "]", "mut", "len", "array_zeros", "[i64]", "[void]", "[[i64]]"]
 
     def test_random_token_soup_only_produces_diagnostics(self):
         rng = random.Random(20261027)

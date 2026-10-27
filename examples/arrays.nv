@@ -1,0 +1,26 @@
+fn fill(a: mut [i64], value: i64) {
+    let i = 0
+    while i < len(a) {
+        a[i] = value * (i + 1)
+        i = i + 1
+    }
+}
+
+fn total(a: [i64]) -> i64 {
+    let sum = 0
+    let i = 0
+    while i < len(a) {
+        sum = sum + a[i]
+        i = i + 1
+    }
+    return sum
+}
+
+fn main() {
+    let scores: [i64] = [1, 2, 3]
+    print(total(scores))
+    fill(scores, 5)
+    print(total(scores))
+    let empty: [i64] = []
+    print(len(empty))
+}

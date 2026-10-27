@@ -75,6 +75,30 @@
       "stdout": "",
       "exit_code": 1,
       "stderr_contains": "invalid character in i64 input"
+    },
+    {
+      "file": "arrays_basic.nv",
+      "stdin": "",
+      "stdout": "3\n1\n3\n4\n0\nbeta\nfalse\n42\n3\n",
+      "exit_code": 0
+    },
+    {
+      "file": "arrays_borrow.nv",
+      "stdin": "",
+      "stdout": "0\n15\n3\n30\n50\n0\n",
+      "exit_code": 0
+    },
+    {
+      "file": "arrays_sort.nv",
+      "stdin": "",
+      "stdout": "0\n4\n1\n1\n3\n3\n3\n-2\n-2\n0\n5\n7\n9\n",
+      "exit_code": 0
+    },
+    {
+      "file": "arrays_sieve.nv",
+      "stdin": "1000\n",
+      "stdout": "168\n",
+      "exit_code": 0
     }
   ]
 }

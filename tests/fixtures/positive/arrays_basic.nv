@@ -1,0 +1,17 @@
+fn main() {
+    let a: [i64] = [1, 2, 3]
+    print(len(a))
+    print(a[0])
+    print(a[2])
+    a[1] = a[0] + a[2]
+    print(a[1])
+    let empty: [i64] = []
+    print(len(empty))
+    let words: [str] = ["alpha", "beta"]
+    print(words[1])
+    let flags: [bool] = [true, false]
+    print(flags[1])
+    let single: [i64] = [42]
+    print(single[0])
+    print(len([7, 8, 9]))
+}

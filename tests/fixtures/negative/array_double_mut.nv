@@ -1,0 +1,9 @@
+fn zero(a: mut [i64], b: mut [i64]) {
+    a[0] = 0
+    b[1] = 0
+}
+
+fn main() {
+    let a: [i64] = [1, 2]
+    zero(a, a)
+}

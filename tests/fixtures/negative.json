@@ -423,6 +423,177 @@
       "end_column": null,
       "message": "expression nesting is deeper than the supported limit of 200",
       "hint": "name intermediate results with `let` or split the work into functions"
+    },
+    {
+      "file": "lex_unmatched_bracket.nv",
+      "code": "E0112",
+      "line": 2,
+      "column": 26,
+      "end_column": 27,
+      "message": "unmatched ']'",
+      "hint": null
+    },
+    {
+      "file": "lex_unclosed_bracket.nv",
+      "code": "E0113",
+      "line": 2,
+      "column": 20,
+      "end_column": 21,
+      "message": "unclosed '['",
+      "hint": "close the array literal or type with ']'"
+    },
+    {
+      "file": "array_nested_type.nv",
+      "code": "E0203",
+      "line": 2,
+      "column": 13,
+      "end_column": 14,
+      "message": "an array cannot contain another array",
+      "hint": "nested collections are not part of Nava 0.1"
+    },
+    {
+      "file": "array_of_void.nv",
+      "code": "E0203",
+      "line": 2,
+      "column": 13,
+      "end_column": 17,
+      "message": "an array element type must be i64, bool, or str, got 'void'",
+      "hint": null
+    },
+    {
+      "file": "array_index_type.nv",
+      "code": "E0328",
+      "line": 3,
+      "column": 13,
+      "end_column": null,
+      "message": "an array index must be i64, got bool",
+      "hint": "integers are not converted; use i64 arithmetic"
+    },
+    {
+      "file": "array_index_scalar.nv",
+      "code": "E0329",
+      "line": 3,
+      "column": 11,
+      "end_column": 12,
+      "message": "only an array can be indexed, but 'x' is i64",
+      "hint": null
+    },
+    {
+      "file": "array_return.nv",
+      "code": "E0330",
+      "line": 1,
+      "column": 1,
+      "end_column": 8,
+      "message": "function 'make' cannot return an array",
+      "hint": "an array has exactly one owner; write into a mut [T] parameter instead"
+    },
+    {
+      "file": "array_copy.nv",
+      "code": "E0331",
+      "line": 3,
+      "column": 9,
+      "end_column": 10,
+      "message": "arrays cannot be copied; 'b' would share storage with another array",
+      "hint": "create a new array with a literal or array_zeros(n), or pass the existing one to a parameter"
+    },
+    {
+      "file": "array_reassign.nv",
+      "code": "E0332",
+      "line": 4,
+      "column": 5,
+      "end_column": 6,
+      "message": "an array variable cannot be reassigned ('a' is [i64])",
+      "hint": "an array owns its storage for the life of its block; write elements with a[i] = value"
+    },
+    {
+      "file": "array_mut_from_borrow.nv",
+      "code": "E0333",
+      "line": 6,
+      "column": 11,
+      "end_column": null,
+      "message": "argument 1 of clear is `mut [i64]`, so it must be an owned array variable, not a borrow",
+      "hint": "element writes are only allowed on an array created in this function"
+    },
+    {
+      "file": "array_literal_mixed.nv",
+      "code": "E0334",
+      "line": 2,
+      "column": 17,
+      "end_column": null,
+      "message": "array literal elements must all have the same type; expected i64, got bool",
+      "hint": "there are no implicit conversions between i64, bool and str"
+    },
+    {
+      "file": "array_literal_empty.nv",
+      "code": "E0335",
+      "line": 2,
+      "column": 13,
+      "end_column": null,
+      "message": "an empty array literal needs a type annotation",
+      "hint": "write `let a: [i64] = []` so the element type is known"
+    },
+    {
+      "file": "array_readonly_write.nv",
+      "code": "E0336",
+      "line": 2,
+      "column": 5,
+      "end_column": 6,
+      "message": "cannot assign to an element of the read-only parameter 'a'",
+      "hint": "declare the parameter as `mut [T]` to allow writes"
+    },
+    {
+      "file": "array_len_arity.nv",
+      "code": "E0337",
+      "line": 3,
+      "column": 11,
+      "end_column": null,
+      "message": "len expects exactly one argument",
+      "hint": null
+    },
+    {
+      "file": "array_len_type.nv",
+      "code": "E0338",
+      "line": 3,
+      "column": 11,
+      "end_column": null,
+      "message": "len expects an array, got i64",
+      "hint": null
+    },
+    {
+      "file": "array_zeros_arity.nv",
+      "code": "E0339",
+      "line": 2,
+      "column": 20,
+      "end_column": null,
+      "message": "array_zeros expects exactly one argument",
+      "hint": null
+    },
+    {
+      "file": "array_zeros_type.nv",
+      "code": "E0340",
+      "line": 2,
+      "column": 32,
+      "end_column": null,
+      "message": "array_zeros expects an i64 length, got bool",
+      "hint": null
+    },
+    {
+      "file": "array_mut_scalar.nv",
+      "code": "E0341",
+      "line": 1,
+      "column": 9,
+      "end_column": 14,
+      "message": "'mut' is only allowed on an array parameter, not on i64",
+      "hint": "scalar parameters are already mutable locals inside the function"
+    },
+    {
+      "file": "array_double_mut.nv",
+      "code": "E0342",
+      "line": 8,
+      "column": 13,
+      "end_column": null,
+      "message": "'a' is passed to two mutable parameters of zero (arguments 1 and 2)",
+      "hint": "a mutable borrow must be exclusive: copy into a second array first"
     }
   ]
 }
