@@ -250,6 +250,76 @@ REGISTERED_TESTS = {
         "test_model_status_is_not_measured_when_every_call_failed",
         "test_store_raw_keeps_prompts_and_answers",
     },
+    "ModuleFrontendTests": {
+        "test_a_builtin_cannot_be_reached_through_a_module",
+        "test_a_cycle_names_every_module_and_its_location",
+        "test_a_local_module_may_not_shadow_a_standard_module",
+        "test_a_module_may_import_another_module",
+        "test_a_module_must_not_define_main",
+        "test_a_qualified_call_without_an_import_is_reported",
+        "test_a_standard_module_must_declare_its_version",
+        "test_an_import_cannot_escape_the_project_boundary",
+        "test_an_in_memory_source_cannot_resolve_an_import",
+        "test_an_unqualified_call_into_another_module_names_the_fix",
+        "test_an_unused_import_is_a_warning_not_an_error",
+        "test_diagnostics_carry_the_path_of_the_file_they_come_from",
+        "test_import_must_precede_every_function",
+        "test_missing_module_lists_both_search_locations",
+        "test_module_imported_twice_is_an_error",
+        "test_the_project_root_can_be_moved",
+        "test_the_standard_library_version_is_checked",
+        "test_unknown_function_in_a_module",
+    },
+    "ModuleRuntimeTests": {
+        "test_check_build_and_run_agree",
+        "test_module_fixture_cases",
+        "test_the_generated_c_is_one_translation_unit",
+        "test_the_multi_file_example_runs",
+    },
+    "MathTests": {
+        "test_abs_of_the_smallest_i64_is_a_runtime_error",
+        "test_integer_helpers_match_python",
+    },
+    "SortTests": {
+        "test_sorting_matches_python",
+    },
+    "TextTests": {
+        "test_a_nul_byte_cannot_become_a_str",
+        "test_byte_at_is_bounds_checked",
+        "test_bytes_and_code_points_match_python",
+        "test_chars_len_stops_on_invalid_utf8",
+        "test_utf8_validity_matches_pythons_strict_decoder",
+    },
+    "StdlibContractTests": {
+        "test_every_export_is_documented",
+        "test_every_standard_module_declares_the_supported_version",
+        "test_the_exports_are_what_the_tests_cover",
+    },
+    "FileCapabilityTests": {
+        "test_a_directory_is_not_a_file",
+        "test_a_granted_directory_is_readable",
+        "test_a_missing_file_says_why",
+        "test_a_path_outside_the_grant_is_denied",
+        "test_a_program_without_a_grant_is_denied",
+        "test_a_symlink_outside_the_grant_is_denied",
+        "test_an_empty_file_is_an_empty_string",
+        "test_the_grants_are_compiled_in",
+        "test_the_per_file_limit_is_enforced",
+        "test_the_program_cannot_grant_itself_access",
+        "test_the_read_call_limit_is_enforced",
+        "test_the_total_read_limit_is_enforced",
+        "test_write_needs_its_own_grant",
+        "test_write_through_a_symlinked_directory_is_denied",
+    },
+    "FileCommandLineTests": {
+        "test_a_grant_that_is_not_a_directory_is_reported",
+        "test_a_missing_grant_directory_is_reported",
+    },
+    "IsolatedFileTests": {
+        "test_a_workdir_is_required_to_exist",
+        "test_the_boundary_holds_inside_the_namespace_jail",
+        "test_the_isolated_runner_allows_a_granted_file_and_denies_another",
+    },
     "RegistryTests": {
         "test_registered_tests_are_present_and_not_skipped",
         "test_required_tools_are_present",
@@ -282,10 +352,14 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 82,
+    "tests/fixtures/negative": 83,
     "tests/fixtures/positive": 19,
     "tests/fixtures/warnings": 2,
 }
+
+#: Multi-file module fixtures: one directory per case, listed in
+#: `tests/fixtures/modules.json`.
+REGISTERED_MODULE_CASES = 8
 
 #: Diagnostic codes that no source fixture can produce, with the test that
 #: covers them instead. Mirrors `tests/test_spec.py`.
@@ -299,6 +373,18 @@ CODES_TESTED_ELSEWHERE = {
     "E0505": "tests/test_spec.py: test_cli_diagnostics_are_registered",
     "E0601": "tests/test_sandbox.py: test_required_mode_refuses_without_namespaces",
     "E0602": "tests/test_sandbox.py: test_surviving_child_is_reported_by_the_cli",
+    "E0352": "tests/test_modules.py: test_missing_module_lists_both_search_locations",
+    "E0353": "tests/fixtures/modules.json: cycle",
+    "E0355": "tests/fixtures/modules.json: duplicate_import",
+    "E0356": "tests/test_modules.py: test_an_import_cannot_escape_the_project_boundary",
+    "E0357": "tests/fixtures/modules.json: main_in_module",
+    "E0358": "tests/fixtures/modules.json: unqualified",
+    "E0359": "tests/fixtures/modules.json: not_imported",
+    "E0360": "tests/fixtures/modules.json: shadow",
+    "E0361": "tests/test_modules.py: test_the_standard_library_version_is_checked",
+    "E0506": "tests/test_files.py: test_a_missing_grant_directory_is_reported",
+    "E0507": "tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported",
+    "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
 
@@ -324,16 +410,20 @@ def discovered_tests() -> dict[str, set[str]]:
         sys.path.insert(0, str(ROOT / "tests"))
     import test_arrays  # noqa: PLC0415  (import after sys.path setup)
     import test_control  # noqa: PLC0415
+    import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
+    import test_stdlib  # noqa: PLC0415
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_arrays, test_control, test_float, test_nava, test_registry,
-                   test_sandbox, test_spec, test_study):
+    for module in (test_arrays, test_control, test_files, test_float, test_modules,
+                   test_nava, test_registry, test_sandbox, test_spec, test_stdlib,
+                   test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -383,11 +473,21 @@ def check_skip_state() -> list[str]:
             problems.append(f"{class_name} is skipped on this host; required tool: {required}")
     import test_arrays  # noqa: PLC0415
     import test_control  # noqa: PLC0415
+    import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_modules  # noqa: PLC0415
+    import test_stdlib  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
-                               (test_float, "FloatRuntimeTests")):
+                               (test_float, "FloatRuntimeTests"),
+                               (test_modules, "ModuleRuntimeTests"),
+                               (test_stdlib, "MathTests"),
+                               (test_stdlib, "SortTests"),
+                               (test_stdlib, "TextTests"),
+                               (test_files, "FileCapabilityTests"),
+                               (test_files, "FileCommandLineTests"),
+                               (test_files, "IsolatedFileTests")):
         class_object = getattr(module, class_name)
         if getattr(class_object, "__unittest_skip__", False):
             problems.append(f"{class_name} is skipped on this host; required tool: cc")
@@ -452,6 +552,28 @@ def check_fixtures() -> list[str]:
         found = sorted(item.name for item in path.glob("*.nv"))
         if len(found) != expected:
             problems.append(f"{directory}: registered {expected} fixtures, found {len(found)}")
+    modules_directory = ROOT / "tests/fixtures/modules"
+    module_manifest = ROOT / "tests/fixtures/modules.json"
+    if not module_manifest.is_file():
+        problems.append("tests/fixtures/modules.json: manifest is missing")
+    elif not modules_directory.is_dir():
+        problems.append("tests/fixtures/modules: fixture directory is missing")
+    else:
+        cases = json.loads(module_manifest.read_text(encoding="utf-8"))["cases"]
+        if len(cases) != REGISTERED_MODULE_CASES:
+            problems.append(f"tests/fixtures/modules.json: registered "
+                            f"{REGISTERED_MODULE_CASES} cases, found {len(cases)}")
+        on_disk = {item.name for item in modules_directory.iterdir() if item.is_dir()}
+        listed = {case["dir"] for case in cases}
+        for missing in sorted(listed - on_disk):
+            problems.append(f"tests/fixtures/modules.json: {missing} has no directory")
+        for extra in sorted(on_disk - listed):
+            problems.append(f"tests/fixtures/modules.json: {extra} has no expectation")
+        for case in cases:
+            entry = modules_directory / case["dir"] / case["entry"]
+            if not entry.is_file():
+                problems.append(f"tests/fixtures/modules/{case['dir']}: "
+                                f"{case['entry']} is missing")
     for manifest, directory in (("tests/fixtures/negative.json", "tests/fixtures/negative"),
                                 ("tests/fixtures/positive.json", "tests/fixtures/positive"),
                                 ("tests/fixtures/warnings.json", "tests/fixtures/warnings")):
@@ -516,7 +638,7 @@ def main() -> int:
         return 1
     tests = sum(len(methods) for methods in REGISTERED_TESTS.values())
     cases = sum(REGISTERED_TASKS.values())
-    fixtures = sum(REGISTERED_FIXTURE_DIRS.values())
+    fixtures = sum(REGISTERED_FIXTURE_DIRS.values()) + REGISTERED_MODULE_CASES
     print(
         f"OK: {tests} registered tests, {len(REGISTERED_TASKS)} tasks with {cases} cases, "
         f"{fixtures} spec fixtures, {len(CODES)} diagnostic codes, "

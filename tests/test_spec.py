@@ -58,6 +58,24 @@ CODES_TESTED_ELSEWHERE = {
     "E0505": "DiagnosticFormatTests.test_cli_diagnostics_are_registered (E0501-E0505)",
     "E0601": "tests/test_sandbox.py: test_required_mode_refuses_without_namespaces",
     "E0602": "tests/test_sandbox.py: test_surviving_child_is_reported_by_the_cli",
+    # Module and capability diagnostics need a directory, so they are covered by
+    # `tests/test_modules.py`, `tests/fixtures/modules.json` and
+    # `tests/test_files.py` instead of a single-file fixture.
+    "E0352": "tests/test_modules.py: test_missing_module_lists_both_search_locations, "
+             "test_an_in_memory_source_cannot_resolve_an_import",
+    "E0353": "tests/fixtures/modules.json: cycle; tests/test_modules.py: "
+             "test_a_cycle_names_every_module_and_its_location",
+    "E0355": "tests/fixtures/modules.json: duplicate_import",
+    "E0356": "tests/test_modules.py: test_an_import_cannot_escape_the_project_boundary",
+    "E0357": "tests/fixtures/modules.json: main_in_module",
+    "E0358": "tests/fixtures/modules.json: unqualified",
+    "E0359": "tests/fixtures/modules.json: not_imported",
+    "E0360": "tests/fixtures/modules.json: shadow",
+    "E0361": "tests/test_modules.py: test_the_standard_library_version_is_checked, "
+             "test_a_standard_module_must_declare_its_version",
+    "E0506": "tests/test_files.py: test_a_missing_grant_directory_is_reported",
+    "E0507": "tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported",
+    "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
 
@@ -75,13 +93,29 @@ def error_for(source: str) -> NavaError:
 
 class SpecDocumentationTests(unittest.TestCase):
     def test_documented_examples_typecheck(self):
+        """Every `nava` example compiles; `nava module:NAME` as that module.
+
+        A module has no `main`, so it cannot be compiled on its own: the block is
+        written as `NAME.nv` next to a two-line entry file that imports it, and
+        the whole project is checked. That still type-checks every function of
+        the module.
+        """
         text = LANGUAGE.read_text(encoding="utf-8")
-        blocks = re.findall(r"```nava\n(.*?)```", text, re.DOTALL)
+        blocks = re.findall(r"```nava(?: module:(\w+))?\n(.*?)```", text, re.DOTALL)
         self.assertGreaterEqual(len(blocks), 6, "LANGUAGE.md should contain runnable examples")
-        for index, block in enumerate(blocks, 1):
+        for index, (module, block) in enumerate(blocks, 1):
             with self.subTest(block=index):
                 try:
-                    compile_source(block)
+                    if not module:
+                        compile_source(block)
+                        continue
+                    with tempfile.TemporaryDirectory() as temp:
+                        root = Path(temp)
+                        (root / f"{module}.nv").write_text(block, encoding="utf-8")
+                        entry = root / "main.nv"
+                        entry.write_text(f"import {module}\n\nfn main() {{\n    print(1)\n}}\n",
+                                         encoding="utf-8")
+                        compile_source(entry.read_text(encoding="utf-8"), path=entry)
                 except NavaError as exc:
                     self.fail(f"example {index} does not compile: {exc.code} {exc.message}")
 
@@ -108,6 +142,12 @@ class SpecDocumentationTests(unittest.TestCase):
              limits.MAX_ARRAY_ELEMENTS, "MAX_ARRAY_ELEMENTS"),
             (r"\| Float literal digits \(`MAX_FLOAT_DIGITS`\) \| (\d+) \|",
              limits.MAX_FLOAT_DIGITS, "MAX_FLOAT_DIGITS"),
+            (r"\| File read limit \(`MAX_FILE_BYTES`\) \| (\d+) \|",
+             limits.MAX_FILE_BYTES, "MAX_FILE_BYTES"),
+            (r"\| Total read limit \(`MAX_READ_TOTAL_BYTES`\) \| (\d+) \|",
+             limits.MAX_READ_TOTAL_BYTES, "MAX_READ_TOTAL_BYTES"),
+            (r"\| Read call limit \(`MAX_READ_CALLS`\) \| (\d+) \|",
+             limits.MAX_READ_CALLS, "MAX_READ_CALLS"),
         ):
             match = re.search(pattern, text)
             self.assertIsNotNone(match, f"{name} is not documented in LANGUAGE.md")

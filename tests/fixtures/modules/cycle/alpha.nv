@@ -1,0 +1,5 @@
+import beta
+
+fn value() -> i64 {
+    return beta::value() + 1
+}

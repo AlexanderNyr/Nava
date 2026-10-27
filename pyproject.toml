@@ -27,3 +27,8 @@ nava = "nava_lang.cli:main"
 # it is not a Python dependency and is therefore declared only in prose.
 [tool.setuptools]
 packages = ["nava_lang"]
+
+# The standard library is Nava source, not Python code: it must be installed
+# next to the compiler so `import math` resolves after `pip install`.
+[tool.setuptools.package-data]
+nava_lang = ["stdlib/*.nv"]

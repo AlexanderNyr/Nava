@@ -1,0 +1,6 @@
+import math
+import math
+
+fn main() {
+    print(math::abs(-1))
+}

@@ -1,0 +1,5 @@
+import alpha
+
+fn main() {
+    print(alpha::value())
+}

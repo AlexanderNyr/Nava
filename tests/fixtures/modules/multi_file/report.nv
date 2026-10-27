@@ -1,0 +1,9 @@
+import counters
+
+fn describe(value: i64) {
+    if value == counters::total([1, 2, 3]) {
+        print("equal to six")
+    } else {
+        print(value)
+    }
+}

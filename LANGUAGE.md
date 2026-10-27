@@ -45,8 +45,8 @@ as a guaranteed return.
   delimiters. Outside them an expression cannot be split across lines.
 - **Comments** — `#` or `//` to the end of the line.
 - **Keywords** — `fn`, `let`, `if`, `else`, `while`, `for`, `in`, `break`,
-  `continue`, `return`, `true`, `false`, `mut` (only in a parameter type, see
-  [Arrays and ownership](#arrays-and-ownership)).
+  `continue`, `return`, `import`, `true`, `false`, `mut` (only in a parameter
+  type, see [Arrays and ownership](#arrays-and-ownership)).
 - **Identifiers** — ASCII letters, digits and `_`, not starting with a digit.
 - **Types** — `i64`, `bool`, `str`, `f64`, `void`, and the array types `[i64]`,
   `[bool]`, `[str]`. Any other name in a type position is `E0203`; so are
@@ -64,12 +64,12 @@ as a guaranteed return.
   that is outside the `f64` range is `E0346`; `1e999` is rejected rather than
   silently becoming infinity. A range `0..3` is two integers and `..`, not a
   float.
-- **Strings** — double-quoted UTF-8 with JSON escapes (`\"`, `\\`, `\n`, `\t`,
+- **Strings** — double-quoted, byte for byte as written in the file, with JSON escapes (`\"`, `\\`, `\n`, `\t`,
   `\uXXXX`, and the other JSON escapes). A literal newline inside a string is
   `E0103`; an invalid escape is `E0104`; NUL is `E0105`; an unpaired surrogate
   is `E0106`.
 - **Operators** — `( ) [ ] { } : , + - * / % = ! < > ;` and the two-character
-  `->`, `..`, `<=`, `>=`, `==`, `!=`, `&&`, `||`. Delimiters must match: an unmatched
+  `->`, `..`, `::`, `<=`, `>=`, `==`, `!=`, `&&`, `||`. Delimiters must match: an unmatched
   `)` is `E0109`, an unmatched `]` is `E0112`, an unclosed `(` is `E0110` and
   an unclosed `[` is `E0113`.
 
@@ -79,7 +79,8 @@ The grammar below is the whole language. Statements are separated by a newline
 or `;`; a separator is not required before `}`.
 
 ```text
-program        = { function } end_of_file ;
+program        = { import } { function } end_of_file ;
+import         = "import" IDENT ;
 function       = "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
 parameters     = parameter { "," parameter } ;
 parameter      = IDENT ":" [ "mut" ] type ;
@@ -114,12 +115,13 @@ primary        = NUMBER | STRING | "true" | "false" | "(" expression ")"
                | IDENT | call | element | array_literal ;
 element        = IDENT "[" expression "]" ;
 array_literal  = "[" [ expression { "," expression } ] "]" ;
-call           = IDENT "(" [ arguments ] ")" ;
+call           = [ IDENT "::" ] IDENT "(" [ arguments ] ")" ;
 arguments      = expression { "," expression } ;
 ```
 
 All binary operators are left-associative. Only a call may be used as a
-statement (`E0313` otherwise).
+statement (`E0313` otherwise). Every `import` must appear before the first
+`fn` (`E0354`).
 
 ## Types and values
 
@@ -127,17 +129,17 @@ statement (`E0313` otherwise).
 |---|---|
 | `i64` | Integers from -9223372036854775808 to 9223372036854775807. |
 | `bool` | `true` and `false`. Conditions require `bool`; integers are not converted. |
-| `str` | Double-quoted UTF-8 strings. NUL is not allowed. |
+| `str` | A NUL-terminated byte sequence; source literals are valid UTF-8. Bytes and code points are different units — see [Text, bytes and UTF-8](#text-bytes-and-utf-8). |
 | `f64` | IEEE-754 binary64, the same values as C `double`. |
 | `void` | No function result; not a variable or parameter type. |
 | `[i64]`, `[bool]`, `[str]` | A fixed-length sequence of one element type. The length is set when the array is created and never changes. |
 
-Strings can be passed to functions, returned, printed and compared for
-equality. Equality compares UTF-8 bytes without Unicode normalization.
-Concatenation, string indexing, string length and string input are not
-implemented: `len` accepts an array, not a `str`. There are
-no implicit conversions between `i64`, `bool` and `str`, and no conversions
-between element types.
+Strings can be passed to functions, returned, printed, written to a file and
+compared for equality. Equality compares bytes without Unicode normalization.
+`bytes_len` and `chars_len` give the size, `byte_at` reads one byte.
+Concatenation, string indexing and string input are not implemented: `len`
+accepts an array, not a `str`. There are no implicit conversions between
+`i64`, `bool` and `str`, and no conversions between element types.
 
 ## Variables and scope
 
@@ -565,6 +567,168 @@ There are no `f64` arrays, no `f64` literals for `inf`/`nan` (produce them
 arithmetically), no fused multiply-add, no `sqrt` or other mathematical
 functions, and no decimal or arbitrary-precision type.
 
+## Modules and the standard library
+
+A program may be split across files. A **module** is one UTF-8 source file that
+contains only functions; `import name` loads `name.nv` and makes its functions
+callable as `name::function`. There are no namespaces beyond that, no
+re-exports and no visibility keyword: everything a module defines is callable
+through the module name, and nothing of another module is visible without it.
+
+Resolution is deterministic and has no configurable search list:
+
+1. `<project root>/<name>.nv`, where the project root is the directory of the
+   file being compiled, or the directory given with `--root`;
+2. the standard library that ships with the compiler,
+   `nava_lang/stdlib/<name>.nv`.
+
+A local file may not shadow a standard module (`E0360`); that is an error rather
+than a precedence rule, so `import math` always means the same library. A module
+additionally may not define `main` (`E0357`) and may not be imported twice
+(`E0355`). The import graph must be acyclic (`E0353`, which names the cycle). The
+resolved file is checked with `realpath`, so a symbolic link that leaves the
+project root is `E0356`.
+
+A set of three files, where `stats.nv` is local and the other three modules come
+from the standard library:
+
+```text
+examples/modules/main.nv      import math, sort, text, stats
+examples/modules/stats.nv     a local module; it imports math itself
+nava_lang/stdlib/math.nv      abs, min, max, sign, gcd, sum
+nava_lang/stdlib/sort.nv      is_sorted, insertion_sort, binary_search
+nava_lang/stdlib/text.nv      is_ascii, is_valid_utf8, code_points, ...
+```
+
+`python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
+a search result, the mean and two text answers; `tests/test_modules.py` checks
+the exact output. Inside a module, its own functions are called without a
+prefix; a call into any other module must be prefixed. Calling a function of
+another module without the prefix is `E0358` (the message names the module),
+prefixing a module that was not imported is `E0359`, and an import that no
+qualified call uses is the warning `W0002`.
+
+The standard library is versioned. Every module in it declares the version it
+implements, and the compiler refuses a module that does not match
+(`E0361`):
+
+```nava module:geometry
+fn module_version() -> i64 {
+    return 1
+}
+
+fn twice(x: i64) -> i64 {
+    return x * 2
+}
+```
+
+### `math`
+
+| Function | Result |
+|---|---|
+| `math::module_version() -> i64` | the standard library version |
+| `math::abs(x: i64) -> i64` | the absolute value; `abs(-9223372036854775808)` is a runtime error, because the result does not fit |
+| `math::min(a: i64, b: i64) -> i64` | the smaller value |
+| `math::max(a: i64, b: i64) -> i64` | the larger value |
+| `math::sign(x: i64) -> i64` | -1, 0 or 1 |
+| `math::gcd(a: i64, b: i64) -> i64` | Euclid on the absolute values; `gcd(0, 0)` is 0 |
+| `math::sum(values: [i64]) -> i64` | the sum of an array, 0 for an empty one, with checked overflow |
+
+### `sort`
+
+| Function | Result |
+|---|---|
+| `sort::module_version() -> i64` | the standard library version |
+| `sort::is_sorted(values: [i64]) -> bool` | true when every element is at least the one before it |
+| `sort::insertion_sort(values: mut [i64])` | insertion sort in place through a mutable borrow |
+| `sort::binary_search(values: [i64], wanted: i64) -> i64` | an index of `wanted`, or -1; the caller must pass a sorted array |
+
+### `text`
+
+`chars_len` and `bytes_len` are builtins; the module adds classification and
+validation that never allocates.
+
+| Function | Result |
+|---|---|
+| `text::module_version() -> i64` | the standard library version |
+| `text::is_continuation(byte: i64) -> bool` | true for a UTF-8 continuation byte (0x80..0xBF) |
+| `text::sequence_width(value: str, index: i64) -> i64` | length in bytes of the well-formed UTF-8 sequence at `index`, or 0 |
+| `text::is_valid_utf8(value: str) -> bool` | strict validation: no overlong forms, no surrogates, nothing above U+10FFFF |
+| `text::code_points(value: str) -> i64` | the number of code points, or -1 when the string is not valid UTF-8 |
+| `text::is_ascii(value: str) -> bool` | true when every byte is below 128 |
+
+## Text, bytes and UTF-8
+
+A `str` is a NUL-terminated byte sequence, and the two units are never mixed up
+silently:
+
+- A **source literal** is always valid UTF-8: source that is not is `E0111`, an
+  escape that is not valid is `E0104`, an unpaired surrogate is `E0106` and a
+  NUL is `E0105`.
+- `read_file` can return **any** bytes except NUL, so a `str` may be invalid
+  UTF-8 at run time. Nothing is replaced or truncated: the bytes arrive exactly
+  as stored.
+- `bytes_len` counts bytes, `byte_at` reads one byte, and `chars_len` counts
+  code points. `chars_len` is where validity is enforced: on bytes that are not
+  valid UTF-8 it stops the program with
+  `nava runtime error: chars_len of a string that is not valid UTF-8`.
+- `print` writes the bytes unchanged, and `==` compares bytes exactly, so two
+  strings that look alike before Unicode normalization are not equal.
+- A **code point** is one Unicode scalar value: `é` is one code point and two
+  bytes in UTF-8, `😀` is one code point and four bytes, and `"héllo"` is five
+  code points and six bytes. `tests/test_stdlib.py` checks every one of those
+  numbers against Python's encoder and its strict decoder, including overlong
+  forms, surrogate halves, truncated sequences and values above U+10FFFF.
+
+```nava
+fn main() {
+    let text = "héllo"
+    print(bytes_len(text))
+    print(chars_len(text))
+    print(byte_at(text, 1))
+    print(text == "hello")
+}
+```
+
+Output: `6`, `5`, `169`, `false`.
+
+## Files and capabilities
+
+File access is opt-in. A program compiled without a grant cannot read or write
+anything: `read_file` and `write_file` exist in the language, but the grants are
+decided when the program is **built** and compiled into it, and nothing in the
+language can add one at run time.
+
+```text
+nava build prog.nv -o prog --allow-read data --allow-write out
+nava run   prog.nv --workdir sandbox --allow-read . --allow-write .
+```
+
+- `--allow-read DIR` and `--allow-write DIR` may be repeated; each one grants
+  one directory subtree. Read and write are separate grants.
+- The argument of `read_file`/`write_file` is resolved with `realpath`, so `..`,
+  a symbolic link and a symbolic-linked directory cannot be used to leave a
+  granted subtree: the resolved path must be inside one of the granted
+  directories, otherwise the program stops with
+  `nava runtime error: read_file denied: '<path>' is outside every permitted directory`.
+  With no grant at all the message says that no directory was configured.
+- A **relative** grant is relative to the program's working directory, and it is
+  resolved again inside the sandbox, so `--workdir DIR --allow-read .` means the
+  same thing with and without namespace isolation. An **absolute** grant only
+  matches when the program's view of the filesystem is the host's, which is the
+  `rlimits` backend; inside the namespace jail the host paths do not exist, so
+  use relative grants there.
+- Reads are bounded: one file may be at most 1048576 bytes, one run may read at
+  most 4194304 bytes in total and may call `read_file` at most 64 times. The
+  returned text lives until the process exits, which is why the total, not the
+  call count, is the memory bound.
+- `write_file` refuses text larger than 1048576 bytes and refuses a path whose
+  last component is empty.
+- File access never overrides isolation: inside the namespace jail the program
+  sees only its working directory, so a grant for a directory that is not
+  mounted cannot help, and a file outside the working directory cannot be
+  reached even when a grant names it.
+
 ## Checked arithmetic
 
 `i64` arithmetic is checked. The following are runtime errors, written to
@@ -597,7 +761,7 @@ fn main() {
 - `read_i64() -> i64` reads one whitespace-delimited decimal integer, with an
   optional `+` or `-` sign. Invalid input, an out-of-range value and end of
   input are runtime errors.
-- `print(value)` accepts exactly one `i64`, `bool` or `str` and prints it
+- `print(value)` accepts exactly one `i64`, `bool`, `f64` or `str` and prints it
   followed by a newline. Booleans print as `true` or `false`. `print` returns
   `void` and cannot be used as a value (`E0309`, `E0314`).
 - `read_f64() -> f64` reads one decimal floating-point number (`E0348`).
@@ -606,7 +770,14 @@ fn main() {
 - `len(a: [T]) -> i64` returns the number of elements (`E0337`, `E0338`).
 - `array_zeros(n: i64) -> [i64]` allocates `n` zeroed elements and checks the
   length (`E0339`, `E0340`).
-- All seven names are reserved: they cannot be redefined (`E0301`).
+- `bytes_len(s: str) -> i64` is the number of bytes, `chars_len(s: str) -> i64`
+  the number of Unicode code points (a runtime error if the bytes are not valid
+  UTF-8), and `byte_at(s: str, i: i64) -> i64` one byte as a number in 0..255
+  with a checked index.
+- `read_file(path: str) -> str` and `write_file(path: str, text: str)` are the
+  capability-limited file API; see [Files and capabilities](#files-and-capabilities).
+- `print(value)` also accepts `f64`.
+- All twelve names are reserved: they cannot be redefined (`E0301`).
 
 ## Diagnostics
 
@@ -728,6 +899,16 @@ never changes meaning; a new condition gets a new code.
 | `E0349` | error | for-loop bound must be i64 | `tests/fixtures/negative/ctl_for_bound_type.nv` |
 | `E0350` | error | for loop cannot iterate over this value | `tests/fixtures/negative/ctl_for_iterable_type.nv` |
 | `E0351` | error | the loop variable cannot be assigned | `tests/fixtures/negative/ctl_loop_variable_assignment.nv` |
+| `E0352` | error | module not found | `tests/test_modules.py: test_missing_module_lists_both_search_locations` |
+| `E0353` | error | modules import each other in a cycle | `tests/fixtures/modules/cycle/` |
+| `E0354` | error | import after a function definition | `tests/fixtures/negative/mod_import_after_function.nv` |
+| `E0355` | error | module imported twice | `tests/fixtures/modules/duplicate_import/` |
+| `E0356` | error | module escapes the project boundary | `tests/test_modules.py: test_an_import_cannot_escape_the_project_boundary` |
+| `E0357` | error | module defines fn main | `tests/fixtures/modules/main_in_module/` |
+| `E0358` | error | function belongs to another module | `tests/fixtures/modules/unqualified/` |
+| `E0359` | error | module is not imported | `tests/fixtures/modules/not_imported/` |
+| `E0360` | error | a local module shadows a standard module | `tests/fixtures/modules/shadow/` |
+| `E0361` | error | standard module version mismatch | `tests/test_modules.py: test_the_standard_library_version_is_checked` |
 
 **Resource limits**
 
@@ -745,6 +926,8 @@ never changes meaning; a new condition gets a new code.
 | `E0503` | error | C compiler not found | — |
 | `E0504` | error | output path equals the source path | — |
 | `E0505` | error | output directory does not exist | — |
+| `E0506` | error | directory does not exist | `tests/test_files.py: test_a_missing_grant_directory_is_reported` |
+| `E0507` | error | path is not a directory | `tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported` |
 
 **Sandbox and isolation**
 
@@ -758,6 +941,7 @@ never changes meaning; a new condition gets a new code.
 | Code | Severity | Meaning | Triggered by |
 |---|---|---|---|
 | `W0001` | warning | unreachable statement | `tests/fixtures/warnings/unreachable.nv` |
+| `W0002` | warning | unused import | `tests/fixtures/modules/unused_import/` |
 
 ## Warnings
 
@@ -765,7 +949,8 @@ Warnings are non-fatal: the program still compiles and runs, and the warning is
 written to `stderr`. A statement that cannot be reached because the preceding
 statement always returns, breaks or continues is reported as `W0001`; the
 statement is still present in the generated C, so remove it rather than relying
-on the warning.
+on the warning. An import that no qualified call uses is `W0002`: the module is
+loaded anyway, so the warning costs nothing to act on.
 
 ```nava
 fn f() -> i64 {
@@ -787,12 +972,17 @@ See `tests/fixtures/warnings/unreachable.nv`.
 | Literal digit limit (`MAX_LITERAL_DIGITS`) | 19 | `E0108` |
 | Array element limit (`MAX_ARRAY_ELEMENTS`) | 4194304 | runtime error, exit status 1 |
 | Float literal digits (`MAX_FLOAT_DIGITS`) | 40 | `E0346` |
+| File read limit (`MAX_FILE_BYTES`) | 1048576 | runtime error, exit status 1 |
+| Total read limit (`MAX_READ_TOTAL_BYTES`) | 4194304 | runtime error, exit status 1 |
+| Read call limit (`MAX_READ_CALLS`) | 64 | runtime error, exit status 1 |
 
 The nesting counter is shared by function bodies and blocks, parenthesised
 subexpressions, unary operator chains and the depth of the expression tree
 (which also bounds long left-associative chains such as `1 + 1 + 1 + ...`).
-The limit exists so that pathological input produces a diagnostic instead of a
-Python traceback; it is not a tuning knob. If the guard is ever bypassed, the
+These four numbers are also compiled into the generated runtime from
+`nava_lang/limits.py`, so the documented value and the enforced value cannot
+drift apart. The limit exists so that pathological input produces a diagnostic
+instead of a Python traceback; it is not a tuning knob. If the guard is ever bypassed, the
 `nava` command still reports `E0402` rather than crashing.
 
 ## Exit status
@@ -814,7 +1004,10 @@ program's, not the compiler's.
 There are no resizable collections, arrays of arrays, `f64` arrays, array
 copies, array results from functions, labelled `break`/`continue`, string
 indexing, string concatenation, string input, mathematical functions such as
-`sqrt`, file APIs, pointers, modules, imports or FFI.
+`sqrt`, floating-point `%`, pointers, FFI, networking, package resolution, a
+module visibility keyword, or more than one file per module. Module imports and
+a capability-limited file API are implemented, as described above; a package
+manager is not.
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated
 C with `nava emit-c`; building requires C11 and the C standard library. GCC and

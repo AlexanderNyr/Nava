@@ -1,0 +1,112 @@
+# Nava standard library: UTF-8 text.  Version 1.
+#
+# A `str` is a NUL-terminated UTF-8 byte sequence.  `bytes_len` (builtin) counts
+# bytes, `chars_len` (builtin) counts code points and rejects invalid input;
+# the functions here add validation and classification without allocating.
+
+fn module_version() -> i64 {
+    return 1
+}
+
+fn is_continuation(byte: i64) -> bool {
+    return byte >= 128 && byte <= 191
+}
+
+# Width in bytes of the well-formed UTF-8 sequence that starts at byte `index`,
+# or 0 when the sequence is malformed.  Strict: no overlong forms, no
+# surrogates (U+D800..U+DFFF) and nothing above U+10FFFF.
+fn sequence_width(value: str, index: i64) -> i64 {
+    let length = bytes_len(value)
+    let first = byte_at(value, index)
+    if first < 128 {
+        return 1
+    }
+    if first < 194 {
+        # 0x80..0xC1: a stray continuation byte, or an overlong two-byte form.
+        return 0
+    }
+    if first < 224 {
+        if index + 1 >= length {
+            return 0
+        }
+        if !is_continuation(byte_at(value, index + 1)) {
+            return 0
+        }
+        return 2
+    }
+    if first < 240 {
+        if index + 2 >= length {
+            return 0
+        }
+        let second = byte_at(value, index + 1)
+        if !is_continuation(second) || !is_continuation(byte_at(value, index + 2)) {
+            return 0
+        }
+        if first == 224 && second < 160 {
+            return 0
+        }
+        if first == 237 && second > 159 {
+            return 0
+        }
+        return 3
+    }
+    if first < 245 {
+        if index + 3 >= length {
+            return 0
+        }
+        let second = byte_at(value, index + 1)
+        if (!is_continuation(second) || !is_continuation(byte_at(value, index + 2))
+            || !is_continuation(byte_at(value, index + 3))) {
+            return 0
+        }
+        if first == 240 && second < 144 {
+            return 0
+        }
+        if first == 244 && second > 143 {
+            return 0
+        }
+        return 4
+    }
+    return 0
+}
+
+fn is_valid_utf8(value: str) -> bool {
+    let length = bytes_len(value)
+    let index = 0
+    while index < length {
+        let width = sequence_width(value, index)
+        if width == 0 {
+            return false
+        }
+        index = index + width
+    }
+    return true
+}
+
+# Number of code points, or -1 when the string is not valid UTF-8.  Compare
+# with the builtin `chars_len`, which stops the program instead of returning -1.
+fn code_points(value: str) -> i64 {
+    let length = bytes_len(value)
+    let index = 0
+    let count = 0
+    while index < length {
+        let width = sequence_width(value, index)
+        if width == 0 {
+            return -1
+        }
+        index = index + width
+        count = count + 1
+    }
+    return count
+}
+
+fn is_ascii(value: str) -> bool {
+    let index = 0
+    while index < bytes_len(value) {
+        if byte_at(value, index) > 127 {
+            return false
+        }
+        index = index + 1
+    }
+    return true
+}

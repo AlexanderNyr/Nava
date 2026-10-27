@@ -5,8 +5,8 @@ from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
-    Float, For, Function, If, Index, IndexAssign, Let, Number, Param, Program,
-    Range, Return, String, Token, Unary, Variable, While,
+    Float, For, Function, If, Import, Index, IndexAssign, Let, Number, Param,
+    Program, Range, Return, String, Token, Unary, Variable, While,
 )
 
 PRECEDENCE = {
@@ -106,11 +106,37 @@ class Parser:
 
     def parse(self) -> Program:
         functions: list[Function] = []
+        imports: list[Import] = []
         self.separators()
         while not self.at("EOF"):
-            functions.append(self.function())
+            if self.at("IMPORT"):
+                if functions:
+                    raise make(
+                        "E0354",
+                        "an import must come before every function definition",
+                        self.current.loc,
+                        self.current.loc.advance("import"),
+                        "move the import statements to the top of the file",
+                    )
+                imports.append(self.import_statement())
+            else:
+                functions.append(self.function())
             self.separators()
-        return Program(functions)
+        return Program(functions, imports=imports)
+
+    def import_statement(self) -> Import:
+        start = self.expect("IMPORT")
+        name = self.expect("IDENT", "a module name")
+        if self.current.kind == "::":
+            raise make(
+                "E0201",
+                "expected a module name, got '::'",
+                self.current.loc,
+                self.current.loc.advance("::"),
+                "an import names one module: write `import math`, then call math::abs(x)",
+            )
+        self.end_statement()
+        return Import(str(name.value), start.loc, name.loc)
 
     def function(self) -> Function:
         start = self.expect("FN", "'fn'")
@@ -287,6 +313,23 @@ class Parser:
             return ArrayLiteral(token.loc, items)
         if self.take("IDENT"):
             name = str(token.value)
+            if self.take("::"):
+                # `module::function(...)`: a qualified call into another module.
+                target = self.expect("IDENT", "a function name after '::'")
+                if not self.take("("):
+                    raise make(
+                        "E0201",
+                        "expected '(' after a qualified function name",
+                        self.current.loc,
+                        hint="a module exposes functions only: write math::abs(x)",
+                    )
+                args = []
+                while not self.at(")"):
+                    args.append(self.expression())
+                    if not self.take(","):
+                        break
+                self.expect(")")
+                return Call(token.loc, str(target.value), args, module=name)
             if self.take("["):
                 index = self.expression()
                 self.expect("]", "']'")
@@ -311,5 +354,6 @@ class Parser:
         raise make("E0205", "expected an expression", token.loc)
 
 
-def parse(source: str) -> Program:
-    return Parser(lex(source)).parse()
+def parse(source: str, path: str | None = None) -> Program:
+    """Parse one file. `path` is recorded in every location for multi-file use."""
+    return Parser(lex(source, path)).parse()

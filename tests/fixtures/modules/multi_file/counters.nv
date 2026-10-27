@@ -1,0 +1,17 @@
+fn total(values: [i64]) -> i64 {
+    let sum = 0
+    for value in values {
+        sum = sum + value
+    }
+    return sum
+}
+
+fn largest(values: [i64]) -> i64 {
+    let best = values[0]
+    for value in values {
+        if value > best {
+            best = value
+        }
+    }
+    return best
+}

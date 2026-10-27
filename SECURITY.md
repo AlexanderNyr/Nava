@@ -131,6 +131,44 @@ the language's error model; it is not part of 0.1.
   A `for` bound is evaluated once, before the first iteration, so a bound
   expression cannot be re-run by the loop.
 
+## Modules, text and file capabilities (phase N6)
+
+- **Imports cannot reach outside the project.** A module name is an ASCII
+  identifier, so it cannot contain `/`, `.` or `..`; the resolved file is passed
+  through `realpath` and must be inside the directory the name was resolved in
+  (the project root, or the packaged standard library), which is why a symbolic
+  link is rejected (`E0356`). A local file may not shadow a standard module
+  (`E0360`), so `import math` cannot be redirected by dropping a `math.nv` next
+  to the program.
+- **Imports are resolved once, before code generation.** There is no search
+  path list, no environment variable and no configuration file; the graph must be
+  acyclic (`E0353`) and every module is compiled into one translation unit with
+  `static` functions, so no dynamic loading and no name collisions at link time.
+- **File access is denied by default and granted at build time.** Without
+  `--allow-read`/`--allow-write` the generated program contains no permitted
+  directory and `read_file`/`write_file` stop with a documented error. The grant
+  list is a compile-time constant in the generated C: the language has no way to
+  add, widen or rewrite it, and the runtime never reads an environment variable
+  for it.
+- **The check is on the resolved path.** Both `read_file` and `write_file`
+  resolve the argument (`realpath`; for a write, the real path of the parent
+  directory plus the last component) and accept it only if it is inside a
+  granted directory on a path-segment boundary. `../`, an absolute path, a
+  symbolic link and a symbolic-linked directory are therefore all covered by the
+  same check; `tests/test_files.py` demonstrates each, and also that the boundary
+  still holds under `--isolation required`.
+- **Reads are bounded.** One file at most 1048576 bytes, at most 4194304 bytes
+  in total and at most 64 calls per run; the text returned by `read_file` lives
+  until the process exits, so the total — not the call count — is what bounds
+  memory. A file containing a NUL byte is refused, because a `str` could not
+  represent it without truncation.
+- **Bytes are not silently repaired.** `str` is a byte sequence: `read_file`
+  returns whatever bytes the file has (except NUL), `bytes_len` and `byte_at`
+  work on them, and `chars_len` is the single place where UTF-8 validity is
+  enforced — it stops the program instead of replacing invalid bytes. Source
+  literals are validated earlier (`E0111`, `E0104`, `E0106`, `E0105`), so a
+  program's own strings are always valid UTF-8.
+
 ## Platform support
 
 | Platform | `namespaces` | Notes |
@@ -166,6 +204,13 @@ backends:
 | `to_i64` of `nan`, `2^63` and `1e308` under `-fsanitize=undefined` | documented runtime error; no `float-cast-overflow` report |
 | `read_f64` with `inf`, `nan`, `0x1.8p1`, `1,5`, `1e`, `1e999` | rejected with a documented error, not accepted by `strtod` |
 | a program run with `LC_ALL=de_DE.UTF-8` (comma decimal separator) | input `2.5` and output `3.75` still use `.` |
+| `read_file` without a grant, and `write_file` with a read-only grant | documented denial, exit 1, nothing printed by the program |
+| `read_file("../secret")`, an absolute path outside the grant, a symlink to a file outside, a write through a symlink to a directory outside | documented denial in every case (`tests/test_files.py`) |
+| the same program under `--isolation required --workdir DIR --allow-read .` and `--allow-read inside` | allowed for the granted subtree, denied for the visible file beside it |
+| a 1 MiB + 1 file, 5 × 1 MB reads, 65 read calls | the documented per-file, total and call-count errors |
+| a file containing a NUL byte | refused, not truncated |
+| `import` of a missing module, a cycle, a duplicate, a shadowed standard module, a symlink leaving the root, `main` in a module | one documented code each, at the file that caused it (`tests/test_modules.py`) |
+| a standard module whose `module_version` is not the supported one | `E0361`, refused before use |
 
 Disabling any one mechanism makes its test fail; this was verified by removing
 `--net`, the timeout kill, the fail-closed branch, the read-only minimal root and

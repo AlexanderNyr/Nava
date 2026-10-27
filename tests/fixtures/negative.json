@@ -738,6 +738,15 @@
       "end_column": 16,
       "message": "an array element type must be i64, bool, or str, got 'f64'",
       "hint": null
+    },
+    {
+      "file": "mod_import_after_function.nv",
+      "code": "E0354",
+      "line": 5,
+      "column": 1,
+      "end_column": 7,
+      "message": "an import must come before every function definition",
+      "hint": "move the import statements to the top of the file"
     }
   ]
 }

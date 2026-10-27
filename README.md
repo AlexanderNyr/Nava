@@ -43,8 +43,10 @@ explicit function types, inferred local types and checked arithmetic.
 - Stable diagnostic codes with source ranges and hints, plus `--format json`
   for machine-readable diagnostics (`nava_lang/diagnostics.py`).
 - An executable specification: every example in [`LANGUAGE.md`](LANGUAGE.md)
-  type-checks, 66 invalid fixtures assert the exact code and location, and 16
-  positive fixtures assert output and exit status (`tests/test_spec.py`).
+  type-checks, 83 invalid fixtures assert the exact code and location, 19
+  positive fixtures assert output and exit status, and 8 multi-file module
+  fixtures cover resolution, cycles and version checks (`tests/test_spec.py`,
+  `tests/fixtures/modules.json`).
 - Array gates (`tests/test_arrays.py`): ownership rules, checked allocation and
   indexing, release accounting, and the generated C compiled under the address
   and undefined-behaviour sanitizers.
@@ -53,6 +55,23 @@ explicit function types, inferred local types and checked arithmetic.
   reference, jumps release the arrays of their iteration, `f64` printing is
   checked against Python's `repr` over a table that includes subnormals and the
   notation boundaries, and message parsing is shown to be locale-independent.
+- Modules: one file per module, `import name` and `name::function` calls,
+  with deterministic resolution (the entry file's directory, then the packaged
+  standard library), no shadowing of a standard module, acyclic imports, a
+  project boundary enforced with `realpath`, and one C translation unit per
+  program (`nava_lang/modules.py`).
+- A versioned standard library written in Nava: `math` (`abs`, `min`, `max`,
+  `sign`, `gcd`, `sum`), `sort` (`is_sorted`, `insertion_sort`,
+  `binary_search`) and `text` (`is_ascii`, `is_valid_utf8`, `code_points`,
+  `sequence_width`, `is_continuation`), all installable with the package.
+- Explicit byte/code-point boundaries: `str` is a NUL-terminated byte sequence,
+  `bytes_len` and `byte_at` work on bytes, `chars_len` counts code points and
+  rejects invalid UTF-8, and `read_file` can return bytes that are not UTF-8
+  without silently replacing them.
+- Capability-limited file access: `read_file`/`write_file` exist only if the
+  program was built with `--allow-read DIR`/`--allow-write DIR`, grants are
+  `realpath`-checked against `..` and symbolic links, and reads are bounded per
+  file, per run and per call count.
 - Isolated compilation and execution (`nava_lang/sandbox.py`): Linux user,
   mount, PID and network namespaces with a read-only minimal root and one
   writable directory, or a labelled rlimits-only fallback. `--isolation
@@ -60,10 +79,12 @@ explicit function types, inferred local types and checked arithmetic.
 
 ### Not implemented
 
-Resizable collections, arrays of arrays, array copies and array-returning
-functions, `for`, floating-point numbers, GPU computation, file operations,
-third-party libraries and a package system are not available in 0.1. Nava is
-not yet a general-purpose language in the production sense.
+Resizable collections, arrays of arrays, `f64` arrays, array copies and
+array-returning functions, string indexing or concatenation, mathematical
+functions such as `sqrt`, floating-point `%`, labelled jumps, networking,
+threads, GPU computation, third-party libraries and a package system are not
+available in 0.1. File access exists but is off unless it is granted at build
+time. Nava is not yet a general-purpose language in the production sense.
 See [`LANGUAGE.md`](LANGUAGE.md) for the implemented semantics and limits.
 
 ---
@@ -134,6 +155,13 @@ printf '48 18\n' | ./gcd       # 6
 
 # Inspect the generated C.
 python3 nava emit-c examples/gcd.nv -o gcd.c
+
+# A program split across files, using the standard library.
+python3 nava check examples/modules/main.nv
+python3 nava run   examples/modules/main.nv
+
+# File access is denied until it is granted; the grant is compiled in.
+python3 nava run prog.nv --workdir scratch --allow-read . --allow-write .
 
 # Run the compiler, runtime, evaluation, benchmark, specification and registry tests.
 python3 -m unittest discover -s tests -v
@@ -231,6 +259,11 @@ is not, on which platforms, and how each claim is tested.
 | `tests/test_arrays.py` | Array gate: ownership rules, checked access, release accounting, sanitizers |
 | `tests/test_control.py` | Control-flow gate: loops against Python references, jumps, release on break/continue |
 | `tests/test_float.py` | Numerical gate: IEEE-754 behaviour, printing, conversions, locale independence |
+| `tests/test_modules.py` | Module gate: resolution, cycles, boundary escapes, multi-file builds, module fixtures |
+| `tests/test_stdlib.py` | Standard-library gate: every export against Python, UTF-8 validity, versions, docs |
+| `tests/test_files.py` | Capability gate: deny by default, symbolic links, limits, isolation interaction |
+| `nava_lang/stdlib/` | The versioned standard library in Nava source (`math`, `sort`, `text`) |
+| `examples/modules/` | Multi-file example: a local module plus three standard modules |
 | `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |

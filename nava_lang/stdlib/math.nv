@@ -1,0 +1,62 @@
+# Nava standard library: integer helpers.  Version 1.
+#
+# Every standard module declares `module_version`; the compiler refuses a
+# module whose version is not the one it was built against.
+
+fn module_version() -> i64 {
+    return 1
+}
+
+# The absolute value.  `abs(-9223372036854775808)` is a runtime error: the
+# result does not fit in i64, and Nava never wraps silently.
+fn abs(x: i64) -> i64 {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+fn min(a: i64, b: i64) -> i64 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn max(a: i64, b: i64) -> i64 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn sign(x: i64) -> i64 {
+    if x < 0 {
+        return -1
+    }
+    if x > 0 {
+        return 1
+    }
+    return 0
+}
+
+# Euclid's algorithm on the absolute values.  `gcd(0, 0)` is 0.
+fn gcd(a: i64, b: i64) -> i64 {
+    let u = abs(a)
+    let v = abs(b)
+    while v != 0 {
+        let remainder = u % v
+        u = v
+        v = remainder
+    }
+    return u
+}
+
+# The sum of a possibly empty array; an empty array sums to 0.
+fn sum(values: [i64]) -> i64 {
+    let total = 0
+    for value in values {
+        total = total + value
+    }
+    return total
+}

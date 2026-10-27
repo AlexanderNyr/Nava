@@ -1,0 +1,53 @@
+# Nava standard library: ordering over [i64].  Version 1.
+
+fn module_version() -> i64 {
+    return 1
+}
+
+# True when every element is at least the one before it. An empty array and a
+# one-element array are sorted.
+fn is_sorted(values: [i64]) -> bool {
+    let index = 1
+    while index < len(values) {
+        if values[index] < values[index - 1] {
+            return false
+        }
+        index = index + 1
+    }
+    return true
+}
+
+# Insertion sort, in place, through a mutable borrow.  Stable and O(n^2); it
+# exists to give the language one sorting routine, not the fastest one.
+fn insertion_sort(values: mut [i64]) {
+    let index = 1
+    while index < len(values) {
+        let key = values[index]
+        let position = index - 1
+        while position >= 0 && values[position] > key {
+            values[position + 1] = values[position]
+            position = position - 1
+        }
+        values[position + 1] = key
+        index = index + 1
+    }
+}
+
+# The index of `wanted` in an array that `is_sorted` accepts, or -1.  The
+# array is not checked: searching an unsorted array is a caller error.
+fn binary_search(values: [i64], wanted: i64) -> i64 {
+    let low = 0
+    let high = len(values) - 1
+    while low <= high {
+        let middle = low + (high - low) / 2
+        if values[middle] == wanted {
+            return middle
+        }
+        if values[middle] < wanted {
+            low = middle + 1
+        } else {
+            high = middle - 1
+        }
+    }
+    return -1
+}

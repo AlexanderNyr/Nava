@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2, N4 and N5 DELIVERED; N3 infrastructure delivered, empirical result open; N6–N9 planned
+## Status: N0–N2, N4, N5 and N6 DELIVERED; N3 infrastructure delivered, empirical result open; N7–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -14,13 +14,15 @@ This document answers one question:
 > source files?
 
 Phases N0 (measurement rig and test integrity), N1 (language specification and
-diagnostics), N2 (isolated build and execution), N4 (arrays and ownership) and
-N5 (control flow and numerical coverage) are delivered, and N3's harness is
+diagnostics), N2 (isolated build and execution), N4 (arrays and ownership),
+N5 (control flow and numerical coverage) and N6 (modules, standard library and
+capability-limited file access) are delivered, and N3's harness is
 delivered — **without** a model result,
 which cannot be produced without a model to run: see the delivery records in
 the relevant subsections for the evidence, the commands that produce it and the
 items that are deliberately left open. N3's infrastructure exists; its
-empirical results do not. N6 is the next phase that does not depend on a model.
+empirical results do not. N7 is the next phase; its measurement half also
+depends on a model, so its non-measurement half is what can be built next.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -37,9 +39,9 @@ identify the baseline, not a claim about a published release.
 
 | Area | Present in the tree | Limit or missing evidence |
 |---|---|---|
-| Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build |
-| Language | `i64`, `bool`, `str`, `f64` (IEEE-754 with explicit conversions), fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, `for` over ranges and arrays, `break`, `continue`, checked integer arithmetic and integer/float I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits, documented float formatting and executable examples | No resizable collections, arrays of arrays, `f64` arrays, array copies or array results, labelled jumps, mathematical functions, imports, file API or package system |
-| Correctness | `python3 -m unittest discover -s tests -v`: 168 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 82 negative and 19 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
+| Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; module loader in `nava_lang/modules.py`; `check`, `emit-c`, `build` and `run` commands with `--root`, `--allow-read`, `--allow-write` and `--workdir`; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build; the C runtime needs POSIX `realpath` (`_XOPEN_SOURCE 700`) |
+| Language | `i64`, `bool`, `str` (a byte sequence), `f64` (IEEE-754 with explicit conversions), fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, `for` over ranges and arrays, `break`, `continue`, checked integer arithmetic, integer/float I/O, modules (`import name`, `name::function`) and a capability-limited file API; `LANGUAGE.md` is specification version 1 with EBNF, documented limits, float formatting, UTF-8 boundaries, module resolution and executable examples | No resizable collections, arrays of arrays, `f64` arrays, array copies or array results, labelled jumps, mathematical functions such as `sqrt`, string indexing or concatenation, module visibility keywords, networking, threads, a package manager or FFI |
+| Correctness | `python3 -m unittest discover -s tests -v`: 219 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 83 negative, 19 positive and 8 multi-file module fixtures assert exact codes, locations, messages, hints and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
 | Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; eleven public tasks with 76 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
@@ -108,7 +110,7 @@ complete by skipping its gate.
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Harness delivered, result open** |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | **Delivered** |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | **Delivered** |
-| N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Planned |
+| N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Delivered |
 | N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | Planned |
 | N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | Planned |
 | N9 | Packaging, CI and release readiness | N1, N2, N3 | Clean installation and non-skipping CI pass on each declared platform | Planned |
@@ -597,16 +599,29 @@ without making unrestricted host access the default.
 
 #### Tasks
 
-- [ ] Specify module names, import resolution, duplicate definitions, cycles
-      and diagnostics; build and check multiple source files consistently.
-- [ ] Add a minimal, versioned standard library for the types implemented by
+- [x] Specify module names, import resolution, duplicate definitions, cycles
+      and diagnostics; build and check multiple source files consistently. →
+      `LANGUAGE.md` "Modules and the standard library"; `nava_lang/modules.py`
+      merges a project into one `Program` and one C translation unit; `E0352`–
+      `E0361`; `tests/test_modules.py` and `tests/fixtures/modules.json`.
+- [x] Add a minimal, versioned standard library for the types implemented by
       N4 and N5. Specify UTF-8 and byte/character boundaries instead of
-      treating them as interchangeable.
-- [ ] If file I/O is introduced, make access explicit and capability-limited;
+      treating them as interchangeable. → `nava_lang/stdlib/{math,sort,text}.nv`
+      as Nava source, installed as package data, each declaring
+      `module_version` (checked, `E0361`); `LANGUAGE.md` "Text, bytes and
+      UTF-8"; `tests/test_stdlib.py` compares every export with Python.
+- [x] If file I/O is introduced, make access explicit and capability-limited;
       it must respect N2 isolation. Keep networking and external package
-      resolution out of the default core.
-- [ ] Document deterministic dependency resolution and reject path traversal
-      or imports outside the configured project boundary.
+      resolution out of the default core. → `read_file`/`write_file` exist only
+      with `--allow-read`/`--allow-write`; the grants are compiled into the
+      program, checked on the `realpath`-resolved path, bounded per file, per
+      run and per call; `tests/test_files.py` demonstrates the boundary under
+      `--isolation required`.
+- [x] Document deterministic dependency resolution and reject path traversal
+      or imports outside the configured project boundary. → two search
+      locations and no search-path list; a module name is an identifier, so it
+      cannot contain `/` or `..`; the resolved file must be inside the root
+      (`E0356`), and a local module may not shadow a standard one (`E0360`).
 
 #### Test gate
 
@@ -620,6 +635,50 @@ without making unrestricted host access the default.
 
 A module contract, a small standard library, multi-file examples and
 resolution/capability tests. A package manager is not implied by this phase.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A multi-file program builds from a clean directory | `nava check`/`build`/`run` on `tests/fixtures/modules/multi_file` | `OK`, built binary prints `22 / 22 / 9`, one C translation unit with four `static` functions |
+| Documented multi-file example is real | `nava run examples/modules/main.nv` | 12 lines of documented output, exact match in `test_the_multi_file_example_runs` |
+| Missing import | `test_missing_module_lists_both_search_locations` | `E0352`, hint names both search locations |
+| Duplicate import | `tests/fixtures/modules/duplicate_import` | `E0355` at the second `import` |
+| Cyclic imports | `tests/fixtures/modules/cycle` | `E0353` naming `alpha -> beta -> alpha`, located in `beta.nv` |
+| Escaping import | `test_an_import_cannot_escape_the_project_boundary` | `E0356` for a symbolic link that leaves the root |
+| Shadowed standard module | `tests/fixtures/modules/shadow` | `E0360`, hint without a machine-specific path |
+| `main` in a module | `tests/fixtures/modules/main_in_module` | `E0357` located in the module |
+| Unqualified / unimported call | `unqualified`, `not_imported` fixtures | `E0358` with the qualified fix, `E0359` with the import to add |
+| Stale standard library | `test_the_standard_library_version_is_checked` | `E0361` for `module_version` = 2 |
+| Unused import | `unused_import` fixture | `W0002`, program still compiles |
+| UTF-8 boundaries | `test_bytes_and_code_points_match_python`, `test_utf8_validity_matches_pythons_strict_decoder` | 22 valid strings and 20 byte sequences agree with Python's encoder and its strict decoder |
+| Invalid input is not repaired | `test_chars_len_stops_on_invalid_utf8`, `test_a_nul_byte_cannot_become_a_str` | documented runtime error; the byte count printed before it is real |
+| Standard library agrees with an independent reference | `tests/test_stdlib.py` | `math` (17 inputs × 5 functions), `sort` (10 arrays incl. duplicates and empty), `text` — all match Python |
+| File access is denied by default | `test_a_program_without_a_grant_is_denied` | documented denial, exit 1, no output |
+| Allowed and denied path under isolation | `test_the_isolated_runner_allows_a_granted_file_and_denies_another` | `--isolation required`: granted subtree read, visible file beside it denied |
+| Traversal and symlinks | `test_a_path_outside_the_grant_is_denied`, `test_a_symlink_outside_the_grant_is_denied`, `test_write_through_a_symlinked_directory_is_denied` | all denied on the resolved path |
+| Read limits | `test_the_per_file_limit_is_enforced`, `test_the_total_read_limit_is_enforced`, `test_the_read_call_limit_is_enforced` | 1 MiB, 4 MiB total, 64 calls |
+| Limit values cannot drift | `tests/test_spec.py` limit table and `_fill_limits` in `cgen.py` | the runtime is generated from `nava_lang/limits.py` |
+| Clean installation carries the library | `pip install .` in a fresh venv, then `nava run examples/modules/main.nv` | `stdlib/*.nv` installed as package data; output unchanged |
+| Registry gate extended | `python3 tests/registry.py` | `OK: 219 registered tests, 11 tasks with 76 cases, 112 spec fixtures, 92 diagnostic codes` |
+
+Five negative controls were run by hand, each making its gate fail: skipping the
+project-boundary check (the symlink test fails); allowing a local module to
+shadow a standard one (the shadow test fails); making the capability check
+always succeed (the two denial tests fail); skipping `realpath` before the check
+(the symlink denial test fails); and disabling cycle detection (the cycle test
+fails). Writing the harness itself produced one false "missed": a stale `.pyc`
+from the previous mutation was reused when the file size happened to match, so
+the harness now deletes `__pycache__` before each control — the mutation was
+real and the gate does catch it.
+
+Deliberately not done: no package manager, no network or thread APIs, no
+`[f64]` arrays, no string concatenation or slicing (so `text` functions return
+numbers and booleans, not new strings), no module visibility keyword, no
+re-exports, and no configurable search path. `eval/evaluate.py` still compiles a
+single candidate file, so no public evaluation task is multi-file; giving the
+evaluator a project layout is a measurement-rig change, not a language one, and
+is left to the phase that needs it.
 
 ---
 

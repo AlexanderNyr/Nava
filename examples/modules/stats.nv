@@ -1,0 +1,11 @@
+# A local module: one file next to the entry file, imported by name.
+import math
+
+# The arithmetic mean, or 0.0 for an empty array.  The conversion from i64 to
+# f64 is explicit: Nava has no implicit numeric conversion.
+fn mean(values: [i64]) -> f64 {
+    if len(values) == 0 {
+        return 0.0
+    }
+    return to_f64(math::sum(values)) / to_f64(len(values))
+}

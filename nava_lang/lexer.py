@@ -12,15 +12,24 @@ KEYWORDS = {
     "fn": "FN", "let": "LET", "if": "IF", "else": "ELSE",
     "while": "WHILE", "return": "RETURN", "true": "TRUE", "false": "FALSE",
     "mut": "MUT", "for": "FOR", "in": "IN", "break": "BREAK",
-    "continue": "CONTINUE",
+    "continue": "CONTINUE", "import": "IMPORT",
 }
-TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", ".."}
+TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", "..", "::"}
 ONE_CHAR = set("(){}[],:+-*/%=!<>;")
 #: Decimal floating-point literal: the integer part may not use underscores, so
 #: `1_0.5` is a malformed token rather than a silently different number.
 FLOAT_RE = re.compile(r"[0-9][0-9]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 
-def lex(source: str) -> list[Token]:
+def lex(source: str, path: str | None = None) -> list[Token]:
+    """Tokens of `source`. `path` is stamped on every location for multi-file use."""
+    tokens = _lex(source)
+    if path is None:
+        return tokens
+    return [Token(token.kind, token.value, Location(token.loc.line, token.loc.column, path))
+            for token in tokens]
+
+
+def _lex(source: str) -> list[Token]:
     source = source.replace("\r\n", "\n").replace("\r", "\n")
     tokens: list[Token] = []
     i, line, col = 0, 1, 1

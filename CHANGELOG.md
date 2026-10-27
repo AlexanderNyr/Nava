@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+Phase N6 of `PLAN.md` (modules and standard-library foundations).
+
+- Modules: `import name` loads `name.nv`, and its functions are called as
+  `name::function`. Resolution has exactly two locations — the project root
+  (the entry file's directory, or `--root DIR`) and the packaged standard
+  library — with no search-path list. A local module may not shadow a standard
+  one (`E0360`), a module may not define `main` (`E0357`), an import may not be
+  repeated (`E0355`), the graph must be acyclic (`E0353`) and the resolved path
+  must stay inside the root after `realpath`, so a symbolic link cannot escape
+  (`E0356`). Calling a function of another module without the prefix is `E0358`,
+  prefixing a module that was not imported is `E0359`, and an unused import is
+  `W0002`. Every module is merged into one `Program` and one C translation unit.
+- Versioned standard library in Nava source, installed as package data:
+  `math` (`abs`, `min`, `max`, `sign`, `gcd`, `sum`), `sort` (`is_sorted`,
+  `insertion_sort`, `binary_search`) and `text` (`is_ascii`, `is_valid_utf8`,
+  `code_points`, `sequence_width`, `is_continuation`). Each declares
+  `module_version`, and the compiler refuses a copy it was not built against
+  (`E0361`).
+- Text: a `str` is a NUL-terminated byte sequence. `bytes_len` and `byte_at`
+  count and read bytes, `chars_len` counts Unicode code points and stops on
+  bytes that are not valid UTF-8, and `read_file` returns bytes unchanged
+  instead of replacing them. Source literals are still validated as UTF-8
+  (`E0111`, `E0104`, `E0106`, `E0105`).
+- Capability-limited file API: `read_file(path)` and `write_file(path, text)`
+  are compiled with the grants given at build time
+  (`--allow-read DIR`, `--allow-write DIR`) and have none by default. Both
+  resolve the argument with `realpath` and accept it only inside a granted
+  subtree, so `..`, absolute paths and symbolic links are all covered. Reads
+  are bounded at 1048576 bytes per file, 4194304 bytes per run and 64 calls;
+  a file containing a NUL byte is refused. `run --workdir DIR` makes the
+  sandbox's single writable directory explicit, and the boundary is tested
+  under `--isolation required`.
+- Command line: `--root`, `--allow-read`, `--allow-write` on `check`,
+  `emit-c`, `build` and `run`; `--workdir` on `run`; `E0506`/`E0507` for a
+  capability or working directory that is missing or not a directory.
+- Diagnostics: `E0352`–`E0361`, `E0506`, `E0507` and `W0002` (13 new codes,
+  92 in total).
+- Tests: `tests/test_modules.py` (22), `tests/test_stdlib.py` (11),
+  `tests/test_files.py` (18) and `tests/fixtures/modules.json` (8 multi-file
+  cases: 6 error, 1 warning, 1 run). Suite 168 → 219 tests; fixtures 103 → 112.
+- `LANGUAGE.md`: "Modules and the standard library", "Text, bytes and UTF-8",
+  "Files and capabilities", the grammar (`import`, `::`), the diagnostic tables
+  and the three new limits.
+
+
 Phase N5 of `PLAN.md` (control flow and numerical coverage).
 
 - `for i in a..b` iterates a half-open `i64` range; `for x in values` iterates

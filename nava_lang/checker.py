@@ -4,11 +4,16 @@ from .diagnostics import make, severity_of
 from .limits import MAX_NESTING
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Diagnostic,
-    Expr, ExprStmt, Float, For, Function, If, Index, IndexAssign, Let, Number,
-    Program, Range, Return, String, Symbol, Unary, Variable, While,
+    Expr, ExprStmt, Float, For, Function, If, Import, Index, IndexAssign, Let,
+    Number, Program, Range, Return, String, Symbol, Unary, Variable, While,
 )
 
-BUILTINS = {"print", "read_i64", "read_f64", "len", "array_zeros", "to_f64", "to_i64"}
+#: Name of the entry module: its functions need no qualification.
+ENTRY_MODULE = ""
+BUILTINS = {
+    "print", "read_i64", "read_f64", "len", "array_zeros", "to_f64", "to_i64",
+    "bytes_len", "chars_len", "byte_at", "read_file", "write_file",
+}
 #: Types a value can have (everything except `void`).
 VALUE_TYPES = {"i64", "bool", "str", "f64"}
 #: Types `print` accepts: every value type.
@@ -37,10 +42,17 @@ def owns_new_array(value: Expr) -> bool:
 class Checker:
     def __init__(self, program: Program):
         self.program = program
-        self.functions: dict[str, Function] = {}
+        #: Name resolution is per module: `(module, name)` -> Function.
+        self.by_module: dict[str, dict[str, Function]] = {}
+        #: Imports of each module, in source order.
+        self.imports: dict[str, list[Import]] = dict(program.imports_by_module)
+        if not self.imports and program.imports:
+            self.imports = {ENTRY_MODULE: list(program.imports)}
+        self.used_modules: set[tuple[str, str]] = set()
         self.scopes: list[dict[str, Symbol]] = []
         self.next_symbol = 0
         self.current_function: Function | None = None
+        self.current_module = ENTRY_MODULE
         self.warnings: list[Diagnostic] = []
         self.depth = 0
         #: Nesting depth of `while`/`for` bodies; 0 means break/continue is an error.
@@ -48,16 +60,17 @@ class Checker:
 
     def check(self) -> Program:
         for index, function in enumerate(self.program.functions):
+            table = self.by_module.setdefault(function.module, {})
             if function.name in BUILTINS:
                 raise make("E0301", f"{function.name!r} is a reserved builtin", function.loc,
                            function.loc.advance(function.name),
                            f"{function.name}() is built in and cannot be redefined")
-            if function.name in self.functions:
+            if function.name in table:
                 raise make("E0302", f"duplicate function {function.name!r}", function.loc,
                            function.loc.advance(function.name))
             function.cname = f"nv_fn_{index}"
-            self.functions[function.name] = function
-        main = self.functions.get("main")
+            table[function.name] = function
+        main = self.by_module.get(ENTRY_MODULE, {}).get("main")
         if main is None:
             raise make("E0303", "program must define fn main()")
         if main.params or main.returns not in ("void", "i64"):
@@ -66,6 +79,7 @@ class Checker:
 
         for function in self.program.functions:
             self.current_function = function
+            self.current_module = function.module
             self.scopes = [{}]
             if is_array(function.returns):
                 raise make(
@@ -101,8 +115,54 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "the analysis is conservative: even `while true` does not count as a return",
                 )
+        self.unused_imports()
         self.program.warnings = self.warnings
         return self.program
+
+    def unused_imports(self) -> None:
+        """W0002: an import that no qualified call in its module uses."""
+        for module, imports in self.imports.items():
+            for item in imports:
+                if (module, item.name) in self.used_modules:
+                    continue
+                self.warn(item.name_loc, "W0002",
+                          f"unused import {item.name!r}: no function of this module is called")
+
+    def resolve(self, expr: Call) -> Function:
+        """Resolve a call to a function of the current or an imported module."""
+        if expr.module is None:
+            local = self.by_module.get(self.current_module, {})
+            if expr.name in local:
+                return local[expr.name]
+            # A function that exists in another module is a qualification
+            # error, not an unknown name: say which module to name.
+            elsewhere = sorted(module for module, table in self.by_module.items()
+                               if expr.name in table)
+            if elsewhere:
+                where = elsewhere[0]
+                hint = f"call it as {where}::{expr.name}"
+                if not any(item.name == where for item in self.imports.get(self.current_module, [])):
+                    hint += f" after adding `import {where}`"
+                raise make("E0358", f"function {expr.name!r} is defined in module {where!r}",
+                           expr.loc, expr.loc.advance(expr.name), hint)
+            raise make("E0325", f"unknown function {expr.name!r}", expr.loc,
+                       expr.loc.advance(expr.name),
+                       "define it with `fn`; functions may be called before their definition")
+        table = self.by_module.get(expr.module)
+        imported = {item.name: item for item in self.imports.get(self.current_module, [])}
+        if expr.module not in imported or table is None:
+            raise make(
+                "E0359",
+                f"module {expr.module!r} is not imported",
+                expr.loc, expr.loc.advance(f"{expr.module}::{expr.name}"),
+                f"add `import {expr.module}` at the top of the file",
+            )
+        if expr.name not in table:
+            raise make("E0325", f"module {expr.module!r} has no function {expr.name!r}",
+                       expr.loc, expr.loc.advance(f"{expr.module}::{expr.name}"),
+                       "modules expose functions only; check the name in LANGUAGE.md")
+        self.used_modules.add((self.current_module, expr.module))
+        return table[expr.name]
 
     def declare(self, name, typ, loc) -> Symbol:
         if name in BUILTINS:
@@ -148,7 +208,7 @@ class Checker:
     def leave(self) -> None:
         self.depth -= 1
 
-    def warn(self, loc, code: str, message: str) -> None:
+    def warn(self, loc, code: str, message: str, path=None) -> None:
         self.warnings.append(Diagnostic(code=code, severity=severity_of(code),
                                         message=message, loc=loc))
 
@@ -486,21 +546,21 @@ class Checker:
         return result
 
     def call(self, expr: Call) -> str:
-        if expr.name == "print":
+        if expr.module is None and expr.name == "print":
             if len(expr.args) != 1:
                 raise make("E0322", "print expects exactly one argument", expr.loc)
             if self.expression(expr.args[0]) not in PRINTABLE_TYPES:
                 raise make("E0323", "print expects an i64, bool, f64, or str value", expr.loc)
             return "void"
-        if expr.name == "read_i64":
+        if expr.module is None and expr.name == "read_i64":
             if expr.args:
                 raise make("E0324", "read_i64 expects no arguments", expr.loc)
             return "i64"
-        if expr.name == "read_f64":
+        if expr.module is None and expr.name == "read_f64":
             if expr.args:
                 raise make("E0348", "read_f64 expects no arguments", expr.loc)
             return "f64"
-        if expr.name in ("to_f64", "to_i64"):
+        if expr.module is None and expr.name in ("to_f64", "to_i64"):
             source_type, target_type = ("i64", "f64") if expr.name == "to_f64" else ("f64", "i64")
             if len(expr.args) != 1:
                 raise make("E0347", f"{expr.name} expects exactly one argument", expr.loc)
@@ -510,14 +570,14 @@ class Checker:
                            expr.args[0].loc,
                            hint=f"{expr.name} converts {source_type} to {target_type}")
             return target_type
-        if expr.name == "len":
+        if expr.module is None and expr.name == "len":
             if len(expr.args) != 1:
                 raise make("E0337", "len expects exactly one argument", expr.loc)
             actual = self.expression(expr.args[0])
             if not is_array(actual):
                 raise make("E0338", f"len expects an array, got {actual}", expr.loc)
             return "i64"
-        if expr.name == "array_zeros":
+        if expr.module is None and expr.name == "array_zeros":
             if len(expr.args) != 1:
                 raise make("E0339", "array_zeros expects exactly one argument", expr.loc)
             actual = self.expression(expr.args[0])
@@ -525,11 +585,49 @@ class Checker:
                 raise make("E0340", f"array_zeros expects an i64 length, got {actual}",
                            expr.args[0].loc)
             return "[i64]"
-        function = self.functions.get(expr.name)
-        if function is None:
-            raise make("E0325", f"unknown function {expr.name!r}", expr.loc,
-                       expr.loc.advance(expr.name),
-                       "define it with `fn`; functions may be called before their definition")
+        if expr.module is None and expr.name in ("bytes_len", "chars_len"):
+            if len(expr.args) != 1:
+                raise make("E0326", f"{expr.name} expects exactly one argument", expr.loc)
+            actual = self.expression(expr.args[0])
+            if actual != "str":
+                raise make("E0327", f"argument 1 of {expr.name} expects str, got {actual}",
+                           expr.args[0].loc)
+            return "i64"
+        if expr.module is None and expr.name == "byte_at":
+            if len(expr.args) != 2:
+                raise make("E0326", f"byte_at expects 2 arguments, got {len(expr.args)}",
+                           expr.loc)
+            actual = self.expression(expr.args[0])
+            if actual != "str":
+                raise make("E0327", f"argument 1 of byte_at expects str, got {actual}",
+                           expr.args[0].loc)
+            index_type = self.expression(expr.args[1])
+            if index_type != "i64":
+                raise make("E0327", f"argument 2 of byte_at expects i64, got {index_type}",
+                           expr.args[1].loc)
+            return "i64"
+        if expr.module is None and expr.name == "read_file":
+            if len(expr.args) != 1:
+                raise make("E0326", "read_file expects exactly one argument", expr.loc)
+            actual = self.expression(expr.args[0])
+            if actual != "str":
+                raise make("E0327", f"argument 1 of read_file expects str, got {actual}",
+                           expr.args[0].loc)
+            return "str"
+        if expr.module is None and expr.name == "write_file":
+            if len(expr.args) != 2:
+                raise make("E0326", f"write_file expects 2 arguments, got {len(expr.args)}",
+                           expr.loc)
+            actual = self.expression(expr.args[0])
+            if actual != "str":
+                raise make("E0327", f"argument 1 of write_file expects str, got {actual}",
+                           expr.args[0].loc)
+            text_type = self.expression(expr.args[1])
+            if text_type != "str":
+                raise make("E0327", f"argument 2 of write_file expects str, got {text_type}",
+                           expr.args[1].loc)
+            return "void"
+        function = self.resolve(expr)
         if len(expr.args) != len(function.params):
             plural = "" if len(function.params) == 1 else "s"
             raise make(

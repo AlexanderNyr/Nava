@@ -1,0 +1,90 @@
+{
+  "cases": [
+    {
+      "kind": "error",
+      "dir": "cycle",
+      "entry": "main.nv",
+      "code": "E0353",
+      "file": "cycle/beta.nv",
+      "line": 1,
+      "column": 8,
+      "message": "modules import each other in a cycle: alpha -> beta -> alpha",
+      "hint": "a module graph must be acyclic; move the shared function into a third module"
+    },
+    {
+      "kind": "error",
+      "dir": "duplicate_import",
+      "entry": "main.nv",
+      "code": "E0355",
+      "file": "duplicate_import/main.nv",
+      "line": 2,
+      "column": 8,
+      "message": "module 'math' is imported twice",
+      "hint": "one import is enough; the name is visible for the whole file"
+    },
+    {
+      "kind": "error",
+      "dir": "main_in_module",
+      "entry": "main.nv",
+      "code": "E0357",
+      "file": "main_in_module/helper.nv",
+      "line": 5,
+      "column": 1,
+      "message": "module 'helper' must not define fn main()",
+      "hint": "only the entry file may define main; rename the function"
+    },
+    {
+      "kind": "error",
+      "dir": "unqualified",
+      "entry": "main.nv",
+      "code": "E0358",
+      "file": "unqualified/main.nv",
+      "line": 4,
+      "column": 11,
+      "message": "function 'abs' is defined in module 'math'",
+      "hint": "call it as math::abs"
+    },
+    {
+      "kind": "error",
+      "dir": "not_imported",
+      "entry": "main.nv",
+      "code": "E0359",
+      "file": "not_imported/main.nv",
+      "line": 2,
+      "column": 11,
+      "message": "module 'math' is not imported",
+      "hint": "add `import math` at the top of the file"
+    },
+    {
+      "kind": "error",
+      "dir": "shadow",
+      "entry": "main.nv",
+      "code": "E0360",
+      "file": "shadow/main.nv",
+      "line": 1,
+      "column": 8,
+      "message": "local module 'math' shadows a standard module",
+      "hint": "rename the file; the name math is provided by the standard library"
+    },
+    {
+      "kind": "warning",
+      "dir": "unused_import",
+      "entry": "main.nv",
+      "code": "W0002",
+      "file": "unused_import/main.nv",
+      "line": 1,
+      "column": 8,
+      "message": "unused import 'math': no function of this module is called",
+      "hint": null,
+      "stdout": ""
+    },
+    {
+      "kind": "run",
+      "dir": "multi_file",
+      "entry": "main.nv",
+      "stdin": "",
+      "stdout": "22\n22\n9\n",
+      "exit_code": 0
+    }
+  ]
+}

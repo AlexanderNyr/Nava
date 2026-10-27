@@ -13,8 +13,15 @@ class Severity:
 
 @dataclass(frozen=True)
 class Location:
+    """A position in one source file.
+
+    `path` is the file the position belongs to and is set by the module loader;
+    a single-file compilation leaves it `None` and the caller supplies the path.
+    """
+
     line: int
     column: int
+    path: Optional[str] = None
 
     def advance(self, text: str) -> "Location":
         """End location of `text` when it starts at this location."""
@@ -25,7 +32,7 @@ class Location:
                 column = 1
             else:
                 column += 1
-        return Location(line, column)
+        return Location(line, column, self.path)
 
 
 @dataclass(frozen=True)
@@ -140,6 +147,9 @@ class Variable(Expr):
 class Call(Expr):
     name: str
     args: list[Expr]
+    #: The module named before `::` in `math::abs(x)`, or None for a call that
+    #: is resolved in the calling module.
+    module: Optional[str] = None
     target: Optional[Function] = field(default=None, init=False)
 
 
@@ -255,16 +265,41 @@ class Param:
 
 
 @dataclass
+class Import:
+    """`import name`: the whole content of another file on disk."""
+
+    name: str
+    loc: Location
+    name_loc: Location
+    #: True when the module comes from the packaged standard library.
+    standard: bool = False
+
+
+@dataclass
 class Function:
     name: str
     params: list[Param]
     returns: str
     body: list[Stmt]
     loc: Location
+    #: The module this function belongs to; "" is the entry file.
+    module: str = ""
     cname: str = field(default="", init=False)
+
+    @property
+    def qualified(self) -> str:
+        return f"{self.module}::{self.name}" if self.module else self.name
 
 
 @dataclass
 class Program:
+    """The whole translation unit: every function of every loaded module."""
+
     functions: list[Function]
     warnings: list[Diagnostic] = field(default_factory=list)
+    #: Imports declared in the entry file (module ""), in source order.
+    imports: list[Import] = field(default_factory=list)
+    #: Imports per module name, for every loaded module.
+    imports_by_module: dict[str, list[Import]] = field(default_factory=dict)
+    #: Module name -> source path, for diagnostics and for `check --format json`.
+    sources: dict[str, str] = field(default_factory=dict)

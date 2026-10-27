@@ -1,0 +1,11 @@
+# A three-file program: the entry file imports two modules, one of which
+# imports the other, and every function is called through its module name.
+import counters
+import report
+
+fn main() {
+    let values: [i64] = [4, 9, 2, 7]
+    print(counters::total(values))
+    report::describe(counters::total(values))
+    print(counters::largest(values))
+}

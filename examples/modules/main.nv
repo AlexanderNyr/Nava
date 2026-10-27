@@ -1,0 +1,21 @@
+# A program made of three files.  `stats.nv` sits next to this file and is a
+# local module; `math`, `sort` and `text` come from the packaged standard
+# library.  Every function of another module is called through its module name.
+import math
+import sort
+import text
+import stats
+
+fn main() {
+    let values: [i64] = [42, 7, 19, 3, 88, 23]
+    sort::insertion_sort(values)
+    for value in values {
+        print(value)
+    }
+    print(sort::is_sorted(values))
+    print(math::sum(values))
+    print(sort::binary_search(values, 19))
+    print(stats::mean(values))
+    print(text::is_valid_utf8("naïve"))
+    print(bytes_len("naïve"))
+}

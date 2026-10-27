@@ -26,5 +26,17 @@ MAX_ARRAY_ELEMENTS = 4 * 1024 * 1024
 #: sides of the point and the exponent.  Exceeding it raises E0346.
 MAX_FLOAT_DIGITS = 40
 
+#: Largest file `read_file` accepts, in bytes.  Exceeding it is a runtime error,
+#: never a truncated read.
+MAX_FILE_BYTES = 1024 * 1024
+
+#: Total bytes one program may read with `read_file` across all calls.  The
+#: returned text lives until the process exits, so the total is what bounds
+#: memory use, not the number of calls.
+MAX_READ_TOTAL_BYTES = 4 * 1024 * 1024
+
+#: Most `read_file` calls in one run; a companion bound to the total above.
+MAX_READ_CALLS = 64
+
 I64_MIN = -(2**63)
 I64_MAX = 2**63 - 1

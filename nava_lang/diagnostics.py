@@ -104,17 +104,30 @@ CODES: dict[str, tuple[str, str]] = {
     "E0349": (Severity.ERROR, "for-loop bound must be i64"),
     "E0350": (Severity.ERROR, "for loop cannot iterate over this value"),
     "E0351": (Severity.ERROR, "the loop variable cannot be assigned"),
+    "E0352": (Severity.ERROR, "module not found"),
+    "E0353": (Severity.ERROR, "modules import each other in a cycle"),
+    "E0354": (Severity.ERROR, "import after a function definition"),
+    "E0355": (Severity.ERROR, "module imported twice"),
+    "E0356": (Severity.ERROR, "module escapes the project boundary"),
+    "E0357": (Severity.ERROR, "module defines fn main"),
+    "E0358": (Severity.ERROR, "function belongs to another module"),
+    "E0359": (Severity.ERROR, "module is not imported"),
+    "E0360": (Severity.ERROR, "a local module shadows a standard module"),
+    "E0361": (Severity.ERROR, "standard module version mismatch"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),
     # --- warnings -----------------------------------------------------------
     "W0001": (Severity.WARNING, "unreachable statement"),
+    "W0002": (Severity.WARNING, "unused import"),
     # --- command-line and host ---------------------------------------------
     "E0501": (Severity.ERROR, "invalid C compiler command"),
     "E0502": (Severity.ERROR, "empty C compiler command"),
     "E0503": (Severity.ERROR, "C compiler not found"),
     "E0504": (Severity.ERROR, "output path equals the source path"),
     "E0505": (Severity.ERROR, "output directory does not exist"),
+    "E0506": (Severity.ERROR, "directory does not exist"),
+    "E0507": (Severity.ERROR, "path is not a directory"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),
@@ -144,6 +157,8 @@ def make(code: str, message: str, loc: Optional[Location] = None,
 def format_human(path: str, diagnostic: Diagnostic) -> str:
     location = ""
     if diagnostic.loc is not None:
+        if diagnostic.loc.path:
+            path = diagnostic.loc.path
         location = f":{diagnostic.loc.line}:{diagnostic.loc.column}"
     text = f"{path}{location}: {diagnostic.severity}[{diagnostic.code}]: {diagnostic.message}"
     if diagnostic.hint:
@@ -152,6 +167,8 @@ def format_human(path: str, diagnostic: Diagnostic) -> str:
 
 
 def diagnostic_json(path: str, diagnostic: Diagnostic) -> dict:
+    if diagnostic.loc is not None and diagnostic.loc.path:
+        path = diagnostic.loc.path
     document: dict = {
         "code": diagnostic.code,
         "severity": diagnostic.severity,
