@@ -82,6 +82,9 @@ class Symbol:
     #: False for any parameter: a borrow never owns storage, so it cannot be
     #: handed on as a mutable borrow.
     owned: bool = True
+    #: True for a loop variable: it is rebound by the loop, so assigning to it
+    #: is rejected instead of silently desynchronising the iteration.
+    readonly: bool = False
 
 
 @dataclass
@@ -93,6 +96,13 @@ class Expr:
 @dataclass
 class Number(Expr):
     value: int
+
+
+@dataclass
+class Float(Expr):
+    """An `f64` literal. The value is an IEEE-754 binary64 number."""
+
+    value: float
 
 
 @dataclass
@@ -131,6 +141,14 @@ class Call(Expr):
     name: str
     args: list[Expr]
     target: Optional[Function] = field(default=None, init=False)
+
+
+@dataclass
+class Range(Expr):
+    """`a..b`: the iterable of a `for` loop, half-open, bounds evaluated once."""
+
+    start: Expr
+    end: Expr
 
 
 @dataclass
@@ -199,6 +217,31 @@ class If(Stmt):
 class While(Stmt):
     condition: Expr
     body: list[Stmt]
+
+
+@dataclass
+class For(Stmt):
+    """`for name in iterable`: a range or an array.
+
+    The loop variable is a fresh read-only local in the body scope. For an
+    array it is a copy of the element; for a range it counts from the start.
+    """
+
+    name: str
+    iterable: Expr
+    body: list[Stmt]
+    name_loc: Optional[Location] = None
+    symbol: Optional[Symbol] = field(default=None, init=False)
+
+
+@dataclass
+class Break(Stmt):
+    pass
+
+
+@dataclass
+class Continue(Stmt):
+    pass
 
 
 @dataclass

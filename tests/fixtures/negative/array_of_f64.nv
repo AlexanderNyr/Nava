@@ -1,0 +1,4 @@
+fn main() {
+    let a: [f64] = [1.0, 2.0]
+    print(len(a))
+}

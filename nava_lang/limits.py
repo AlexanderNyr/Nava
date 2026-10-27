@@ -22,5 +22,9 @@ MAX_LITERAL_DIGITS = 19
 #: LANGUAGE.md states the value and `tests/test_spec.py` compares the two.
 MAX_ARRAY_ELEMENTS = 4 * 1024 * 1024
 
+#: Most decimal digits accepted in one floating-point literal, counting both
+#: sides of the point and the exponent.  Exceeding it raises E0346.
+MAX_FLOAT_DIGITS = 40
+
 I64_MIN = -(2**63)
 I64_MAX = 2**63 - 1

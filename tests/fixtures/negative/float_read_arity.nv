@@ -1,0 +1,3 @@
+fn main() {
+    print(read_f64(1))
+}

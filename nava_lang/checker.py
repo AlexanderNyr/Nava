@@ -3,13 +3,18 @@ from __future__ import annotations
 from .diagnostics import make, severity_of
 from .limits import MAX_NESTING
 from .model import (
-    ArrayLiteral, Assign, Binary, Boolean, Call, Diagnostic, Expr, ExprStmt,
-    Function, If, Index, IndexAssign, Let, Number, Program, Return, String,
-    Symbol, Unary, Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Diagnostic,
+    Expr, ExprStmt, Float, For, Function, If, Index, IndexAssign, Let, Number,
+    Program, Range, Return, String, Symbol, Unary, Variable, While,
 )
 
-BUILTINS = {"print", "read_i64", "len", "array_zeros"}
-VALUE_TYPES = {"i64", "bool", "str"}
+BUILTINS = {"print", "read_i64", "read_f64", "len", "array_zeros", "to_f64", "to_i64"}
+#: Types a value can have (everything except `void`).
+VALUE_TYPES = {"i64", "bool", "str", "f64"}
+#: Types `print` accepts: every value type.
+PRINTABLE_TYPES = VALUE_TYPES
+#: Types that support the checked-or-IEEE arithmetic operators.
+ARITHMETIC_TYPES = ("i64", "f64")
 
 
 def is_array(typ: str | None) -> bool:
@@ -38,6 +43,8 @@ class Checker:
         self.current_function: Function | None = None
         self.warnings: list[Diagnostic] = []
         self.depth = 0
+        #: Nesting depth of `while`/`for` bodies; 0 means break/continue is an error.
+        self.loop_depth = 0
 
     def check(self) -> Program:
         for index, function in enumerate(self.program.functions):
@@ -152,9 +159,10 @@ class Checker:
         for statement in statements:
             if terminated:
                 self.warn(statement.loc, "W0001",
-                          "unreachable statement: the preceding statement always returns")
+                          "unreachable statement: the preceding statement never completes normally")
             self.check_statement(statement)
-            if not terminated and self.guarantees_return(statement):
+            if not terminated and (self.guarantees_return(statement)
+                                   or isinstance(statement, (Break, Continue))):
                 terminated = True
         if new_scope:
             self.scopes.pop()
@@ -183,7 +191,7 @@ class Checker:
                 if statement.annotation != typ:
                     raise make("E0311", f"expected {statement.annotation}, got {typ}",
                                name_loc, name_loc.advance(statement.name),
-                               "there are no implicit conversions between i64, bool and str")
+                               "there are no implicit conversions between i64, bool, f64 and str")
             if is_array(typ) and not owns_new_array(statement.value):
                 raise make(
                     "E0331",
@@ -222,6 +230,13 @@ class Checker:
                            statement.value.loc)
         elif isinstance(statement, Assign):
             statement.symbol = self.lookup(statement.name, statement.loc)
+            if statement.symbol.readonly:
+                raise make(
+                    "E0351",
+                    f"the loop variable {statement.name!r} cannot be assigned",
+                    statement.loc, statement.loc.advance(statement.name),
+                    "the loop rebinds it; use a separate `let` for a mutated copy",
+                )
             if is_array(statement.symbol.typ):
                 raise make(
                     "E0332",
@@ -272,9 +287,96 @@ class Checker:
                 raise make("E0317", f"while condition must be bool, got {typ}",
                            statement.condition.loc,
                            hint="integers are not converted to bool; compare explicitly, as in x > 0")
-            self.check_statements(statement.body, new_scope=True)
+            self.loop_depth += 1
+            try:
+                self.check_statements(statement.body, new_scope=True)
+            finally:
+                self.loop_depth -= 1
+        elif isinstance(statement, For):
+            self.check_for(statement)
+        elif isinstance(statement, Break):
+            if not self.loop_depth:
+                raise make("E0343", "'break' is only allowed inside a loop", statement.loc,
+                           hint="a loop is `while` or `for`")
+        elif isinstance(statement, Continue):
+            if not self.loop_depth:
+                raise make("E0344", "'continue' is only allowed inside a loop", statement.loc,
+                           hint="a loop is `while` or `for`")
         else:
             raise AssertionError(f"unknown statement: {type(statement)}")
+
+    def arithmetic(self, op: str, left: str, right: str, loc) -> str:
+        """i64 is checked; f64 is IEEE-754. Mixing them is never implicit."""
+        if left == "i64" and right == "i64":
+            return "i64"
+        if left == "f64" and right == "f64":
+            if op == "%":
+                raise make("E0319", "operator '%' is defined for i64 only", loc,
+                           hint="use to_i64 or a formula such as a - b * to_f64(to_i64(a / b))")
+            return "f64"
+        if left in ARITHMETIC_TYPES and right in ARITHMETIC_TYPES:
+            raise make(
+                "E0345",
+                f"operator {op!r} cannot mix {left} and {right}",
+                loc,
+                hint="convert explicitly with to_f64(x) or to_i64(x)"
+                     "; there is no implicit integer/float conversion",
+            )
+        raise make("E0319", f"operator {op!r} expects two i64 or two f64 values", loc)
+
+    def comparable(self, op: str, left: str, right: str, loc) -> None:
+        if left == right and left in ARITHMETIC_TYPES:
+            return
+        if left in ARITHMETIC_TYPES and right in ARITHMETIC_TYPES:
+            raise make(
+                "E0345",
+                f"operator {op!r} cannot compare {left} and {right}",
+                loc,
+                hint="convert explicitly with to_f64(x) or to_i64(x)",
+            )
+        raise make("E0319", f"operator {op!r} expects two i64 or two f64 values", loc)
+
+    def check_for(self, statement: For) -> None:
+        """A `for` iterates over a half-open i64 range or over one array."""
+        iterable = statement.iterable
+        element: str
+        if isinstance(iterable, Range):
+            for bound in (iterable.start, iterable.end):
+                bound_type = self.expression(bound)
+                if bound_type != "i64":
+                    raise make("E0349", f"a for-loop bound must be i64, got {bound_type}",
+                               bound.loc,
+                               hint="ranges are i64 only; use to_i64(x) to convert an f64")
+            iterable.typ = "range"
+            element = "i64"
+        else:
+            iterable_type = self.expression(iterable)
+            if not is_array(iterable_type):
+                raise make(
+                    "E0350",
+                    f"a for loop iterates over an array or a range a..b, not over {iterable_type}",
+                    iterable.loc,
+                    hint="write `for x in values` for an array or `for i in 0..n` for a count",
+                )
+            if not isinstance(iterable, (Variable, ArrayLiteral)):
+                # Array literals are allowed: the array is a statement temporary.
+                raise make("E0350", "a for loop iterates over an array variable or a literal",
+                           iterable.loc)
+            element = element_of(iterable_type)
+        name_loc = statement.name_loc or statement.loc
+        self.scopes.append({})
+        try:
+            statement.symbol = self.declare(statement.name, element, name_loc)
+            # The loop rebinds the variable, so a write inside the body would
+            # silently desynchronise the iteration.
+            statement.symbol.readonly = True
+            self.loop_depth += 1
+            try:
+                self.check_statements(statement.body, new_scope=False)
+            finally:
+                self.loop_depth -= 1
+        finally:
+            self.scopes.pop()
 
     def expression(self, expr: Expr, expected: str | None = None) -> str:
         self.enter(expr.loc)
@@ -286,6 +388,11 @@ class Checker:
     def expression_inner(self, expr: Expr, expected: str | None = None) -> str:
         if isinstance(expr, Number):
             typ = "i64"
+        elif isinstance(expr, Float):
+            typ = "f64"
+        elif isinstance(expr, Range):
+            raise make("E0350", "a range a..b is only allowed directly after `in`",
+                       expr.loc)
         elif isinstance(expr, String):
             typ = "str"
         elif isinstance(expr, Boolean):
@@ -310,7 +417,12 @@ class Checker:
             typ = self.call(expr)
         elif isinstance(expr, Unary):
             actual = self.expression(expr.operand)
-            expected = "i64" if expr.op == "-" else "bool"
+            if expr.op == "-":
+                if actual not in ARITHMETIC_TYPES:
+                    raise make("E0318", f"unary '-' expects i64 or f64, got {actual}", expr.loc)
+                expr.typ = actual
+                return actual
+            expected = "bool"
             if actual != expected:
                 raise make("E0318", f"operator {expr.op!r} expects {expected}, got {actual}",
                            expr.loc)
@@ -319,12 +431,9 @@ class Checker:
             left = self.expression(expr.left)
             right = self.expression(expr.right)
             if expr.op in {"+", "-", "*", "/", "%"}:
-                if left != "i64" or right != "i64":
-                    raise make("E0319", f"operator {expr.op!r} expects two i64 values", expr.loc)
-                typ = "i64"
+                typ = self.arithmetic(expr.op, left, right, expr.loc)
             elif expr.op in {"<", "<=", ">", ">="}:
-                if left != "i64" or right != "i64":
-                    raise make("E0319", f"operator {expr.op!r} expects two i64 values", expr.loc)
+                self.comparable(expr.op, left, right, expr.loc)
                 typ = "bool"
             elif expr.op in {"==", "!="}:
                 if left != right or left not in VALUE_TYPES:
@@ -380,13 +489,27 @@ class Checker:
         if expr.name == "print":
             if len(expr.args) != 1:
                 raise make("E0322", "print expects exactly one argument", expr.loc)
-            if self.expression(expr.args[0]) not in VALUE_TYPES:
-                raise make("E0323", "print expects an i64, bool, or str value", expr.loc)
+            if self.expression(expr.args[0]) not in PRINTABLE_TYPES:
+                raise make("E0323", "print expects an i64, bool, f64, or str value", expr.loc)
             return "void"
         if expr.name == "read_i64":
             if expr.args:
                 raise make("E0324", "read_i64 expects no arguments", expr.loc)
             return "i64"
+        if expr.name == "read_f64":
+            if expr.args:
+                raise make("E0348", "read_f64 expects no arguments", expr.loc)
+            return "f64"
+        if expr.name in ("to_f64", "to_i64"):
+            source_type, target_type = ("i64", "f64") if expr.name == "to_f64" else ("f64", "i64")
+            if len(expr.args) != 1:
+                raise make("E0347", f"{expr.name} expects exactly one argument", expr.loc)
+            actual = self.expression(expr.args[0])
+            if actual != source_type:
+                raise make("E0347", f"{expr.name} expects {source_type}, got {actual}",
+                           expr.args[0].loc,
+                           hint=f"{expr.name} converts {source_type} to {target_type}")
+            return target_type
         if expr.name == "len":
             if len(expr.args) != 1:
                 raise make("E0337", "len expects exactly one argument", expr.loc)

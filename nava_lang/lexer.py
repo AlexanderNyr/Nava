@@ -4,17 +4,21 @@ import json
 import re
 
 from .diagnostics import make
-from .limits import MAX_LITERAL_DIGITS
+from .limits import MAX_FLOAT_DIGITS, MAX_LITERAL_DIGITS
 from .model import Location, Token
 
 
 KEYWORDS = {
     "fn": "FN", "let": "LET", "if": "IF", "else": "ELSE",
     "while": "WHILE", "return": "RETURN", "true": "TRUE", "false": "FALSE",
-    "mut": "MUT",
+    "mut": "MUT", "for": "FOR", "in": "IN", "break": "BREAK",
+    "continue": "CONTINUE",
 }
-TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||"}
+TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", ".."}
 ONE_CHAR = set("(){}[],:+-*/%=!<>;")
+#: Decimal floating-point literal: the integer part may not use underscores, so
+#: `1_0.5` is a malformed token rather than a silently different number.
+FLOAT_RE = re.compile(r"[0-9][0-9]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
 
 def lex(source: str) -> list[Token]:
     source = source.replace("\r\n", "\n").replace("\r", "\n")
@@ -73,6 +77,27 @@ def lex(source: str) -> list[Token]:
             i = j + 1
             col += width
         elif "0" <= ch <= "9":
+            float_match = FLOAT_RE.match(source, i)
+            if float_match and ("." in float_match.group() or "e" in float_match.group()
+                               or "E" in float_match.group()):
+                raw = float_match.group()
+                end = loc.advance(raw)
+                following = source[float_match.end():float_match.end() + 1]
+                if following in ("e", "E"):
+                    raise make("E0346", "malformed floating-point exponent", loc, end,
+                               "write an exponent as e12 or E-3, with digits after the sign")
+                digits = sum(1 for character in raw if character.isdigit())
+                if digits > MAX_FLOAT_DIGITS:
+                    raise make("E0346", "floating-point literal is too long", loc, end,
+                               f"at most {MAX_FLOAT_DIGITS} digits are accepted")
+                value = float(raw)
+                if value in (float("inf"), float("-inf")):
+                    raise make("E0346", "floating-point literal is outside the f64 range",
+                               loc, end, "f64 is IEEE-754 binary64: about 1.8e308 at most")
+                tokens.append(Token("FLOAT", value, loc))
+                col += len(raw)
+                i = float_match.end()
+                continue
             start = i
             while i < n and (("0" <= source[i] <= "9") or source[i] == "_"):
                 i += 1

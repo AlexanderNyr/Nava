@@ -1,0 +1,6 @@
+fn main() {
+    let n = 3
+    for value in n {
+        print(value)
+    }
+}

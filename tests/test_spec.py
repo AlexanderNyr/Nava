@@ -106,6 +106,8 @@ class SpecDocumentationTests(unittest.TestCase):
              limits.MAX_LITERAL_DIGITS, "MAX_LITERAL_DIGITS"),
             (r"\| Array element limit \(`MAX_ARRAY_ELEMENTS`\) \| (\d+) \|",
              limits.MAX_ARRAY_ELEMENTS, "MAX_ARRAY_ELEMENTS"),
+            (r"\| Float literal digits \(`MAX_FLOAT_DIGITS`\) \| (\d+) \|",
+             limits.MAX_FLOAT_DIGITS, "MAX_FLOAT_DIGITS"),
         ):
             match = re.search(pattern, text)
             self.assertIsNotNone(match, f"{name} is not documented in LANGUAGE.md")
@@ -352,7 +354,9 @@ class FuzzTests(unittest.TestCase):
               "%", "if", "else", "while", "return", "true", "false", "print", "read_i64", "->",
               "i64", "bool", "str", '"a"', '"\\q"', '"\\u0000"', ";", "\n", "# comment\n", "&&",
               "||", "!", "==", "<", ":", ",", "void", "_", "1_0", "1__0", "@", "9999999999999999999",
-              "[", "]", "mut", "len", "array_zeros", "[i64]", "[void]", "[[i64]]"]
+              "[", "]", "mut", "len", "array_zeros", "[i64]", "[void]", "[[i64]]",
+              "for", "in", "break", "continue", "..", "1.5", "1e999", "2.5e", "f64",
+              "to_f64", "to_i64", "read_f64"]
 
     def test_random_token_soup_only_produces_diagnostics(self):
         rng = random.Random(20261027)

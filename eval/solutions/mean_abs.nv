@@ -1,0 +1,16 @@
+fn main() {
+    let n = read_i64()
+    if n == 0 {
+        print(0.0)
+    } else {
+        let total = 0.0
+        for i in 0..n {
+            let value = read_f64()
+            if value < 0.0 {
+                value = -value
+            }
+            total = total + value
+        }
+        print(total / to_f64(n))
+    }
+}

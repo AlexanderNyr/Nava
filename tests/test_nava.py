@@ -124,6 +124,7 @@ class RuntimeTests(unittest.TestCase):
             ("fibonacci.nv", "", "55\n"),
             ("logic.nv", "", "false\ntrue\n"),
             ("arrays.nv", "", "6\n30\n0\n"),
+            ("stats.nv", "5\n3 1 4 1 5\n", "2.8\n5\n3\n"),
         ]
         for name, data, expected in cases:
             with self.subTest(example=name):
@@ -342,7 +343,7 @@ class EvaluationTests(unittest.TestCase):
 
     def test_array_tasks_pass_the_evaluator(self):
         """The public array tasks must be solvable and scored by the evaluator."""
-        for task in ("sort_numbers", "sieve_count"):
+        for task in ("sort_numbers", "sieve_count", "mean_abs"):
             with self.subTest(task=task):
                 result = subprocess.run(
                     [sys.executable, str(ROOT/"eval/evaluate.py"), "--task", task,
@@ -352,7 +353,9 @@ class EvaluationTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
                 report = json.loads(result.stdout)
-                self.assertEqual(report["summary"], {"passed": 8, "total": 8, "all_passed": True})
+                total = 11 if task == "mean_abs" else 8
+                self.assertEqual(report["summary"],
+                                 {"passed": total, "total": total, "all_passed": True})
         with tempfile.TemporaryDirectory() as temp:
             # A candidate that forgets the bounds of the array must be scored as
             # wrong, not crash the evaluator.

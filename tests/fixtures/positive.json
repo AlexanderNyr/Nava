@@ -99,6 +99,24 @@
       "stdin": "1000\n",
       "stdout": "168\n",
       "exit_code": 0
+    },
+    {
+      "file": "for_loops.nv",
+      "stdin": "",
+      "stdout": "0\n1\n2\n15\nalpha\nbeta\ntrue\nfalse\n9\n0\n10\n11\n20\n21\n22\n6\n",
+      "exit_code": 0
+    },
+    {
+      "file": "floats.nv",
+      "stdin": "",
+      "stdout": "1.75\n1.25\n0.375\n6.0\n-1.5\n1.5\n0.30000000000000004\n1.0\n-0.0\n1e+300\n1e-07\ninf\n-inf\nnan\nfalse\ntrue\nfalse\nfalse\ntrue\ntrue\n7.0\n2\n-2\n3.0\n",
+      "exit_code": 0
+    },
+    {
+      "file": "numerical.nv",
+      "stdin": "",
+      "stdout": "2\n-2\n-2\n2\n1\n-1\n1\n-1\n9223372036854775806\n-9223372036854775807\n-9223372036854775808\n-2\n6074000998\ntrue\ntrue\ntrue\n",
+      "exit_code": 0
     }
   ]
 }

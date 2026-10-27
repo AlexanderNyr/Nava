@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2 and N4 DELIVERED; N3 infrastructure delivered, empirical result open; N5–N9 planned
+## Status: N0–N2, N4 and N5 DELIVERED; N3 infrastructure delivered, empirical result open; N6–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -14,12 +14,13 @@ This document answers one question:
 > source files?
 
 Phases N0 (measurement rig and test integrity), N1 (language specification and
-diagnostics), N2 (isolated build and execution) and N4 (arrays and ownership)
-are delivered, and N3's harness is delivered — **without** a model result,
+diagnostics), N2 (isolated build and execution), N4 (arrays and ownership) and
+N5 (control flow and numerical coverage) are delivered, and N3's harness is
+delivered — **without** a model result,
 which cannot be produced without a model to run: see the delivery records in
 the relevant subsections for the evidence, the commands that produce it and the
 items that are deliberately left open. N3's infrastructure exists; its
-empirical results do not. N5 is the next phase that does not depend on a model.
+empirical results do not. N6 is the next phase that does not depend on a model.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -37,11 +38,11 @@ identify the baseline, not a claim about a published release.
 | Area | Present in the tree | Limit or missing evidence |
 |---|---|---|
 | Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build |
-| Language | `i64`, `bool`, `str`, fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, checked arithmetic and integer I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits and executable examples | No resizable collections, arrays of arrays, array copies or array results, `for`, floating point, imports, file API or package system |
-| Correctness | `python3 -m unittest discover -s tests -v`: 132 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 66 negative and 16 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
+| Language | `i64`, `bool`, `str`, `f64` (IEEE-754 with explicit conversions), fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, `for` over ranges and arrays, `break`, `continue`, checked integer arithmetic and integer/float I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits, documented float formatting and executable examples | No resizable collections, arrays of arrays, `f64` arrays, array copies or array results, labelled jumps, mathematical functions, imports, file API or package system |
+| Correctness | `python3 -m unittest discover -s tests -v`: 168 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 82 negative and 19 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
-| Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; ten public tasks with 65 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
+| Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; eleven public tasks with 76 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
 | Execution safety | `nava_lang/sandbox.py`: Linux namespaces (user, mount, PID, network, IPC, UTS) with a read-only minimal root and one writable directory, or a labelled rlimits-only fallback; `--isolation {auto,required,off}`; bounded output; process-group kill with survivor detection | Confinement against a misbehaving program, not against a kernel exploit; no seccomp, no cgroup quota; `rlimits` mode isolates nothing but resource use |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
@@ -106,7 +107,7 @@ complete by skipping its gate.
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | **Delivered** |
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Harness delivered, result open** |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | **Delivered** |
-| N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | Planned |
+| N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | **Delivered** |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Planned |
 | N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | Planned |
 | N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | Planned |
@@ -523,14 +524,24 @@ and control flow precisely specified.
 
 #### Tasks
 
-- [ ] Specify and implement `for`, `break` and `continue`, including nested
-      loops, scope and interaction with return-path analysis.
-- [ ] Design `f64` literals, operations, printing, comparisons, conversions,
+- [x] Specify and implement `for`, `break` and `continue`, including nested
+      loops, scope and interaction with return-path analysis. → `for` over a
+      half-open `i64` range or over an array; read-only loop variable in its own
+      scope; `E0343`, `E0344`, `E0349`–`E0351`; `W0001` after a jump; bounds
+      evaluated once; the conservative return analysis is documented as
+      unchanged.
+- [x] Design `f64` literals, operations, printing, comparisons, conversions,
       exceptional values and rounding behaviour explicitly; no implicit
-      integer/float conversion without a documented rule.
-- [ ] Expand tests for signed division, remainders, integer overflow and
+      integer/float conversion without a documented rule. → IEEE-754 binary64;
+      `E0345` for every mixed operation; `to_f64`/`to_i64` with checked
+      conversions; a portable shortest-round-trip print rule that matches
+      Python's `repr`; `inf`/`-inf`/`nan` and the NaN comparison table.
+- [x] Expand tests for signed division, remainders, integer overflow and
       mixed control flow. Define how locale affects input and output, if at
-      all.
+      all. → `tests/fixtures/positive/numerical.nv`,
+      `ForRuntimeTests.test_nested_loops_match_a_python_reference`, and the
+      documented rule that Nava never calls `setlocale`, with a test that runs
+      a program under a comma-decimal locale.
 
 #### Test gate
 
@@ -544,6 +555,38 @@ and control flow precisely specified.
 
 Control-flow and numerical language additions, written semantics, examples and
 portable regression tests.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Evidence | Result |
+|---|---|---|
+| Nested-loop and early-exit programs match independent references | `test_nested_loops_match_a_python_reference`, `test_break_and_continue_match_python`, `test_range_iteration_matches_python`, `test_break_leaves_only_the_innermost_loop` | every program equals the same computation in Python |
+| A broken `continue` or `break` is caught | negative controls 1–3 below | removing the release, an off-by-one range end and letting `continue` skip the `while` condition each fail the gate |
+| Scope and return-path interaction | `test_loop_variable_scope`, `test_return_analysis_is_still_conservative` | the loop variable is fresh and read-only; a loop still does not satisfy the return analysis |
+| Integer boundary tests stay green | `numerical.nv`, existing arithmetic fixtures, full suite | `INT64_MIN / 1`, `INT64_MIN % 3`, the UB-triggering pair and the truncating-remainder table all unchanged |
+| Float rules are documented before they are tested | `LANGUAGE.md` § Floating-point numbers | literals, operators, rounding, exceptional values, conversions, printing, reading and locale are all stated |
+| Printing is portable, not compiler-dependent | `test_printing_matches_python_repr` (33 values), `test_printing_random_values_matches_python_repr` (80 values) | output equals Python's `repr` for every value, including `5e-324`, `DBL_MAX`, `-0.0` and the -4/16 notation boundaries |
+| NaN, infinity and rounding | `test_exceptional_values_and_nan_comparisons`, `test_rounding_is_round_to_nearest_even` | `inf`, `-inf`, `nan`; every comparison with NaN is false except `!=`; `0.1 + 0.2` and `1e16 + 1.0` behave as documented |
+| Conversions never have undefined behaviour | `test_float_to_int_truncates_and_refuses_the_rest`, `test_conversion_has_no_undefined_behaviour` | truncation toward zero inside the range; a documented error for NaN and out-of-range values, with no `float-cast-overflow` report from UBSan |
+| Locale | `test_input_and_output_are_locale_independent` | the generated C contains no `setlocale(` call; `.` is the separator under `de_DE`, `ru_RU` and `fr_FR` settings |
+| Loops cannot leak storage | `test_break_and_continue_release_the_iteration_storage`, `test_return_from_inside_a_loop_still_releases` | `live arrays at exit: 0` |
+| Sanitizers | `test_loops_are_memory_safe_under_sanitizers`, `test_float_programs_are_sanitizer_clean` | silent under `-fsanitize=address,undefined` |
+| Public task coverage | `mean_abs` (11 cases) in `eval/tasks.json` | `eval/reference.py --check`: 11 tasks and 76 cases agree |
+| Existing programs | full suite | 168 tests OK, including all 0.1 programs and the N4 array gates |
+
+Five negative controls were run by hand, each making the gate fail: not
+releasing the arrays of an iteration on `break`/`continue`; treating the range
+end as inclusive (an off-by-one in every `for` loop); letting a `continue` in a
+`while` skip the condition re-check; dropping the range check in `to_i64`; and
+loosening the mixed-`i64`/`f64` rule so that a mixed operation compiles. The
+"bounds are evaluated once" property is not reachable by a one-line mutation —
+it comes from materialising the bounds into temporaries — so it is pinned by an
+observable side effect instead: a bound that prints is called exactly once
+(`test_range_bounds_are_evaluated_once`).
+
+Deliberately not done: no `f64` arrays, no `sqrt` or other mathematical
+functions, no labelled `break`, no reversed or inclusive ranges, no fused
+multiply-add, and no decimal type.
 
 ---
 

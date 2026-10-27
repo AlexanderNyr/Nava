@@ -1,0 +1,38 @@
+fn mean(a: f64, b: f64) -> f64 {
+    return (a + b) / 2.0
+}
+
+fn main() {
+    let a = 1.5
+    let b = 0.25
+    print(a + b)
+    print(a - b)
+    print(a * b)
+    print(a / b)
+    print(-a)
+    print(mean(1.0, 2.0))
+    print(0.1 + 0.2)
+    print(1.0)
+    print(-0.0)
+    print(1e300)
+    print(1.0e-7)
+    let zero = 0.0
+    print(1.0 / zero)
+    print(-1.0 / zero)
+    let not_a_number = zero / zero
+    print(not_a_number)
+    print(not_a_number == not_a_number)
+    print(not_a_number != not_a_number)
+    print(not_a_number < 0.0)
+    print(a < b)
+    print(a >= b)
+    print(a == 1.5)
+    print(to_f64(7))
+    print(to_i64(2.9))
+    print(to_i64(-2.9))
+    let sum = 0.0
+    for i in 0..3 {
+        sum = sum + to_f64(i)
+    }
+    print(sum)
+}

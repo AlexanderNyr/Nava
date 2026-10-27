@@ -242,7 +242,7 @@
       "column": 17,
       "end_column": 18,
       "message": "expected bool, got i64",
-      "hint": "there are no implicit conversions between i64, bool and str"
+      "hint": "there are no implicit conversions between i64, bool, f64 and str"
     },
     {
       "file": "sem_assign_mismatch.nv",
@@ -313,7 +313,7 @@
       "line": 1,
       "column": 24,
       "end_column": null,
-      "message": "operator '+' expects two i64 values",
+      "message": "operator '+' expects two i64 or two f64 values",
       "hint": null
     },
     {
@@ -322,7 +322,7 @@
       "line": 1,
       "column": 23,
       "end_column": null,
-      "message": "operator '<' expects two i64 values",
+      "message": "operator '<' expects two i64 or two f64 values",
       "hint": null
     },
     {
@@ -358,7 +358,7 @@
       "line": 2,
       "column": 13,
       "end_column": null,
-      "message": "print expects an i64, bool, or str value",
+      "message": "print expects an i64, bool, f64, or str value",
       "hint": null
     },
     {
@@ -594,6 +594,150 @@
       "end_column": null,
       "message": "'a' is passed to two mutable parameters of zero (arguments 1 and 2)",
       "hint": "a mutable borrow must be exclusive: copy into a second array first"
+    },
+    {
+      "file": "ctl_break_outside_loop.nv",
+      "code": "E0343",
+      "line": 3,
+      "column": 9,
+      "end_column": null,
+      "message": "'break' is only allowed inside a loop",
+      "hint": "a loop is `while` or `for`"
+    },
+    {
+      "file": "ctl_continue_outside_loop.nv",
+      "code": "E0344",
+      "line": 2,
+      "column": 5,
+      "end_column": null,
+      "message": "'continue' is only allowed inside a loop",
+      "hint": "a loop is `while` or `for`"
+    },
+    {
+      "file": "ctl_loop_variable_assignment.nv",
+      "code": "E0351",
+      "line": 3,
+      "column": 9,
+      "end_column": 10,
+      "message": "the loop variable 'i' cannot be assigned",
+      "hint": "the loop rebinds it; use a separate `let` for a mutated copy"
+    },
+    {
+      "file": "ctl_for_bound_type.nv",
+      "code": "E0349",
+      "line": 2,
+      "column": 17,
+      "end_column": null,
+      "message": "a for-loop bound must be i64, got bool",
+      "hint": "ranges are i64 only; use to_i64(x) to convert an f64"
+    },
+    {
+      "file": "ctl_for_iterable_type.nv",
+      "code": "E0350",
+      "line": 3,
+      "column": 18,
+      "end_column": null,
+      "message": "a for loop iterates over an array or a range a..b, not over i64",
+      "hint": "write `for x in values` for an array or `for i in 0..n` for a count"
+    },
+    {
+      "file": "ctl_range_outside_for.nv",
+      "code": "E0350",
+      "line": 2,
+      "column": 14,
+      "end_column": null,
+      "message": "a range a..b is only allowed directly after `in`",
+      "hint": "write `for i in a..b`, or use a while loop with `i < b`"
+    },
+    {
+      "file": "float_mixed_arithmetic.nv",
+      "code": "E0345",
+      "line": 3,
+      "column": 13,
+      "end_column": null,
+      "message": "operator '+' cannot mix f64 and i64",
+      "hint": "convert explicitly with to_f64(x) or to_i64(x); there is no implicit integer/float conversion"
+    },
+    {
+      "file": "float_mixed_comparison.nv",
+      "code": "E0345",
+      "line": 3,
+      "column": 13,
+      "end_column": null,
+      "message": "operator '<' cannot compare f64 and i64",
+      "hint": "convert explicitly with to_f64(x) or to_i64(x)"
+    },
+    {
+      "file": "float_literal_overflow.nv",
+      "code": "E0346",
+      "line": 2,
+      "column": 11,
+      "end_column": 16,
+      "message": "floating-point literal is outside the f64 range",
+      "hint": "f64 is IEEE-754 binary64: about 1.8e308 at most"
+    },
+    {
+      "file": "float_malformed_exponent.nv",
+      "code": "E0346",
+      "line": 2,
+      "column": 11,
+      "end_column": 14,
+      "message": "malformed floating-point exponent",
+      "hint": "write an exponent as e12 or E-3, with digits after the sign"
+    },
+    {
+      "file": "float_modulo.nv",
+      "code": "E0319",
+      "line": 3,
+      "column": 13,
+      "end_column": null,
+      "message": "operator '%' is defined for i64 only",
+      "hint": "use to_i64 or a formula such as a - b * to_f64(to_i64(a / b))"
+    },
+    {
+      "file": "float_implicit_annotation.nv",
+      "code": "E0311",
+      "line": 2,
+      "column": 9,
+      "end_column": 10,
+      "message": "expected f64, got i64",
+      "hint": "there are no implicit conversions between i64, bool, f64 and str"
+    },
+    {
+      "file": "float_conversion_argument.nv",
+      "code": "E0347",
+      "line": 2,
+      "column": 18,
+      "end_column": null,
+      "message": "to_i64 expects f64, got i64",
+      "hint": "to_i64 converts f64 to i64"
+    },
+    {
+      "file": "float_read_arity.nv",
+      "code": "E0348",
+      "line": 2,
+      "column": 11,
+      "end_column": null,
+      "message": "read_f64 expects no arguments",
+      "hint": null
+    },
+    {
+      "file": "float_in_condition.nv",
+      "code": "E0316",
+      "line": 3,
+      "column": 8,
+      "end_column": null,
+      "message": "if condition must be bool, got f64",
+      "hint": "integers are not converted to bool; compare explicitly, as in x != 0"
+    },
+    {
+      "file": "array_of_f64.nv",
+      "code": "E0203",
+      "line": 2,
+      "column": 13,
+      "end_column": 16,
+      "message": "an array element type must be i64, bool, or str, got 'f64'",
+      "hint": null
     }
   ]
 }

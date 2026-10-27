@@ -1,0 +1,4 @@
+fn main() {
+    let a: f64 = 1
+    print(a)
+}

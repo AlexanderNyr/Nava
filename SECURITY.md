@@ -111,6 +111,26 @@ process that holds memory until it exits — not a leak that grows across runs.
 The alternative, propagating a failure through every expression, would change
 the language's error model; it is not part of 0.1.
 
+## Floating point and control flow (phase N5)
+
+- **`f64` has no undefined behaviour.** Arithmetic is IEEE-754 binary64, so
+  overflow gives `inf` and division by zero gives `inf` or `nan` — documented
+  results, not traps and not UB. `to_i64` refuses a `nan` or a value outside
+  `[-2^63, 2^63)` with a deterministic runtime error instead of performing the
+  C cast that would be undefined; `tests/test_float.py` runs the conversion
+  under `-fsanitize=undefined`, where an unchecked cast is reported as
+  `float-cast-overflow`.
+- **No implicit conversion** between `i64` and `f64` (`E0345`, `E0311`), so a
+  rounding decision is always visible in the source.
+- **Locale is fixed.** The program never calls `setlocale`, so `.` is the
+  decimal separator in input and output whatever `LC_ALL`/`LC_NUMERIC` say;
+  `read_f64` validates the token itself, so `strtod` cannot accept `inf`,
+  `nan`, hexadecimal floats or trailing garbage.
+- **Loops cannot skip release.** `break` and `continue` release the arrays
+  owned by the iteration they leave, checked with `-DNAVA_TRACK_ALLOCS`.
+  A `for` bound is evaluated once, before the first iteration, so a bound
+  expression cannot be re-run by the loop.
+
 ## Platform support
 
 | Platform | `namespaces` | Notes |
@@ -142,6 +162,10 @@ backends:
 | out-of-range read and write, negative index, empty array | documented runtime error, no value printed, later statements not run |
 | sorting, sieve and ownership programs under `-fsanitize=address,undefined` | no sanitizer report |
 | array programs built with `-DNAVA_TRACK_ALLOCS` | `live arrays at exit: 0` on every normal and early-return path |
+| `break`/`continue` leaving an iteration that owns arrays | `live arrays at exit: 0` (`tests/test_control.py`) |
+| `to_i64` of `nan`, `2^63` and `1e308` under `-fsanitize=undefined` | documented runtime error; no `float-cast-overflow` report |
+| `read_f64` with `inf`, `nan`, `0x1.8p1`, `1,5`, `1e`, `1e999` | rejected with a documented error, not accepted by `strtod` |
+| a program run with `LC_ALL=de_DE.UTF-8` (comma decimal separator) | input `2.5` and output `3.75` still use `.` |
 
 Disabling any one mechanism makes its test fail; this was verified by removing
 `--net`, the timeout kill, the fail-closed branch, the read-only minimal root and

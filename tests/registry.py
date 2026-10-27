@@ -110,6 +110,50 @@ REGISTERED_TESTS = {
         "test_a_disabled_bounds_check_is_caught",
         "test_the_runtime_documents_its_own_limit",
     },
+    "ForFrontendTests": {
+        "test_break_and_continue_need_a_loop",
+        "test_loop_variable_is_read_only",
+        "test_iterable_rules",
+        "test_loop_variable_scope",
+        "test_return_analysis_is_still_conservative",
+        "test_dead_code_after_a_jump_is_a_warning",
+    },
+    "ForRuntimeTests": {
+        "test_range_iteration_matches_python",
+        "test_element_iteration_matches_python",
+        "test_element_iteration_over_a_parameter_and_an_array_variable",
+        "test_the_loop_variable_is_a_copy",
+        "test_break_and_continue_match_python",
+        "test_break_leaves_only_the_innermost_loop",
+        "test_continue_in_a_while_loop_rechecks_the_condition",
+        "test_return_from_inside_a_loop_still_releases",
+        "test_break_and_continue_release_the_iteration_storage",
+        "test_range_bounds_are_evaluated_once",
+        "test_nested_loops_match_a_python_reference",
+        "test_loops_are_memory_safe_under_sanitizers",
+        "test_documented_example_output_is_real",
+    },
+    "FloatFrontendTests": {
+        "test_no_implicit_conversion",
+        "test_float_is_not_an_integer_type",
+        "test_literal_rules",
+        "test_conversion_arguments",
+        "test_floats_work_where_values_are_expected",
+    },
+    "FloatRuntimeTests": {
+        "test_printing_matches_python_repr",
+        "test_printing_random_values_matches_python_repr",
+        "test_arithmetic_matches_python",
+        "test_exceptional_values_and_nan_comparisons",
+        "test_rounding_is_round_to_nearest_even",
+        "test_int_to_float_conversion_is_exact_then_rounds",
+        "test_float_to_int_truncates_and_refuses_the_rest",
+        "test_conversion_has_no_undefined_behaviour",
+        "test_float_programs_are_sanitizer_clean",
+        "test_read_f64_accepts_only_decimal_forms",
+        "test_input_and_output_are_locale_independent",
+        "test_documented_float_output_is_real",
+    },
     "BenchTests": {
         "test_json_record_has_environment_samples_and_missing_model_fields",
     },
@@ -229,6 +273,7 @@ REGISTERED_TASKS = {
     "collatz_steps": 6,
     "sort_numbers": 8,
     "sieve_count": 8,
+    "mean_abs": 11,
 }
 
 #: Candidate languages the evaluator must support, with a labelled arithmetic
@@ -237,9 +282,9 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 66,
-    "tests/fixtures/positive": 16,
-    "tests/fixtures/warnings": 1,
+    "tests/fixtures/negative": 82,
+    "tests/fixtures/positive": 19,
+    "tests/fixtures/warnings": 2,
 }
 
 #: Diagnostic codes that no source fixture can produce, with the test that
@@ -278,6 +323,8 @@ def discovered_tests() -> dict[str, set[str]]:
     if str(ROOT / "tests") not in sys.path:
         sys.path.insert(0, str(ROOT / "tests"))
     import test_arrays  # noqa: PLC0415  (import after sys.path setup)
+    import test_control  # noqa: PLC0415
+    import test_float  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
@@ -285,7 +332,8 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_arrays, test_nava, test_registry, test_sandbox, test_spec, test_study):
+    for module in (test_arrays, test_control, test_float, test_nava, test_registry,
+                   test_sandbox, test_spec, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -334,10 +382,15 @@ def check_skip_state() -> list[str]:
         if getattr(class_object, "__unittest_skip__", False):
             problems.append(f"{class_name} is skipped on this host; required tool: {required}")
     import test_arrays  # noqa: PLC0415
-    for class_name, required in (("ArrayRuntimeTests", "cc"), ("ArrayMemoryTests", "cc")):
-        class_object = getattr(test_arrays, class_name)
+    import test_control  # noqa: PLC0415
+    import test_float  # noqa: PLC0415
+    for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
+                               (test_arrays, "ArrayMemoryTests"),
+                               (test_control, "ForRuntimeTests"),
+                               (test_float, "FloatRuntimeTests")):
+        class_object = getattr(module, class_name)
         if getattr(class_object, "__unittest_skip__", False):
-            problems.append(f"{class_name} is skipped on this host; required tool: {required}")
+            problems.append(f"{class_name} is skipped on this host; required tool: cc")
     if not test_arrays.SANITIZERS:
         problems.append(
             "the address/undefined-behaviour sanitizers are unavailable: the array "

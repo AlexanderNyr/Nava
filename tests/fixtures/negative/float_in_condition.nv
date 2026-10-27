@@ -1,0 +1,6 @@
+fn main() {
+    let a = 1.5
+    if a {
+        print(a)
+    }
+}

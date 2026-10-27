@@ -44,24 +44,32 @@ as a guaranteed return.
   may continue on the next line only while it is inside one of those
   delimiters. Outside them an expression cannot be split across lines.
 - **Comments** — `#` or `//` to the end of the line.
-- **Keywords** — `fn`, `let`, `if`, `else`, `while`, `return`, `true`, `false`,
-  `mut` (only in a parameter type, see [Arrays and ownership](#arrays-and-ownership)).
+- **Keywords** — `fn`, `let`, `if`, `else`, `while`, `for`, `in`, `break`,
+  `continue`, `return`, `true`, `false`, `mut` (only in a parameter type, see
+  [Arrays and ownership](#arrays-and-ownership)).
 - **Identifiers** — ASCII letters, digits and `_`, not starting with a digit.
-- **Types** — `i64`, `bool`, `str`, `void`, and the array types `[i64]`,
+- **Types** — `i64`, `bool`, `str`, `f64`, `void`, and the array types `[i64]`,
   `[bool]`, `[str]`. Any other name in a type position is `E0203`; so are
-  `[void]` and a nested array such as `[[i64]]`.
+  `[void]`, `[f64]` and a nested array such as `[[i64]]`.
 - **Integer literals** — decimal digits, optionally separated by single
   underscores (`1_000_000`). A literal must fit in `i64`
   (-9223372036854775808 to 9223372036854775807). The single negation
   `-9223372036854775808` is accepted because its positive counterpart does not
   fit; `-` applied to any larger magnitude is `E0108` or an overflow at run
   time.
+- **Floating-point literals** — digits, a point and more digits, with an
+  optional decimal exponent: `1.5`, `0.25`, `1e300`, `1.5e-7`. At least one
+  digit must follow the point, so `1.` is not a literal. Underscores are not
+  used in floating-point literals. A literal that is too long (`40` digits) or
+  that is outside the `f64` range is `E0346`; `1e999` is rejected rather than
+  silently becoming infinity. A range `0..3` is two integers and `..`, not a
+  float.
 - **Strings** — double-quoted UTF-8 with JSON escapes (`\"`, `\\`, `\n`, `\t`,
   `\uXXXX`, and the other JSON escapes). A literal newline inside a string is
   `E0103`; an invalid escape is `E0104`; NUL is `E0105`; an unpaired surrogate
   is `E0106`.
 - **Operators** — `( ) [ ] { } : , + - * / % = ! < > ;` and the two-character
-  `->`, `<=`, `>=`, `==`, `!=`, `&&`, `||`. Delimiters must match: an unmatched
+  `->`, `..`, `<=`, `>=`, `==`, `!=`, `&&`, `||`. Delimiters must match: an unmatched
   `)` is `E0109`, an unmatched `]` is `E0112`, an unclosed `(` is `E0110` and
   an unclosed `[` is `E0113`.
 
@@ -79,13 +87,18 @@ type           = "i64" | "bool" | "str" | "void"
                | "[" ( "i64" | "bool" | "str" ) "]" ;
 block          = "{" { separator } { statement { separator } } "}" ;
 statement      = let | assignment | element_assignment | if_statement
-               | while_statement | return_statement | call ;
+               | while_statement | for_statement | break_statement
+               | continue_statement | return_statement | call ;
 
 let            = "let" IDENT [ ":" type ] "=" expression ;
 assignment     = IDENT "=" expression ;
 element_assignment = IDENT "[" expression "]" "=" expression ;
 if_statement   = "if" expression block [ "else" ( if_statement | block ) ] ;
 while_statement= "while" expression block ;
+for_statement  = "for" IDENT "in" iterable block ;
+iterable       = expression ".." expression | expression ;
+break_statement= "break" ;
+continue_statement = "continue" ;
 return_statement = "return" [ expression ] ;
 separator      = NEWLINE | ";" ;
 
@@ -115,6 +128,7 @@ statement (`E0313` otherwise).
 | `i64` | Integers from -9223372036854775808 to 9223372036854775807. |
 | `bool` | `true` and `false`. Conditions require `bool`; integers are not converted. |
 | `str` | Double-quoted UTF-8 strings. NUL is not allowed. |
+| `f64` | IEEE-754 binary64, the same values as C `double`. |
 | `void` | No function result; not a variable or parameter type. |
 | `[i64]`, `[bool]`, `[str]` | A fixed-length sequence of one element type. The length is set when the array is created and never changes. |
 
@@ -371,8 +385,185 @@ fn main() {
 Braces are required. `return value` is used in a function with a result; a
 `void` function may use a bare `return` or reach the end of its body. `while`
 re-evaluates its condition on every iteration, including any calls it contains.
-Nava 0.1 has no `for`, `break`, `continue`, exceptions or first-class
-functions.
+
+### `for`, `break` and `continue`
+
+`for` iterates over a half-open range or over an array. The loop variable is a
+fresh, **read-only** local in the loop's own scope: assigning to it is `E0351`,
+because the loop rebinds it and a write would silently desynchronise the
+iteration.
+
+```nava
+fn total(a: [i64]) -> i64 {
+    let sum = 0
+    for value in a {
+        sum = sum + value
+    }
+    return sum
+}
+
+fn main() {
+    for i in 0..3 {
+        print(i)
+    }
+    for i in 3..3 {
+        print(99)
+    }
+    print(total([4, 5, 6]))
+    for word in ["alpha", "beta"] {
+        print(word)
+    }
+    let kept = 0
+    for i in 0..10 {
+        if i % 3 != 0 {
+            continue
+        }
+        if i > 6 {
+            break
+        }
+        kept = kept + i
+    }
+    print(kept)
+}
+```
+
+Output: `0`, `1`, `2`, `15`, `alpha`, `beta`, `9`. See
+`tests/fixtures/positive/for_loops.nv`.
+
+- `for i in a..b` counts `i` from `a` up to but never including `b`. Both
+  bounds must be `i64` (`E0349`) and are evaluated **once**, before the first
+  iteration, even when they are function calls. If `b <= a` the body never
+  runs; there is no reversed or inclusive range, and to include `n` write
+  `0..n + 1`.
+- `for x in values` visits the elements of an array in index order. `values`
+  is any array expression — a variable, a read-only or mutable parameter, or a
+  literal such as `for x in [1, 2, 3]`, whose array lives until the loop ends.
+  `x` is a **copy** of the element of its element type; writing to the array
+  still needs an index loop, `for i in 0..len(a) { a[i] = ... }`.
+- `break` leaves the innermost `for` or `while`; `continue` starts its next
+  iteration. Outside a loop they are `E0343` and `E0344`. In a `while` loop
+  `continue` re-evaluates the condition; in a `for` loop it advances to the next
+  range value or element.
+- A statement after `return`, `break` or `continue` in the same block is
+  unreachable and is reported as the warning `W0001`; the program still
+  compiles and runs.
+- Arrays owned by the loop body are released when `break` or `continue` leaves
+  the iteration, so a loop that jumps out early leaks nothing.
+- The return analysis is conservative and unchanged: `break`, `continue` and
+  even `while true` are not counted as guarantees that a function returns, so a
+  non-`void` function still needs a `return` on every path.
+
+Nava 0.1 has no `for ... in` over anything but ranges and arrays, no labelled
+break or continue, and no exceptions or first-class functions.
+
+## Floating-point numbers
+
+`f64` is IEEE-754 binary64, the type C calls `double`. It is a separate type
+from `i64`, and **no conversion between them is implicit**: adding an `i64` to
+an `f64` is `E0345`, storing an `i64` in an `f64` is `E0311`, and the fix is
+always an explicit call to `to_f64` or `to_i64`.
+
+```nava
+fn mean(a: f64, b: f64) -> f64 {
+    return (a + b) / 2.0
+}
+
+fn main() {
+    let x = 1.5
+    let y = 0.25
+    print(x + y)
+    print(x * y)
+    print(-x)
+    print(mean(1.0, 2.0))
+    print(0.1 + 0.2)
+    print(to_f64(7))
+    print(to_i64(2.9))
+    print(to_i64(-2.9))
+}
+```
+
+Output: `1.75`, `0.375`, `-1.5`, `1.5`, `0.30000000000000004`, `7.0`, `2`,
+`-2`. See `tests/fixtures/positive/floats.nv`.
+
+### Operators and rounding
+
+`+`, `-`, `*`, `/` and unary `-` are defined for two `f64` values (or one, for
+unary `-`) and follow IEEE-754 exactly:
+
+- rounding is **round to nearest, ties to even**, which is the default and is
+  never changed by Nava — the program cannot alter the floating-point
+  environment;
+- overflow gives `inf` or `-inf`, division by zero gives `inf`, `-inf` or `nan`
+  (for `0.0 / 0.0`), and none of these is an error;
+- `0.1 + 0.2` is `0.30000000000000004`, and `1.0e300 * 1.0e300` is `inf`;
+- `%` is **not** defined for `f64` (`E0319`): `to_i64` and integer remainder, or
+  an explicit formula, express the intent without ambiguity.
+
+Comparisons `<`, `<=`, `>`, `>=`, `==`, `!=` follow IEEE-754 as well, which
+means every comparison with `nan` is false except `!=`, which is true:
+
+```nava
+fn main() {
+    let zero = 0.0
+    let none = zero / zero
+    print(none)
+    print(none == none)
+    print(none != none)
+    print(none < 0.0)
+    print(1.0 / zero)
+}
+```
+
+Output: `nan`, `false`, `true`, `false`, `inf`.
+
+### Conversions
+
+- `to_f64(x: i64) -> f64` is exact for every integer with at most 53
+  significant bits. Above that it rounds to nearest-even, so
+  `to_f64(9007199254740993)` is `9007199254740992.0`. Both are documented
+  behaviour, not a bug.
+- `to_i64(x: f64) -> i64` truncates toward zero: `2.9` is `2`, `-2.9` is `-2`,
+  `0.5` is `0`. A `nan` and any value outside `[-2^63, 2^63)` are runtime
+  errors (`to_i64 of NaN`, `to_i64 of a value outside the i64 range`), exit
+  status 1. The conversion never has undefined behaviour, unlike a C cast.
+
+### Printing and reading
+
+`print(value)` accepts an `f64` and writes the shortest decimal form that reads
+back as exactly the same number, using fixed notation when the decimal
+exponent is between -4 and 15 inclusive and exponent notation outside that
+range, with `.0` appended so a float never looks like an integer. The
+exceptional values print as `nan`, `inf` and `-inf`. This is the same rule
+Python uses for `repr` of a float, which is how the tests check it:
+
+```nava
+fn main() {
+    print(1.0)
+    print(100.0)
+    print(0.1)
+    print(-0.0)
+    print(1.0e-7)
+    print(1e300)
+}
+```
+
+Output: `1.0`, `100.0`, `0.1`, `-0.0`, `1e-07`, `1e+300`.
+
+`read_f64() -> f64` reads one whitespace-delimited decimal number: an optional
+sign, digits, an optional point with digits, and an optional decimal exponent.
+`inf`, `nan`, hexadecimal floats, a decimal comma and trailing garbage are
+errors, not accepted inputs. A value too large for `f64` is an error; a value
+too small rounds to zero. `read_f64` never consumes more than one token.
+
+**Locale:** Nava never calls `setlocale`, so the C locale stays in effect for
+the whole program. Input and output always use `.` as the decimal separator and
+never group digits, whatever `LC_ALL`, `LC_NUMERIC` or `LANG` are set to. The
+test suite checks this by running a program with a comma-decimal locale
+requested.
+
+There are no `f64` arrays, no `f64` literals for `inf`/`nan` (produce them
+arithmetically), no fused multiply-add, no `sqrt` or other mathematical
+functions, and no decimal or arbitrary-precision type.
 
 ## Checked arithmetic
 
@@ -409,10 +600,13 @@ fn main() {
 - `print(value)` accepts exactly one `i64`, `bool` or `str` and prints it
   followed by a newline. Booleans print as `true` or `false`. `print` returns
   `void` and cannot be used as a value (`E0309`, `E0314`).
+- `read_f64() -> f64` reads one decimal floating-point number (`E0348`).
+- `to_f64(x: i64) -> f64` and `to_i64(x: f64) -> i64` convert explicitly
+  (`E0347`); there is no implicit conversion.
 - `len(a: [T]) -> i64` returns the number of elements (`E0337`, `E0338`).
 - `array_zeros(n: i64) -> [i64]` allocates `n` zeroed elements and checks the
   length (`E0339`, `E0340`).
-- All five names are reserved: they cannot be redefined (`E0301`).
+- All seven names are reserved: they cannot be redefined (`E0301`).
 
 ## Diagnostics
 
@@ -525,6 +719,15 @@ never changes meaning; a new condition gets a new code.
 | `E0340` | error | array_zeros expects an i64 length | `tests/fixtures/negative/array_zeros_type.nv` |
 | `E0341` | error | mut on a non-array parameter | `tests/fixtures/negative/array_mut_scalar.nv` |
 | `E0342` | error | the same array borrowed mutably twice | `tests/fixtures/negative/array_double_mut.nv` |
+| `E0343` | error | 'break' outside a loop | `tests/fixtures/negative/ctl_break_outside_loop.nv` |
+| `E0344` | error | 'continue' outside a loop | `tests/fixtures/negative/ctl_continue_outside_loop.nv` |
+| `E0345` | error | implicit conversion between i64 and f64 | `tests/fixtures/negative/float_mixed_arithmetic.nv` |
+| `E0346` | error | invalid floating-point literal | `tests/fixtures/negative/float_literal_overflow.nv`, `float_malformed_exponent.nv` |
+| `E0347` | error | invalid numeric conversion argument | `tests/fixtures/negative/float_conversion_argument.nv` |
+| `E0348` | error | wrong number of arguments to read_f64 | `tests/fixtures/negative/float_read_arity.nv` |
+| `E0349` | error | for-loop bound must be i64 | `tests/fixtures/negative/ctl_for_bound_type.nv` |
+| `E0350` | error | for loop cannot iterate over this value | `tests/fixtures/negative/ctl_for_iterable_type.nv` |
+| `E0351` | error | the loop variable cannot be assigned | `tests/fixtures/negative/ctl_loop_variable_assignment.nv` |
 
 **Resource limits**
 
@@ -560,8 +763,9 @@ never changes meaning; a new condition gets a new code.
 
 Warnings are non-fatal: the program still compiles and runs, and the warning is
 written to `stderr`. A statement that cannot be reached because the preceding
-statement always returns is reported as `W0001`; the statement is still
-present in the generated C, so remove it rather than relying on the warning.
+statement always returns, breaks or continues is reported as `W0001`; the
+statement is still present in the generated C, so remove it rather than relying
+on the warning.
 
 ```nava
 fn f() -> i64 {
@@ -582,6 +786,7 @@ See `tests/fixtures/warnings/unreachable.nv`.
 | Nesting limit (`MAX_NESTING`) | 200 | `E0401` |
 | Literal digit limit (`MAX_LITERAL_DIGITS`) | 19 | `E0108` |
 | Array element limit (`MAX_ARRAY_ELEMENTS`) | 4194304 | runtime error, exit status 1 |
+| Float literal digits (`MAX_FLOAT_DIGITS`) | 40 | `E0346` |
 
 The nesting counter is shared by function bodies and blocks, parenthesised
 subexpressions, unary operator chains and the depth of the expression tree
@@ -606,9 +811,10 @@ program's, not the compiler's.
 
 ## Not implemented
 
-There are no resizable collections, arrays of arrays, array copies, array
-results from functions, floating-point values, string indexing, string
-concatenation, string input, file APIs, pointers, modules, imports or FFI.
+There are no resizable collections, arrays of arrays, `f64` arrays, array
+copies, array results from functions, labelled `break`/`continue`, string
+indexing, string concatenation, string input, mathematical functions such as
+`sqrt`, file APIs, pointers, modules, imports or FFI.
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated
 C with `nava emit-c`; building requires C11 and the C standard library. GCC and

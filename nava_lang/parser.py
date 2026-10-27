@@ -4,9 +4,9 @@ from .diagnostics import make
 from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
-    ArrayLiteral, Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If,
-    Index, IndexAssign, Let, Number, Param, Program, Return, String, Token,
-    Unary, Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
+    Float, For, Function, If, Index, IndexAssign, Let, Number, Param, Program,
+    Range, Return, String, Token, Unary, Variable, While,
 )
 
 PRECEDENCE = {
@@ -14,7 +14,7 @@ PRECEDENCE = {
     "<": 4, "<=": 4, ">": 4, ">=": 4,
     "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
 }
-TYPES = {"i64", "bool", "str", "void"}
+TYPES = {"i64", "bool", "str", "void", "f64"}
 #: Types an array may contain. There are no arrays of arrays and no arrays of
 #: `void`; both are rejected in the parser because they are syntax-level shapes.
 ELEMENT_TYPES = {"i64", "bool", "str"}
@@ -72,6 +72,10 @@ class Parser:
             self.i += 1
 
     def end_statement(self) -> None:
+        if self.at(".."):
+            raise make("E0350", "a range a..b is only allowed directly after `in`",
+                       self.current.loc,
+                       hint="write `for i in a..b`, or use a while loop with `i < b`")
         if self.at("NL") or self.at(";"):
             self.separators()
         elif not self.at("}") and not self.at("EOF"):
@@ -92,7 +96,7 @@ class Parser:
                            element.loc, element.loc.advance(str(element.value)))
             self.expect("]", "']'")
             return f"[{element.value}]"
-        token = self.expect("IDENT", "a type (i64, bool, str, or void)")
+        token = self.expect("IDENT", "a type (i64, bool, str, void, or f64)")
         if token.value not in TYPES:
             # The message text is part of the fixture contract: array types are
             # documented in LANGUAGE.md and the hint names the scalar set only.
@@ -160,6 +164,21 @@ class Parser:
         if self.take("WHILE"):
             condition = self.expression()
             return While(token.loc, condition, self.block())
+        if self.take("FOR"):
+            name = self.expect("IDENT", "loop variable name")
+            self.expect("IN", "'in'")
+            iterable = self.expression()
+            if self.take(".."):
+                # `a..b` is half-open; both bounds are evaluated once, before
+                # the first iteration.
+                iterable = Range(iterable.loc, iterable, self.expression())
+            return For(token.loc, str(name.value), iterable, self.block(), name.loc)
+        if self.take("BREAK"):
+            self.end_statement()
+            return Break(token.loc)
+        if self.take("CONTINUE"):
+            self.end_statement()
+            return Continue(token.loc)
         if self.take("RETURN"):
             value = None if self.current.kind in ("NL", ";", "}", "EOF") else self.expression()
             self.end_statement()
@@ -239,6 +258,8 @@ class Parser:
                            token.loc.advance(str(token.value)),
                            "i64 holds -9223372036854775808 to 9223372036854775807")
             return Number(token.loc, value)
+        if self.take("FLOAT"):
+            return Float(token.loc, float(token.value))
         if self.take("STRING"):
             return String(token.loc, str(token.value))
         if self.take("TRUE"):

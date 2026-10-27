@@ -20,16 +20,21 @@ explicit function types, inferred local types and checked arithmetic.
 
 ### Implemented
 
-- `i64`, `bool` and `str`; mutable locals and parameters with block scope.
+- `i64`, `bool`, `str` and `f64`; mutable locals and parameters with block
+  scope.
 - Fixed-length arrays `[i64]`, `[bool]` and `[str]`: array literals,
   `array_zeros(n)`, `len(a)`, checked indexing with `a[i]` and `a[i] = value`,
   read-only `[T]` and mutable `mut [T]` parameters. One owner per array, no
   copies, no array results, deterministic release on every normal and early
   return, and a bounds check that cannot be disabled.
-- Functions and recursion; `if` / `else if` / `else`, `while` and `return`.
+- Functions and recursion; `if` / `else if` / `else`, `while`, `for` over a
+  range or an array, `break`, `continue` and `return`.
 - Arithmetic, comparisons, `!`, `&&` and `||`, with left-to-right evaluation
   and short-circuiting.
-- `read_i64()` for standard input and `print(value)` for line-oriented output.
+- `f64` as IEEE-754 binary64 with no implicit `i64` conversion: `to_f64`,
+  `to_i64` (checked, no undefined behaviour), `read_f64`, and a documented
+  portable printing rule (`print(1.0)` is `1.0`, `print(0.1 + 0.2)` is
+  `0.30000000000000004`, NaN and infinities print as `nan`, `inf`, `-inf`).
 - Checked integer overflow and division errors; failures produce a diagnostic
   instead of relying on C's undefined signed-arithmetic behaviour.
 - A C11 backend, a native build command, runnable examples and host-side tests.
@@ -43,6 +48,11 @@ explicit function types, inferred local types and checked arithmetic.
 - Array gates (`tests/test_arrays.py`): ownership rules, checked allocation and
   indexing, release accounting, and the generated C compiled under the address
   and undefined-behaviour sanitizers.
+- Control-flow and numerical gates (`tests/test_control.py`,
+  `tests/test_float.py`): every loop is compared with an independent Python
+  reference, jumps release the arrays of their iteration, `f64` printing is
+  checked against Python's `repr` over a table that includes subnormals and the
+  notation boundaries, and message parsing is shown to be locale-independent.
 - Isolated compilation and execution (`nava_lang/sandbox.py`): Linux user,
   mount, PID and network namespaces with a read-only minimal root and one
   writable directory, or a labelled rlimits-only fallback. `--isolation
@@ -219,6 +229,8 @@ is not, on which platforms, and how each claim is tested.
 | `tests/test_spec.py` | Executable specification: documented examples, fixtures, limits, fuzzing |
 | `tests/test_sandbox.py` | Isolation gate: hostile programs, fail-closed behaviour, honest labels |
 | `tests/test_arrays.py` | Array gate: ownership rules, checked access, release accounting, sanitizers |
+| `tests/test_control.py` | Control-flow gate: loops against Python references, jumps, release on break/continue |
+| `tests/test_float.py` | Numerical gate: IEEE-754 behaviour, printing, conversions, locale independence |
 | `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |

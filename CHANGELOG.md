@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+Phase N5 of `PLAN.md` (control flow and numerical coverage).
+
+- `for i in a..b` iterates a half-open `i64` range; `for x in values` iterates
+  an array (variable, parameter or literal) by value. Both bounds are evaluated
+  once. `break` and `continue` work in `for` and `while`, and release the arrays
+  owned by the iteration they leave. The loop variable is a fresh read-only
+  local (`E0351`), and a statement after a jump is reported as `W0001`.
+- `f64` as IEEE-754 binary64: literals (`1.5`, `1e300`), `+ - * /`, unary `-`,
+  the full comparison set with the NaN rules, `to_f64`/`to_i64` with checked
+  conversions and no undefined behaviour, `read_f64`, and `print` support.
+  There is no implicit `i64`/`f64` conversion (`E0345`, `E0311`), `%` is not
+  defined for floats, and `f64` arrays do not exist.
+- Documented float printing: the shortest form that round-trips, fixed notation
+  for decimal exponents in [-4, 15] and exponent notation outside it, `.0` for
+  integral values, and `nan`/`inf`/`-inf`. It matches Python's `repr`, which is
+  how the tests check 113 values, including subnormals and `DBL_MAX`.
+- Locale: the program never calls `setlocale`, so `.` is always the decimal
+  separator; `read_f64` validates tokens itself and rejects `inf`, `nan`,
+  hexadecimal floats, commas and trailing garbage.
+- Diagnostics: `E0343`–`E0351` (9 new codes, 79 in total).
+- `LANGUAGE.md`: sections for `for`/`break`/`continue` and for floating-point
+  numbers, grammar, limits (`MAX_FLOAT_DIGITS`), the new builtins and updated
+  diagnostic tables. 8 new executable documentation examples.
+- Tests: `tests/test_control.py` (19) and `tests/test_float.py` (17), as well
+  as `tests/spec_example.py`, which checks that a documented example really
+  prints what `LANGUAGE.md` claims. Fixtures: 16 negative, 3 positive and 1
+  warning added. Public task `mean_abs`. Tests: 132 -> 168.
+
 Phase N4 of `PLAN.md` (arrays and ownership).
 
 - Arrays: `[i64]`, `[bool]` and `[str]`, created by an array literal or

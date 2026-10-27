@@ -118,6 +118,22 @@ def sieve_count(stdin: str) -> str:
     return f"{count}\n"
 
 
+def mean_abs(stdin: str) -> str:
+    tokens = stdin.split()
+    count = int(tokens[0])
+    values = [float(token) for token in tokens[1:]]
+    if len(values) != count:
+        raise ValueError(f"expected {count} floats, got {len(values)}")
+    if count == 0:
+        return "0.0\n"
+    total = 0.0
+    for value in values:
+        total += abs(value)
+    # The printed form is the documented `print(f64)` rule, which is exactly
+    # Python's repr for a float; see LANGUAGE.md.
+    return f"{total / float(count)!r}\n"
+
+
 REFERENCE: dict[str, Callable[[str], str]] = {
     "gcd": gcd,
     "sum_to_n": sum_to_n,
@@ -129,6 +145,7 @@ REFERENCE: dict[str, Callable[[str], str]] = {
     "collatz_steps": collatz_steps,
     "sort_numbers": sort_numbers,
     "sieve_count": sieve_count,
+    "mean_abs": mean_abs,
 }
 
 

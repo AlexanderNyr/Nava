@@ -1,0 +1,39 @@
+fn mean(values: [i64]) -> f64 {
+    if len(values) == 0 {
+        return 0.0
+    }
+    let total = 0
+    for value in values {
+        total = total + value
+    }
+    return to_f64(total) / to_f64(len(values))
+}
+
+fn largest(values: [i64]) -> i64 {
+    let best = values[0]
+    for i in 1..len(values) {
+        if values[i] > best {
+            best = values[i]
+        }
+    }
+    return best
+}
+
+fn main() {
+    let n = read_i64()
+    let values: [i64] = array_zeros(n)
+    for i in 0..n {
+        values[i] = read_i64()
+    }
+    print(mean(values))
+    if n > 0 {
+        print(largest(values))
+    }
+    let above = 0
+    for value in values {
+        if to_f64(value) > mean(values) {
+            above = above + 1
+        }
+    }
+    print(above)
+}

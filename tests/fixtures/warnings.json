@@ -8,6 +8,14 @@
       "message": "unreachable statement",
       "stdout": "1\n",
       "exit_code": 0
+    },
+    {
+      "file": "unreachable_after_break.nv",
+      "code": "W0001",
+      "line": 5,
+      "message": "unreachable statement",
+      "stdout": "done\n",
+      "exit_code": 0
     }
   ]
 }

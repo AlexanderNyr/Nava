@@ -1,0 +1,58 @@
+fn total(a: [i64]) -> i64 {
+    let sum = 0
+    for value in a {
+        sum = sum + value
+    }
+    return sum
+}
+
+fn main() {
+    for i in 0..3 {
+        print(i)
+    }
+    for i in 2..2 {
+        print(100)
+    }
+    let values: [i64] = [4, 5, 6]
+    print(total(values))
+    for word in ["alpha", "beta"] {
+        print(word)
+    }
+    for flag in [true, false] {
+        print(flag)
+    }
+    let kept = 0
+    for i in 0..10 {
+        if i % 3 != 0 {
+            continue
+        }
+        if i > 6 {
+            break
+        }
+        kept = kept + i
+    }
+    print(kept)
+    for i in 0..3 {
+        for j in 0..3 {
+            if j > i {
+                break
+            }
+            print(i * 10 + j)
+        }
+    }
+    let count = 0
+    for outer in 0..4 {
+        let inner = 0
+        while inner < 3 {
+            inner = inner + 1
+            if inner == 2 {
+                continue
+            }
+            if outer == 2 {
+                break
+            }
+            count = count + 1
+        }
+    }
+    print(count)
+}
