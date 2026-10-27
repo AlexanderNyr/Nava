@@ -28,6 +28,8 @@ explicit function types, inferred local types and checked arithmetic.
 - Checked integer overflow and division errors; failures produce a diagnostic
   instead of relying on C's undefined signed-arithmetic behaviour.
 - A C11 backend, a native build command, runnable examples and host-side tests.
+- A registry guard that fails when a test, task fixture or required compiler is
+  missing, instead of reporting skipped tests as a pass (`tests/registry.py`).
 
 ### Not implemented
 
@@ -38,14 +40,22 @@ See [`LANGUAGE.md`](LANGUAGE.md) for the implemented semantics and limits.
 
 ---
 
-## Quickstart
+## Installation
 
 Nava requires Python 3.10+ and a C11 compiler (`cc`, GCC or Clang). The
 compiler itself has no third-party Python dependencies. The commands below
 were tested on Linux; macOS with Clang should also work.
 
+Either install the package, which provides the `nava` command:
+
 ```bash
-cd nava
+python3 -m pip install .          # from the repository root
+nava run examples/hello.nv
+```
+
+or run the entry script directly without installing anything:
+
+```bash
 python3 nava run examples/hello.nv
 ```
 
@@ -93,8 +103,12 @@ printf '48 18\n' | ./gcd       # 6
 # Inspect the generated C.
 python3 nava emit-c examples/gcd.nv -o gcd.c
 
-# Run the compiler and runtime tests.
+# Run the compiler, runtime, evaluation, benchmark and registry tests.
 python3 -m unittest discover -s tests -v
+
+# Fail, rather than skip, when a registered test, task fixture or required
+# compiler is missing. CI runs this before the suite.
+python3 tests/registry.py
 ```
 
 `run` compiles on every invocation. Use `build` for repeated execution and
@@ -115,9 +129,15 @@ establish general superiority. The environment and limitations are recorded in
 
 Model generation speed and accuracy have not been measured against a
 specified model. The prompt generator and evaluator in [`eval/`](eval/README.md)
-can check saved responses on four tasks without connecting to a model API.
-Use the actual model's tokenizer and count the complete prompt as well as the
-output.
+can check saved Nava, C and C++ responses on eight tasks without connecting to
+a model API; `eval/reference.py` recomputes every expected answer
+independently. Use the actual model's tokenizer and count the complete prompt
+as well as the output.
+
+`bench/run.py --json PATH` writes a machine-readable record: environment,
+compiler versions, flags, warm-up policy, raw samples per phase and missing
+model fields as `null` with an explicit status. Recorded runs live in
+`bench/results/`.
 
 A separate, coarse Nava-versus-C authoring experiment is documented in
 [`experiment/`](experiment/README.md); its timings include tool latency and
@@ -141,9 +161,12 @@ when evaluating C++, which can access the host system.
 |---|---|
 | `nava_lang/` | Lexer, parser, type checker, C generator and CLI |
 | `examples/` | Runnable Nava programs |
-| `tests/` | Compiler, runtime and evaluation tests using `unittest` |
-| `bench/` | Reproducible native execution comparison with C++ |
-| `eval/` | Prompts and tests for saved model responses; no API integration |
+| `tests/` | Compiler, runtime, evaluation and registry tests using `unittest` |
+| `tests/registry.py` | Suite and fixture registry guard; fails on missing tests or tools |
+| `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |
+| `eval/` | Prompts, tasks, reference answers and tests for saved model responses |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |
+| `.github/workflows/ci.yml` | Required, fail-closed, packaging and benchmark lanes |
+| [`pyproject.toml`](pyproject.toml) | Packaging metadata and the `nava` console script |
 | [`PLAN.md`](PLAN.md) | Dependency-ordered improvement phases and test gates |
-| [`CHANGELOG.md`](CHANGELOG.md) | Changelog, currently empty |
+| [`CHANGELOG.md`](CHANGELOG.md) | Changelog |

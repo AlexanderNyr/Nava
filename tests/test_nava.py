@@ -293,11 +293,38 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertFalse(json.loads(result.stdout)["summary"]["all_passed"])
 
+    def test_c_candidate_passes_and_reports_labelled_semantics(self):
+        if not shutil.which("cc"):
+            self.skipTest("a C compiler is required for the C candidate")
+        result = subprocess.run(
+            [sys.executable, str(ROOT/"eval/evaluate.py"), "--task", "gcd", "--language", "c",
+             "--source", str(ROOT/"eval/solutions/gcd.c")],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads(result.stdout)
+        self.assertEqual(report["summary"], {"passed": 7, "total": 7, "all_passed": True})
+        self.assertEqual(report["candidate"]["language"], "c")
+        self.assertIn("unchecked-signed", report["candidate"]["arithmetic"])
+        self.assertEqual(report["candidate"]["compile_command"][1:3], ["-std=c11", "-O2"])
+        # The Nava candidate must be labelled with checked arithmetic, not the same text.
+        nava = subprocess.run(
+            [sys.executable, str(ROOT/"eval/evaluate.py"), "--task", "gcd", "--language", "nava",
+             "--source", str(ROOT/"eval/solutions/gcd.nv")],
+            capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(nava.returncode, 0, nava.stderr)
+        self.assertIn("checked-i64", json.loads(nava.stdout)["candidate"]["arithmetic"])
+
     def test_other_public_tasks(self):
         programs = {
             "sum_to_n": "fn main() { let n = read_i64(); let i = 1; let s = 0; while i <= n { s = s + i; i = i + 1 }; print(s) }",
             "factorial": "fn main() { let n = read_i64(); let i = 2; let s = 1; while i <= n { s = s * i; i = i + 1 }; print(s) }",
             "fibonacci": "fn main() { let n = read_i64(); if n == 0 { print(0) } else { let a = 0; let b = 1; let i = 1; while i < n { let x = a + b; a = b; b = x; i = i + 1 }; print(b) } }",
+            "is_prime": "fn prime(n: i64) -> bool { if n < 2 { return false }; if n % 2 == 0 { return n == 2 }; let d = 3; while d * d <= n { if n % d == 0 { return false }; d = d + 2 }; return true } fn main() { print(prime(read_i64())) }",
+            "digit_sum": "fn main() { let n = read_i64(); let s = 0; while n > 0 { s = s + n % 10; n = n / 10 }; print(s) }",
+            "max_of_three": "fn main() { let a = read_i64(); let b = read_i64(); let c = read_i64(); let m = a; if b > m { m = b }; if c > m { m = c }; print(m) }",
+            "collatz_steps": "fn main() { let n = read_i64(); let steps = 0; while n != 1 { if n % 2 == 0 { n = n / 2 } else { n = 3 * n + 1 }; steps = steps + 1 }; print(steps) }",
         }
         with tempfile.TemporaryDirectory() as temp:
             for task, source in programs.items():
@@ -313,7 +340,7 @@ class EvaluationTests(unittest.TestCase):
                     self.assertEqual(json.loads(result.stdout)["summary"]["passed"], 6)
 
     def test_prompt_contains_task_and_language(self):
-        for language in ("nava", "cpp"):
+        for language in ("nava", "c", "cpp"):
             result = subprocess.run(
                 [sys.executable, str(ROOT/"eval/prompt.py"), "--task", "factorial", "--language", language],
                 capture_output=True, text=True, timeout=5,
@@ -321,6 +348,53 @@ class EvaluationTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("n!", result.stdout)
             self.assertIn("source code only", result.stdout)
+        c_prompt = subprocess.run(
+            [sys.executable, str(ROOT/"eval/prompt.py"), "--task", "factorial", "--language", "c"],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertIn("C11", c_prompt.stdout)
+        self.assertNotIn("Nava 0.1", c_prompt.stdout)
+
+
+@unittest.skipUnless(CC, "a C compiler is required for benchmark tests")
+@unittest.skipUnless(shutil.which("c++"), "a C++ compiler is required for benchmark tests")
+class BenchTests(unittest.TestCase):
+    def test_json_record_has_environment_samples_and_missing_model_fields(self):
+        with tempfile.TemporaryDirectory() as temp:
+            record_path = Path(temp) / "bench.json"
+            result = subprocess.run(
+                [sys.executable, str(ROOT/"bench/run.py"), "--iterations", "1000", "--samples", "2",
+                 "--warmup", "0", "--json", str(record_path), "--quiet"],
+                capture_output=True, text=True, timeout=120,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+        self.assertEqual(record["schema"], "nava-bench/1")
+        self.assertEqual(record["failures"], [])
+        self.assertTrue(record["reference_check"]["ok"])
+        self.assertEqual(len(record["reference_check"]["cases"]), 9)
+        environment = record["environment"]
+        for field in ("platform", "python", "machine", "cc_version", "cxx_version", "flags", "isolation"):
+            self.assertIn(field, environment)
+        self.assertIsNotNone(environment["cc_version"])
+        names = [program["name"] for program in record["programs"]]
+        self.assertEqual(names, ["Nava", "C++ checked", "C++ unchecked"])
+        for program in record["programs"]:
+            self.assertEqual(len(program["runs_ms"]), 2)
+            self.assertGreater(program["runs_ms"][0], 0)
+            self.assertGreater(program["startup_ms"], 0)
+            self.assertGreater(program["compile_ms"], 0)
+            self.assertIn("median_ms", program)
+            self.assertIsNone(program["source_tokens"])  # no tokenizer requested
+        self.assertIsNotNone(record["programs"][0]["frontend_ms"])
+        self.assertIsNone(record["programs"][1]["frontend_ms"])
+        self.assertEqual(record["workload"]["warmup_runs"], 0)
+        self.assertEqual(len(record["workload"]["run_order"]), 2)
+        model = record["model_measurements"]
+        self.assertEqual(model["status"], "not-measured")
+        self.assertIsNone(model["generation_ms"])
+        self.assertIsNone(model["prompt_tokens"])
+        self.assertIsNone(model["completion_tokens"])
 
 
 if __name__ == "__main__":

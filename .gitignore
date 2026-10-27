@@ -4,3 +4,10 @@ __pycache__/
 *.out
 *.exe
 *.o
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Benchmark records are committed on purpose (bench/results/); no rule here.

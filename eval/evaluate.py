@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Compile and test one saved model response. This is NOT a sandbox."""
+"""Compile and test one saved model response. This is NOT a sandbox.
+
+Three candidates are supported: Nava (checked i64 arithmetic), C and C++.
+The C and C++ candidates use ordinary signed arithmetic, which has undefined
+behaviour on overflow; that difference is recorded explicitly in the report
+under "candidate".arithmetic so results are never compared silently.
+"""
 from __future__ import annotations
 import argparse
 import json
@@ -13,6 +19,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
+
+LANGUAGES = ("nava", "c", "cpp")
+ARITHMETIC = {
+    "nava": "checked-i64 (overflow and division errors are diagnosed at run time)",
+    "c": "unchecked-signed (C11 signed overflow is undefined behaviour)",
+    "cpp": "unchecked-signed (C++17 signed overflow is undefined behaviour)",
+}
 
 
 def nonnegative_int(value):
@@ -33,7 +46,7 @@ def main():
     tasks = {task["id"]: task for task in json.loads((HERE / "tasks.json").read_text(encoding="utf-8"))}
     ap = argparse.ArgumentParser(description="Compile and test a saved response. NOT a security sandbox.")
     ap.add_argument("--task", choices=sorted(tasks), required=True)
-    ap.add_argument("--language", choices=("nava", "cpp"), required=True)
+    ap.add_argument("--language", choices=LANGUAGES, required=True)
     ap.add_argument("--source", type=Path, required=True)
     ap.add_argument("--timeout", type=positive_float, default=2.0, help="seconds per test")
     tokenizer = ap.add_mutually_exclusive_group()
@@ -84,11 +97,21 @@ def main():
             binary = Path(temp) / "candidate"
             if args.language == "nava":
                 command = [sys.executable, str(ROOT / "nava"), "build", str(source), "-o", str(binary), "--opt", "2"]
+            elif args.language == "c":
+                cc = shlex.split(os.environ.get("CC", "cc"))
+                if not cc:
+                    ap.error("empty CC")
+                command = cc + ["-std=c11", "-O2", "-x", "c", str(source), "-o", str(binary)]
             else:
                 cxx = shlex.split(os.environ.get("CXX", "c++"))
                 if not cxx:
                     ap.error("empty CXX")
                 command = cxx + ["-std=c++17", "-O2", "-x", "c++", str(source), "-o", str(binary)]
+            result["candidate"] = {
+                "language": args.language,
+                "arithmetic": ARITHMETIC[args.language],
+                "compile_command": command,
+            }
             start = time.perf_counter_ns()
             try:
                 compiled = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)

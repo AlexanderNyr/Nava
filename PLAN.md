@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: PLANNED — N0–N9 not yet delivered
+## Status: N0 DELIVERED — N1–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -12,6 +12,11 @@ This document answers one question:
 > How can Nava become a useful language for model-generated programs, with
 > correctness and end-to-end latency measured rather than inferred from short
 > source files?
+
+Phase N0 (measurement rig and test integrity) is delivered: see
+[§4.1](#phase-n0--measurement-rig-and-test-integrity) for the evidence, the
+commands that produce it and the two items that are deliberately left to N2 and
+to a held-out test set.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -30,10 +35,10 @@ identify the baseline, not a claim about a published release.
 |---|---|---|
 | Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands | Python front end and external C compiler are required to build |
 | Language | `i64`, `bool`, `str`, functions, conditions, `while`, checked arithmetic and integer I/O | No arrays, `for`, floating point, imports, file API or package system |
-| Correctness | `python3 -m unittest discover -s tests -v`: 31 tests passed locally with `cc` and `c++` available | Some runtime tests skip when a compiler is absent; no CI gate currently proves the suite actually ran |
+| Correctness | `python3 -m unittest discover -s tests -v`: 37 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture or required compiler is missing | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
-| Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
-| Model evaluation | `eval/prompt.py`, `eval/evaluate.py`, four public tasks and optional tokenizer counts | No model API calls, private held-out suite, measured model response time or measured pass rate |
+| Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
+| Model evaluation | `eval/prompt.py`, `eval/evaluate.py` for Nava, C and C++, eight public tasks with 49 cases, independent answers in `eval/reference.py`, optional tokenizer counts | No model API calls, held-out suite, measured model response time or measured pass rate |
 | Execution safety | Optional `run --timeout`; evaluator has a per-test timeout | Neither is a sandbox; filesystem, network, memory, output and child processes are not isolated |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
@@ -93,7 +98,7 @@ complete by skipping its gate.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | Planned |
+| N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | **Delivered** |
 | N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | Planned |
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | Planned |
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | Planned |
@@ -119,20 +124,33 @@ visible before changing the language or claiming a speedup.
 
 #### Tasks
 
-- [ ] Record Python, OS, CPU, compiler versions, compiler flags, workloads and
+- [x] Record Python, OS, CPU, compiler versions, compiler flags, workloads and
       raw timing samples with every benchmark result. Separate process startup,
-      compilation and native execution.
-- [ ] Extend the evaluation harness to support C as well as existing Nava and
+      compilation and native execution. → `bench/run.py --json PATH` emits a
+      `nava-bench/1` record with `environment` (platform, machine, CPU count,
+      Python and compiler versions, flags, isolation note), `frontend_ms`,
+      `compile_ms`/`compile_parts_ms`, `startup_ms`, raw `runs_ms`,
+      distribution statistics and `failures`.
+- [x] Extend the evaluation harness to support C as well as existing Nava and
       C++ candidates, with identical task contracts and labelled arithmetic
-      semantics.
-- [ ] Add diverse public tasks with input bounds and independent reference
+      semantics. → `eval/evaluate.py --language {nava,c,cpp}` records
+      `candidate.arithmetic` as `checked-i64` or `unchecked-signed`;
+      `eval/solutions/gcd.c` checks the lane.
+- [x] Add diverse public tasks with input bounds and independent reference
       outputs. Keep any genuinely held-out tests outside prompts and outside
-      the public training/evaluation fixtures.
-- [ ] Add a suite/fixture registry guard so an omitted, disabled or missing
+      the public training/evaluation fixtures. → eight tasks / 49 cases,
+      bounded inputs, every expected stdout recomputed by
+      `eval/reference.py`. Held-out tests stay **outside this repository**.
+- [x] Add a suite/fixture registry guard so an omitted, disabled or missing
       test is visible. CI must fail if its required C or C++ compiler is absent
-      rather than treating skipped runtime tests as a passing full suite.
-- [ ] Record benchmark distributions, warm-up policy, run order and failures;
-      do not replace missing model data with source-length estimates.
+      rather than treating skipped runtime tests as a passing full suite. →
+      `tests/registry.py` (also the `RegistryTests` class), with five negative
+      controls; the CI lane `guard-fails-without-compilers` proves the
+      fail-closed behaviour.
+- [x] Record benchmark distributions, warm-up policy, run order and failures;
+      do not replace missing model data with source-length estimates. →
+      `--warmup`, `workload.run_order`, `stdev_ms`, and
+      `model_measurements.status = "not-measured"` with `null` values.
 
 #### Test gate
 
@@ -147,8 +165,36 @@ visible before changing the language or claiming a speedup.
 #### Deliverable
 
 `bench/`, `eval/` and `tests/` baseline tools, a registry guard and a recorded
-baseline. C support in the evaluator and the guard are **planned**, not
-present today.
+baseline. **Delivered.** See the delivery record below.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Evidence | Result |
+|---|---|---|
+| Baseline reproducible | `python3 -m unittest discover -s tests -v` | 37 tests, OK |
+| Registry guard present | `python3 tests/registry.py` | `OK: 37 registered tests, 8 tasks with 49 cases, tools cc, c++ present` |
+| Missing test is visible | rename a registered test method (NC1) | guard fails: `registered test is missing` |
+| Corrupted fixture is visible | change one expected stdout (NC2) | guard fails: `reference gives ...` |
+| Removed task is visible | delete `collatz_steps` (NC3) | guard fails: `registered task is missing` |
+| Missing compiler fails closed | `PATH=` an empty directory (NC4) | guard fails: `required tools are missing: cc, c++` |
+| Unsafe local mode is not a pass | NC4 plus `NAVA_ALLOW_MISSING_TOOLS=1` (NC5) | still exits 1, labelled `NOT a passing gate` |
+| Cross-language check | `python3 experiment/verify.py` | Nava and C: 107/107 |
+| Fixtures agree with the reference | `python3 eval/reference.py --check` | 8 tasks, 49 cases agree |
+| Machine-readable benchmark | `python3 bench/run.py --iterations 5000000 --samples 7 --json ...` | record in `bench/results/`, 9/9 reference checks, `failures: []` |
+| Wrong candidate still fails | `eval/evaluate.py` on `fn main() { print(123) }` | exit 1, `all_passed: false` |
+| Clean installation | `python3 -m pip install .` in a fresh venv, then `nava --version` | `Nava 0.1.0`; `nava run` works |
+
+Still open after N0, and deliberately not closed here:
+
+1. **Held-out tests** must not exist in this repository (they would leak into
+   prompts and fixtures). They are needed for N3 and are tracked there.
+2. **Bounded output capture** for untrusted candidates (`capture_output` in
+   `eval/evaluate.py` is still unbounded) belongs to N2's isolation work; a
+   size limit without a sandbox would suggest protection that is not there.
+
+The five negative controls are reproducible by hand; they are not automated in
+CI because each requires mutating the tree. CI covers the same failure mode
+that matters in practice — a host without compilers — in its own lane.
 
 ---
 

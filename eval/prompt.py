@@ -17,6 +17,9 @@ Operators: + - * / %; < <= > >= == !=; ! && ||. Division truncates toward zero.
 Calls and operators evaluate left to right; && and || short-circuit. Variables are block-scoped.
 Only these features are available: no arrays, for loops, string concatenation, external libraries, or casts.
 '''
+C_GUIDE = '''Language: C11.
+Output a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.
+'''
 CPP_GUIDE = '''Language: C++17.
 Output a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.
 '''
@@ -26,9 +29,10 @@ def main():
     tasks = {task["id"]: task for task in json.loads((HERE / "tasks.json").read_text(encoding="utf-8"))}
     parser = argparse.ArgumentParser()
     parser.add_argument("--task", required=True, choices=sorted(tasks))
-    parser.add_argument("--language", required=True, choices=("nava", "cpp"))
+    parser.add_argument("--language", required=True, choices=("nava", "c", "cpp"))
     args = parser.parse_args()
-    guide = NAVA_GUIDE if args.language == "nava" else CPP_GUIDE
+    guides = {"nava": NAVA_GUIDE, "c": C_GUIDE, "cpp": CPP_GUIDE}
+    guide = guides[args.language]
     print(guide.strip())
     print("\nTask: " + tasks[args.task]["description"])
     print("Print only the requested result, with a newline. Output source code only, without Markdown or explanation.")

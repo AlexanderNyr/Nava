@@ -1,0 +1,220 @@
+{
+  "schema": "nava-bench/1",
+  "workload": {
+    "program": "bench/loop.nv: x = (x * 1664525 + 1013904223) % 1000000007",
+    "iterations": 5000000,
+    "samples": 7,
+    "warmup_runs": 1,
+    "reference_iterations": [
+      0,
+      1,
+      100
+    ],
+    "order_policy": "rotated by sample index; warm-up runs precede all samples",
+    "tokenizer": null,
+    "run_order": [
+      [
+        "Nava",
+        "C++ checked",
+        "C++ unchecked"
+      ],
+      [
+        "C++ checked",
+        "C++ unchecked",
+        "Nava"
+      ],
+      [
+        "C++ unchecked",
+        "Nava",
+        "C++ checked"
+      ],
+      [
+        "Nava",
+        "C++ checked",
+        "C++ unchecked"
+      ],
+      [
+        "C++ checked",
+        "C++ unchecked",
+        "Nava"
+      ],
+      [
+        "C++ unchecked",
+        "Nava",
+        "C++ checked"
+      ],
+      [
+        "Nava",
+        "C++ checked",
+        "C++ unchecked"
+      ]
+    ]
+  },
+  "programs": [
+    {
+      "name": "Nava",
+      "source_path": "bench/loop.nv",
+      "source_bytes": 172,
+      "source_tokens": null,
+      "frontend_ms": 65.632,
+      "compile_ms": 57.053,
+      "compile_parts_ms": {
+        "nava_frontend_and_emit_c": 65.632,
+        "cc": 57.053
+      },
+      "startup_ms": 1.278,
+      "runs_ms": [
+        25.457,
+        26.295,
+        25.821,
+        25.719,
+        25.616,
+        25.709,
+        25.433
+      ],
+      "median_ms": 25.709,
+      "mean_ms": 25.721,
+      "min_ms": 25.433,
+      "max_ms": 26.295,
+      "stdev_ms": 0.29,
+      "output": "723413853"
+    },
+    {
+      "name": "C++ checked",
+      "source_path": "bench/loop_checked.cpp",
+      "source_bytes": 769,
+      "source_tokens": null,
+      "frontend_ms": null,
+      "compile_ms": 59.883,
+      "compile_parts_ms": {
+        "cxx": 59.883
+      },
+      "startup_ms": 1.211,
+      "runs_ms": [
+        24.242,
+        24.529,
+        24.458,
+        24.315,
+        24.262,
+        24.307,
+        24.336
+      ],
+      "median_ms": 24.315,
+      "mean_ms": 24.35,
+      "min_ms": 24.242,
+      "max_ms": 24.529,
+      "stdev_ms": 0.105,
+      "output": "723413853"
+    },
+    {
+      "name": "C++ unchecked",
+      "source_path": "bench/loop_unchecked.cpp",
+      "source_bytes": 295,
+      "source_tokens": null,
+      "frontend_ms": null,
+      "compile_ms": 52.655,
+      "compile_parts_ms": {
+        "cxx": 52.655
+      },
+      "startup_ms": 1.214,
+      "runs_ms": [
+        24.241,
+        24.209,
+        24.72,
+        24.379,
+        24.287,
+        24.339,
+        24.292
+      ],
+      "median_ms": 24.292,
+      "mean_ms": 24.352,
+      "min_ms": 24.209,
+      "max_ms": 24.72,
+      "stdev_ms": 0.172,
+      "output": "723413853"
+    }
+  ],
+  "reference_check": {
+    "ok": true,
+    "cases": [
+      {
+        "program": "Nava",
+        "iterations": 0,
+        "ok": true
+      },
+      {
+        "program": "Nava",
+        "iterations": 1,
+        "ok": true
+      },
+      {
+        "program": "Nava",
+        "iterations": 100,
+        "ok": true
+      },
+      {
+        "program": "C++ checked",
+        "iterations": 0,
+        "ok": true
+      },
+      {
+        "program": "C++ checked",
+        "iterations": 1,
+        "ok": true
+      },
+      {
+        "program": "C++ checked",
+        "iterations": 100,
+        "ok": true
+      },
+      {
+        "program": "C++ unchecked",
+        "iterations": 0,
+        "ok": true
+      },
+      {
+        "program": "C++ unchecked",
+        "iterations": 1,
+        "ok": true
+      },
+      {
+        "program": "C++ unchecked",
+        "iterations": 100,
+        "ok": true
+      }
+    ]
+  },
+  "failures": [],
+  "model_measurements": {
+    "status": "not-measured",
+    "note": "this script never calls a model; generation time and token usage are not estimated",
+    "prompt_tokens": null,
+    "completion_tokens": null,
+    "generation_ms": null
+  },
+  "environment": {
+    "recorded_at_utc": "2026-10-27T14:10:26+00:00",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.41",
+    "system": "Linux",
+    "release": "6.1.158+",
+    "machine": "x86_64",
+    "processor": null,
+    "cpu_count": 2,
+    "python": "3.13.16",
+    "python_implementation": "CPython",
+    "cc_command": [
+      "cc"
+    ],
+    "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
+    "cxx_command": [
+      "c++"
+    ],
+    "cxx_version": "c++ (Debian 14.2.0-19) 14.2.0",
+    "flags": {
+      "nava": "-std=c11 -O2 (via nava), front end then cc",
+      "c": "not used: this benchmark compares Nava with C++",
+      "cpp": "-std=c++17 -O2"
+    },
+    "isolation": "none: timings are from a shared, non-isolated host"
+  }
+}

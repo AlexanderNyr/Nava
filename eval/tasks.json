@@ -122,5 +122,125 @@
         "stdout": "7540113804746346429\n"
       }
     ]
+  },
+  {
+    "id": "is_prime",
+    "description": "Read an integer n from 0 to 1000000. Print true if n is prime, otherwise false.",
+    "tests": [
+      {
+        "stdin": "0\n",
+        "stdout": "false\n"
+      },
+      {
+        "stdin": "1\n",
+        "stdout": "false\n"
+      },
+      {
+        "stdin": "2\n",
+        "stdout": "true\n"
+      },
+      {
+        "stdin": "4\n",
+        "stdout": "false\n"
+      },
+      {
+        "stdin": "7919\n",
+        "stdout": "true\n"
+      },
+      {
+        "stdin": "999983\n",
+        "stdout": "true\n"
+      }
+    ]
+  },
+  {
+    "id": "digit_sum",
+    "description": "Read an integer n from 0 to 1000000000. Print the sum of its decimal digits.",
+    "tests": [
+      {
+        "stdin": "0\n",
+        "stdout": "0\n"
+      },
+      {
+        "stdin": "7\n",
+        "stdout": "7\n"
+      },
+      {
+        "stdin": "10\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "12345\n",
+        "stdout": "15\n"
+      },
+      {
+        "stdin": "999999999\n",
+        "stdout": "81\n"
+      },
+      {
+        "stdin": "1000000000\n",
+        "stdout": "1\n"
+      }
+    ]
+  },
+  {
+    "id": "max_of_three",
+    "description": "Read three integers a, b and c, each from -1000000000 to 1000000000. Print the largest of them.",
+    "tests": [
+      {
+        "stdin": "1 2 3\n",
+        "stdout": "3\n"
+      },
+      {
+        "stdin": "3 2 1\n",
+        "stdout": "3\n"
+      },
+      {
+        "stdin": "5 5 5\n",
+        "stdout": "5\n"
+      },
+      {
+        "stdin": "-7 -3 -9\n",
+        "stdout": "-3\n"
+      },
+      {
+        "stdin": "-1 0 1\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "1000000000 -1000000000 0\n",
+        "stdout": "1000000000\n"
+      }
+    ]
+  },
+  {
+    "id": "collatz_steps",
+    "description": "Read an integer n from 1 to 1000000. Print how many steps the Collatz process needs to reach 1, where an even n becomes n/2 and an odd n becomes 3n+1. Print 0 for n=1.",
+    "tests": [
+      {
+        "stdin": "1\n",
+        "stdout": "0\n"
+      },
+      {
+        "stdin": "2\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "3\n",
+        "stdout": "7\n"
+      },
+      {
+        "stdin": "6\n",
+        "stdout": "8\n"
+      },
+      {
+        "stdin": "27\n",
+        "stdout": "111\n"
+      },
+      {
+        "stdin": "1000000\n",
+        "stdout": "152\n"
+      }
+    ]
   }
 ]

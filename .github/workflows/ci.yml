@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The required lane installs the C and C++ compilers explicitly and fails if
+  # the registry guard finds them absent: a skipped runtime test is not a pass.
+  required:
+    name: required (python ${{ matrix.python }}, ${{ matrix.compiler }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12", "3.13"]
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install native toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc g++ clang
+          echo "CC=${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}" >> "$GITHUB_ENV"
+          echo "CXX=${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}" >> "$GITHUB_ENV"
+
+      - name: Show tool versions
+        run: |
+          python3 --version
+          "$CC" --version | head -1
+          "$CXX" --version | head -1
+
+      - name: Registry and fixture guard
+        run: python3 tests/registry.py
+
+      - name: Test suite (no skipped tests allowed)
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Cross-language GCD verification
+        run: python3 experiment/verify.py
+
+      - name: Evaluation fixtures agree with the independent reference
+        run: python3 eval/reference.py --check
+
+  # A separate lane documents the fail-closed behaviour: with no C compiler the
+  # guard must fail rather than quietly skipping the runtime tests.
+  guard-fails-without-compilers:
+    name: guard fails without compilers
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Registry guard must reject a host without cc and c++
+        run: |
+          mkdir -p "$RUNNER_TEMP/empty-bin"
+          if PATH="$RUNNER_TEMP/empty-bin" python3 tests/registry.py; then
+            echo "::error::the registry guard passed without a C compiler"
+            exit 1
+          fi
+          echo "guard correctly failed without compilers"
+
+  # Packaging lane: a clean install must provide the `nava` console script.
+  package:
+    name: packaging
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --upgrade pip build
+      - run: python3 -m build
+      - name: Install the wheel in a clean environment
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
+          "$RUNNER_TEMP/venv/bin/nava" --version
+          printf 'fn main() { print("ok") }\n' > "$RUNNER_TEMP/hello.nv"
+          "$RUNNER_TEMP/venv/bin/nava" run "$RUNNER_TEMP/hello.nv"
+
+  # Benchmark record lane: the script must produce a valid machine-readable
+  # record. It is not a performance gate and results are not compared here.
+  benchmark:
+    name: benchmark record
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc g++
+      - name: Produce a record
+        run: python3 bench/run.py --iterations 100000 --samples 3 --json "$RUNNER_TEMP/bench.json"
+      - name: Validate the record
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, os
+          record = json.loads(pathlib.Path(os.environ["RUNNER_TEMP"], "bench.json").read_text())
+          assert record["schema"] == "nava-bench/1"
+          assert record["failures"] == []
+          assert record["reference_check"]["ok"] is True
+          assert record["model_measurements"]["status"] == "not-measured"
+          assert all(program["runs_ms"] for program in record["programs"])
+          print("benchmark record is valid")
+          PY

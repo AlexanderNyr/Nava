@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nava-lang"
+version = "0.1.0"
+description = "Nava: an experimental, statically checked language that compiles to C11"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C",
+    "Topic :: Software Development :: Compilers",
+]
+
+[project.optional-dependencies]
+tokens = ["tiktoken"]
+hf = ["transformers"]
+
+[project.scripts]
+nava = "nava_lang.cli:main"
+
+# The compiler is a plain Python package with no third-party dependencies.
+# A C11 compiler (cc, gcc or clang) is required at run time for `build`/`run`;
+# it is not a Python dependency and is therefore declared only in prose.
+[tool.setuptools]
+packages = ["nava_lang"]
