@@ -1,0 +1,80 @@
+{
+  "note": "Executable examples referenced by LANGUAGE.md. Each program is compiled and run by tests/test_spec.py; stdin, stdout and the exit status must match.",
+  "cases": [
+    {
+      "file": "hello.nv",
+      "stdin": "",
+      "stdout": "Hello, world!\n",
+      "exit_code": 0
+    },
+    {
+      "file": "arithmetic.nv",
+      "stdin": "",
+      "stdout": "14\n-2\n-1\n-2\n1\n1000000000000\n-9223372036854775808\n9223372036854775807\n",
+      "exit_code": 0
+    },
+    {
+      "file": "strings.nv",
+      "stdin": "",
+      "stdout": "tab\there\nemoji 😀\ntrue\ntrue\ntrue\n",
+      "exit_code": 0
+    },
+    {
+      "file": "scoping.nv",
+      "stdin": "",
+      "stdout": "6\n5\n",
+      "exit_code": 0
+    },
+    {
+      "file": "functions.nv",
+      "stdin": "",
+      "stdout": "55\n1\n2\n3\n6\n",
+      "exit_code": 0
+    },
+    {
+      "file": "short_circuit.nv",
+      "stdin": "",
+      "stdout": "false\ntrue\ncalled\ntrue\n",
+      "exit_code": 0
+    },
+    {
+      "file": "while_recheck.nv",
+      "stdin": "",
+      "stdout": "0\n1\n2\n",
+      "exit_code": 0
+    },
+    {
+      "file": "read_i64.nv",
+      "stdin": "  40\n+2 ",
+      "stdout": "42\n",
+      "exit_code": 0
+    },
+    {
+      "file": "exit_code.nv",
+      "stdin": "",
+      "stdout": "",
+      "exit_code": 44
+    },
+    {
+      "file": "runtime_overflow.nv",
+      "stdin": "",
+      "stdout": "",
+      "exit_code": 1,
+      "stderr_contains": "i64 overflow in +"
+    },
+    {
+      "file": "runtime_div_zero.nv",
+      "stdin": "",
+      "stdout": "",
+      "exit_code": 1,
+      "stderr_contains": "division by zero"
+    },
+    {
+      "file": "runtime_bad_input.nv",
+      "stdin": "12x",
+      "stdout": "",
+      "exit_code": 1,
+      "stderr_contains": "invalid character in i64 input"
+    }
+  ]
+}

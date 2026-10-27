@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+Phase N1 of `PLAN.md` (language specification and diagnostics).
+
+- Stable diagnostic codes: 51 registered codes (`E01xx` lexer, `E02xx` parser,
+  `E03xx` semantics, `E04xx` limits, `E05xx` command line, `W00xx` warnings) in
+  `nava_lang/diagnostics.py`. An existing code never changes meaning; building
+  an unregistered code raises instead of silently printing it.
+- Source ranges: `NavaError` and `Diagnostic` carry a start location and an
+  exclusive end. Identifier diagnostics point at the identifier, not at the
+  statement keywords (`let`, `fn`).
+- `--format json`: one JSON document on stdout with `status`, `path` and
+  `diagnostics[]` entries containing `code`, `severity`, `title`, `message`,
+  `path`, `range` and `hint`. Human output is unchanged apart from the
+  `severity[CODE]` prefix and an optional `hint:` line.
+- New `W0001` warning for unreachable statements, reported on stderr and in the
+  JSON document; the program still compiles and runs.
+- `nava_lang/limits.py`: `MAX_NESTING = 200`, `MAX_LITERAL_DIGITS = 19`,
+  `I64_MIN`/`I64_MAX` as the single source of truth, enforced by the parser and
+  the checker. Pathologically nested input, unary chains and long
+  left-associative expression trees now raise `E0401` instead of a Python
+  `RecursionError`; the CLI converts any escaped `RecursionError` into `E0402`.
+- `LANGUAGE.md` rewritten as specification version 1: EBNF grammar, lexical
+  rules, evaluation order, checked arithmetic, exit statuses, warnings,
+  documented limits and the complete code table. Its `nava` examples are
+  compiled by the test suite.
+- `tests/test_spec.py` (23 tests) and `tests/fixtures/`: 47 negative fixtures
+  asserting code, line, column and message; 12 positive fixtures asserting
+  stdout and exit status; one warning fixture; fuzzing over random token soup
+  and mutations of valid programs; documentation/limit/exit-status conformance.
+- `tests/registry.py` extended with fixture counts, diagnostic-code coverage
+  (every code needs a fixture, a documented test and a `LANGUAGE.md` entry) and
+  the new test classes. Tests: 37 -> 62.
+
+## N0 (phase N0)
+
 Phase N0 of `PLAN.md` (measurement rig and test integrity), plus the packaging
 parts of N9 that the N0 gate depends on.
 

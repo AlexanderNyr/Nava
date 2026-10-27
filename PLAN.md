@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0 DELIVERED — N1–N9 planned
+## Status: N0 and N1 DELIVERED — N2–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -13,10 +13,11 @@ This document answers one question:
 > correctness and end-to-end latency measured rather than inferred from short
 > source files?
 
-Phase N0 (measurement rig and test integrity) is delivered: see
-[§4.1](#phase-n0--measurement-rig-and-test-integrity) for the evidence, the
-commands that produce it and the two items that are deliberately left to N2 and
-to a held-out test set.
+Phases N0 (measurement rig and test integrity) and N1 (language specification
+and diagnostics) are delivered: see the delivery records in
+[§4.1](#phase-n0--measurement-rig-and-test-integrity) and
+[§4.2](#phase-n1--language-specification-and-diagnostics) for the evidence, the
+commands that produce it and the items that are deliberately left open.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -33,9 +34,9 @@ identify the baseline, not a claim about a published release.
 
 | Area | Present in the tree | Limit or missing evidence |
 |---|---|---|
-| Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands | Python front end and external C compiler are required to build |
-| Language | `i64`, `bool`, `str`, functions, conditions, `while`, checked arithmetic and integer I/O | No arrays, `for`, floating point, imports, file API or package system |
-| Correctness | `python3 -m unittest discover -s tests -v`: 37 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture or required compiler is missing | Hidden tests are not in this repository by design; no coverage measurement |
+| Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; `check`, `emit-c`, `build` and `run` commands; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build |
+| Language | `i64`, `bool`, `str`, functions, conditions, `while`, checked arithmetic and integer I/O; `LANGUAGE.md` is specification version 1 with EBNF, documented limits and executable examples | No arrays, `for`, floating point, imports, file API or package system |
+| Correctness | `python3 -m unittest discover -s tests -v`: 62 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code or required compiler is missing; 47 negative and 12 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
 | Model evaluation | `eval/prompt.py`, `eval/evaluate.py` for Nava, C and C++, eight public tasks with 49 cases, independent answers in `eval/reference.py`, optional tokenizer counts | No model API calls, held-out suite, measured model response time or measured pass rate |
@@ -99,7 +100,7 @@ complete by skipping its gate.
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
 | N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | **Delivered** |
-| N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | Planned |
+| N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | **Delivered** |
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | Planned |
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | Planned |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | Planned |
@@ -205,16 +206,28 @@ contract and get actionable errors without a compiler traceback.
 
 #### Tasks
 
-- [ ] Write a versioned grammar and examples matching `lexer.py` and
+- [x] Write a versioned grammar and examples matching `lexer.py` and
       `parser.py`, including newlines, comments, string escapes and reserved
       names. Specify types, scoping, short-circuiting, return analysis, checked
-      arithmetic and input/output behaviour.
-- [ ] Add stable error categories and source ranges; offer machine-readable
-      diagnostics alongside the existing human-readable form.
-- [ ] Bound parser and compiler recursion and report malformed or excessively
-      deep input as an ordinary diagnostic rather than a Python traceback.
-- [ ] Add negative fixtures for type errors, integer boundaries, malformed
-      UTF-8/escapes, missing names and invalid function signatures.
+      arithmetic and input/output behaviour. → `LANGUAGE.md` is now
+      *specification version 1* with an EBNF grammar, lexical rules, evaluation
+      order, checked arithmetic, exit statuses and documented limits; its
+      ```nava blocks are compiled by the test suite.
+- [x] Add stable error categories and source ranges; offer machine-readable
+      diagnostics alongside the existing human-readable form. → 51 registered
+      codes in `nava_lang/diagnostics.py`, `NavaError.diagnostic` with an
+      exclusive end location, and `nava --format json` emitting one JSON
+      document with `code`/`severity`/`title`/`message`/`range`/`hint`.
+- [x] Bound parser and compiler recursion and report malformed or excessively
+      deep input as an ordinary diagnostic rather than a Python traceback. →
+      `nava_lang/limits.py` (`MAX_NESTING = 200`) enforced by the parser and the
+      checker for parentheses, blocks, unary chains and expression-tree depth;
+      `E0401` for the limit, `E0402` as a CLI safety net. 20 000 nested
+      parentheses and 20 000-term chains now fail in well under a second.
+- [x] Add negative fixtures for type errors, integer boundaries, malformed
+      UTF-8/escapes, missing names and invalid function signatures. → 47
+      fixtures in `tests/fixtures/negative/` with recorded code, line, column,
+      message and hint; invalid UTF-8 is covered by its own test.
 
 #### Test gate
 
@@ -229,7 +242,30 @@ contract and get actionable errors without a compiler traceback.
 #### Deliverable
 
 An expanded `LANGUAGE.md`, compiler diagnostics in `nava_lang/` and executable
-specification/negative fixtures in `tests/`.
+specification/negative fixtures in `tests/`. **Delivered.** See the delivery
+record below.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Evidence | Result |
+|---|---|---|
+| Documented examples compile | `python3 -m unittest tests.test_spec -v` | 7 `nava` blocks in `LANGUAGE.md` type-check |
+| Documentation matches the code | `test_every_registered_code_is_documented`, `test_documented_limits_match_the_implementation`, `test_documented_exit_codes_match_the_cli` | 51/51 codes documented; limits and exit statuses agree |
+| Invalid input fails at the expected location with a stable code | `test_each_fixture_fails_with_the_recorded_diagnostic` | 47/47 fixtures match code, line, column, message and hint |
+| Code coverage of diagnostics | `test_fixtures_cover_every_code_except_documented_exceptions` | every code has a fixture or a named test |
+| No Python traceback on hostile input | `LimitTests`, `FuzzTests` | deep nesting/20 000-term chain → `E0401` < 1 s; 4 500 fuzz cases → only registered codes |
+| Warnings do not break the build | `tests/fixtures/warnings.json` | `W0001` on stderr, program still builds and runs |
+| Machine-readable diagnostics | `DiagnosticFormatTests` | stable JSON shape, exit 2 on error, `E0501`–`E0505` covered |
+| Registry gate extended | `python3 tests/registry.py` | `OK: 62 registered tests, 8 tasks with 49 cases, 60 spec fixtures, 51 diagnostic codes` |
+
+Seven negative controls were run by hand, each making the gate fail: changing a
+code in the implementation, moving a diagnostic location, disabling the nesting
+guard, deleting a code from `LANGUAGE.md`, breaking a documented example,
+changing a documented limit, and deleting a fixture file.
+
+Left open on purpose: `LANGUAGE.md` describes the language, not the compiler's
+performance; `E0402`, `E0501`–`E0505` cannot be produced by a source fixture and
+are covered by named tests instead.
 
 ---
 

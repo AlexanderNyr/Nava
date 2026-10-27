@@ -4,17 +4,65 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+class Severity:
+    """Diagnostic severities. Errors stop compilation; warnings do not."""
+
+    ERROR = "error"
+    WARNING = "warning"
+
+
 @dataclass(frozen=True)
 class Location:
     line: int
     column: int
 
+    def advance(self, text: str) -> "Location":
+        """End location of `text` when it starts at this location."""
+        line, column = self.line, self.column
+        for character in text:
+            if character == "\n":
+                line += 1
+                column = 1
+            else:
+                column += 1
+        return Location(line, column)
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    """A message with a stable code, a source range and an optional hint."""
+
+    code: str
+    severity: str
+    message: str
+    loc: Optional[Location] = None
+    end: Optional[Location] = None
+    hint: Optional[str] = None
+
 
 class NavaError(Exception):
-    def __init__(self, message: str, loc: Optional[Location] = None):
+    """A compilation error. `code` is a stable identifier from diagnostics.py."""
+
+    def __init__(self, message: str, loc: Optional[Location] = None,
+                 code: str = "E0000", end: Optional[Location] = None,
+                 hint: Optional[str] = None):
         super().__init__(message)
         self.message = message
         self.loc = loc
+        self.code = code
+        self.end = end
+        self.hint = hint
+
+    @property
+    def diagnostic(self) -> Diagnostic:
+        return Diagnostic(
+            code=self.code,
+            severity=Severity.ERROR,
+            message=self.message,
+            loc=self.loc,
+            end=self.end,
+            hint=self.hint,
+        )
 
 
 @dataclass(frozen=True)
@@ -88,6 +136,7 @@ class Let(Stmt):
     name: str
     annotation: Optional[str]
     value: Expr
+    name_loc: Optional[Location] = None
     symbol: Optional[Symbol] = field(default=None, init=False)
 
 
@@ -142,3 +191,4 @@ class Function:
 @dataclass
 class Program:
     functions: list[Function]
+    warnings: list[Diagnostic] = field(default_factory=list)

@@ -1,0 +1,11 @@
+fn keep(i: i64) -> bool {
+    print(i)
+    return i < 2
+}
+
+fn main() {
+    let i = 0
+    while keep(i) {
+        i = i + 1
+    }
+}

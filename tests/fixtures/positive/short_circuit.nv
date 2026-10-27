@@ -1,0 +1,10 @@
+fn probe() -> bool {
+    print("called")
+    return true
+}
+
+fn main() {
+    print(false && probe())
+    print(true || probe())
+    print(true && probe())
+}

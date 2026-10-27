@@ -30,6 +30,11 @@ explicit function types, inferred local types and checked arithmetic.
 - A C11 backend, a native build command, runnable examples and host-side tests.
 - A registry guard that fails when a test, task fixture or required compiler is
   missing, instead of reporting skipped tests as a pass (`tests/registry.py`).
+- Stable diagnostic codes with source ranges and hints, plus `--format json`
+  for machine-readable diagnostics (`nava_lang/diagnostics.py`).
+- An executable specification: every example in [`LANGUAGE.md`](LANGUAGE.md)
+  type-checks, 47 invalid fixtures assert the exact code and location, and 12
+  positive fixtures assert output and exit status (`tests/test_spec.py`).
 
 ### Not implemented
 
@@ -93,6 +98,9 @@ Save it as `sum.nv` and run `python3 nava run sum.nv`; it prints `5050`.
 # Parse and check types without invoking the C compiler.
 python3 nava check examples/sum.nv
 
+# The same diagnostic as one JSON document, for tools and repair loops.
+python3 nava --format json check examples/sum.nv
+
 # Compile and run; optionally limit the program's execution time.
 python3 nava run examples/sum.nv --timeout 2
 
@@ -103,8 +111,11 @@ printf '48 18\n' | ./gcd       # 6
 # Inspect the generated C.
 python3 nava emit-c examples/gcd.nv -o gcd.c
 
-# Run the compiler, runtime, evaluation, benchmark and registry tests.
+# Run the compiler, runtime, evaluation, benchmark, specification and registry tests.
 python3 -m unittest discover -s tests -v
+
+# Only the executable specification: documented examples, fixtures, limits, fuzzing.
+python3 -m unittest tests.test_spec -v
 
 # Fail, rather than skip, when a registered test, task fixture or required
 # compiler is missing. CI runs this before the suite.
@@ -115,6 +126,14 @@ python3 tests/registry.py
 runtime measurements; the resulting binary does not need Python to run. The
 default optimization level is `-O2`; choose `--opt 0`, `--opt 2` or `--opt 3`
 to change it. Set `CC` or pass `--cc` to select the C compiler.
+
+Diagnostics are `path:line:column: severity[CODE]: message`, with an optional
+`hint:` line. Codes are stable and documented in
+[`LANGUAGE.md`](LANGUAGE.md#diagnostic-codes); `--format json` prints a single
+JSON document with `code`, `severity`, `title`, `message`, `range` and `hint`
+instead. Syntax and type errors exit with status 2. Pathologically nested input
+is reported as `E0401` rather than crashing the compiler: the documented
+nesting limit is 200 (`nava_lang/limits.py`).
 
 ---
 
@@ -159,10 +178,12 @@ when evaluating C++, which can access the host system.
 
 | Path | Purpose |
 |---|---|
-| `nava_lang/` | Lexer, parser, type checker, C generator and CLI |
+| `nava_lang/` | Lexer, parser, type checker, C generator, diagnostics, limits and CLI |
 | `examples/` | Runnable Nava programs |
 | `tests/` | Compiler, runtime, evaluation and registry tests using `unittest` |
-| `tests/registry.py` | Suite and fixture registry guard; fails on missing tests or tools |
+| `tests/registry.py` | Suite and fixture registry guard; fails on missing tests, fixtures, codes or tools |
+| `tests/test_spec.py` | Executable specification: documented examples, fixtures, limits, fuzzing |
+| `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |
 | `eval/` | Prompts, tasks, reference answers and tests for saved model responses |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |

@@ -1,0 +1,13 @@
+{
+  "note": "Programs that must compile but produce a registered warning. Warnings are non-fatal: the program still builds and runs.",
+  "cases": [
+    {
+      "file": "unreachable.nv",
+      "code": "W0001",
+      "line": 3,
+      "message": "unreachable statement",
+      "stdout": "1\n",
+      "exit_code": 0
+    }
+  ]
+}

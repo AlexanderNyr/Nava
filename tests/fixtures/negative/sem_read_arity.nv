@@ -1,0 +1,1 @@
+fn main() { read_i64(1) }

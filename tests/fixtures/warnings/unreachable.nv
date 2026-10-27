@@ -1,0 +1,8 @@
+fn f() -> i64 {
+    return 1
+    print("dead")
+}
+
+fn main() {
+    print(f())
+}

@@ -1,0 +1,11 @@
+fn echo(s: str) -> str {
+    return s
+}
+
+fn main() {
+    print("tab\there")
+    print(echo("emoji 😀"))
+    print("caf\u00e9" == echo("café"))
+    print("one" != "two")
+    print("" == "")
+}

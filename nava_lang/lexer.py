@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import re
 
-from .model import Location, NavaError, Token
+from .diagnostics import make
+from .limits import MAX_LITERAL_DIGITS
+from .model import Location, Token
 
 
 KEYWORDS = {
@@ -12,7 +14,6 @@ KEYWORDS = {
 }
 TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||"}
 ONE_CHAR = set("(){}:,+-*/%=!<>;")
-
 
 def lex(source: str) -> list[Token]:
     source = source.replace("\r\n", "\n").replace("\r", "\n")
@@ -42,7 +43,7 @@ def lex(source: str) -> list[Token]:
             j = i + 1
             while j < n:
                 if source[j] == "\n":
-                    raise NavaError("a string cannot contain a literal newline; use \\n", loc)
+                    raise make("E0103", "a string cannot contain a literal newline; use \\n", loc)
                 if source[j] == "\\":
                     j += 2
                     continue
@@ -50,18 +51,19 @@ def lex(source: str) -> list[Token]:
                     break
                 j += 1
             if j >= n:
-                raise NavaError("unterminated string", loc)
+                raise make("E0102", "unterminated string", loc)
             raw = source[start:j + 1]
             try:
                 value = json.loads(raw)
             except (ValueError, json.JSONDecodeError) as exc:
-                raise NavaError("invalid string escape", loc) from exc
+                raise make("E0104", "invalid string escape", loc, loc.advance(raw)) from exc
             if "\x00" in value:
-                raise NavaError("strings cannot contain a NUL character", loc)
+                raise make("E0105", "strings cannot contain a NUL character", loc, loc.advance(raw))
             try:
                 value.encode("utf-8")
             except UnicodeEncodeError as exc:
-                raise NavaError("string contains an invalid Unicode surrogate", loc) from exc
+                raise make("E0106", "string contains an invalid Unicode surrogate",
+                           loc, loc.advance(raw)) from exc
             tokens.append(Token("STRING", value, loc))
             width = j + 1 - i
             i = j + 1
@@ -71,12 +73,15 @@ def lex(source: str) -> list[Token]:
             while i < n and (("0" <= source[i] <= "9") or source[i] == "_"):
                 i += 1
             raw = source[start:i]
+            end = loc.advance(raw)
             if not re.fullmatch(r"[0-9]+(?:_[0-9]+)*", raw):
-                raise NavaError("invalid underscore in integer literal", loc)
+                raise make("E0107", "invalid underscore in integer literal", loc, end,
+                           "digits may be separated by single underscores, as in 1_000_000")
             digits = raw.replace("_", "").lstrip("0") or "0"
             # Reject enormous literals before int() hits Python's digit limit.
-            if len(digits) > 19:
-                raise NavaError("integer literal is outside the i64 range", loc)
+            if len(digits) > MAX_LITERAL_DIGITS:
+                raise make("E0108", "integer literal is outside the i64 range", loc, end,
+                           "i64 holds -9223372036854775808 to 9223372036854775807")
             tokens.append(Token("NUMBER", int(digits), loc))
             col += i - start
         elif ("a" <= ch <= "z") or ("A" <= ch <= "Z") or ch == "_":
@@ -96,14 +101,15 @@ def lex(source: str) -> list[Token]:
                 parens.append(loc)
             elif ch == ")":
                 if not parens:
-                    raise NavaError("unmatched ')'", loc)
+                    raise make("E0109", "unmatched ')'", loc, loc.advance(")"))
                 parens.pop()
             tokens.append(Token(ch, ch, loc))
             i += 1
             col += 1
         else:
-            raise NavaError(f"unexpected character {ch!r}", loc)
+            raise make("E0101", f"unexpected character {ch!r}", loc, loc.advance(ch),
+                       "identifiers use ASCII letters, digits and '_'")
     if parens:
-        raise NavaError("unclosed '('", parens[-1])
+        raise make("E0110", "unclosed '('", parens[-1], parens[-1].advance("("))
     tokens.append(Token("EOF", "", Location(line, col)))
     return tokens

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from .diagnostics import make
 from .lexer import lex
+from .limits import I64_MAX, MAX_NESTING
 from .model import (
     Assign, Binary, Boolean, Call, Expr, ExprStmt, Function, If, Let,
-    NavaError, Number, Param, Program, Return, String, Token, Unary,
+    Number, Param, Program, Return, String, Token, Unary,
     Variable, While,
 )
 
@@ -13,13 +15,26 @@ PRECEDENCE = {
     "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
 }
 TYPES = {"i64", "bool", "str", "void"}
-I64_MAX = 2**63 - 1
 
 
 class Parser:
     def __init__(self, tokens: list[Token]):
         self.tokens = tokens
         self.i = 0
+        self.depth = 0
+
+    def enter(self, loc) -> None:
+        self.depth += 1
+        if self.depth > MAX_NESTING:
+            raise make(
+                "E0401",
+                f"nesting is deeper than the supported limit of {MAX_NESTING}",
+                loc,
+                hint="simplify the expression or split it into named functions",
+            )
+
+    def leave(self) -> None:
+        self.depth -= 1
 
     @property
     def current(self) -> Token:
@@ -38,7 +53,13 @@ class Parser:
     def expect(self, kind: str, description: str | None = None) -> Token:
         if not self.at(kind):
             actual = "end of file" if self.at("EOF") else repr(self.current.value)
-            raise NavaError(f"expected {description or repr(kind)}, got {actual}", self.current.loc)
+            text = "" if self.at("EOF") else str(self.current.value)
+            raise make(
+                "E0201",
+                f"expected {description or repr(kind)}, got {actual}",
+                self.current.loc,
+                self.current.loc.advance(text),
+            )
         token = self.current
         self.i += 1
         return token
@@ -51,12 +72,14 @@ class Parser:
         if self.at("NL") or self.at(";"):
             self.separators()
         elif not self.at("}") and not self.at("EOF"):
-            raise NavaError("expected a newline, ';', or '}' after statement", self.current.loc)
+            raise make("E0202", "expected a newline, ';', or '}' after statement",
+                       self.current.loc, hint="end the statement with a newline or ';'")
 
     def parse_type(self) -> str:
         token = self.expect("IDENT", "a type (i64, bool, str, or void)")
         if token.value not in TYPES:
-            raise NavaError(f"unknown type {token.value!r}; use i64, bool, str, or void", token.loc)
+            raise make("E0203", f"unknown type {token.value!r}; use i64, bool, str, or void",
+                       token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
 
     def parse(self) -> Program:
@@ -88,15 +111,20 @@ class Parser:
 
     def block(self) -> list:
         self.separators()
-        self.expect("{")
-        body = []
-        self.separators()
-        while not self.at("}"):
-            if self.at("EOF"):
-                raise NavaError("expected '}' before end of file", self.current.loc)
-            body.append(self.statement())
+        opening = self.expect("{")
+        self.enter(opening.loc)
+        try:
+            body = []
             self.separators()
-        self.expect("}")
+            while not self.at("}"):
+                if self.at("EOF"):
+                    raise make("E0204", "expected '}' before end of file", self.current.loc,
+                               hint=f"the block opened at line {opening.loc.line} is not closed")
+                body.append(self.statement())
+                self.separators()
+            self.expect("}")
+        finally:
+            self.leave()
         return body
 
     def statement(self):
@@ -107,7 +135,7 @@ class Parser:
             self.expect("=")
             value = self.expression()
             self.end_statement()
-            return Let(token.loc, str(name.value), annotation, value)
+            return Let(token.loc, str(name.value), annotation, value, name.loc)
         if self.at("IF"):
             return self.if_statement()
         if self.take("WHILE"):
@@ -156,9 +184,17 @@ class Parser:
             if self.at("NUMBER") and self.current.value == 2**63:
                 self.i += 1
                 return Number(token.loc, -(2**63))
-            return Unary(token.loc, "-", self.unary())
+            self.enter(token.loc)
+            try:
+                return Unary(token.loc, "-", self.unary())
+            finally:
+                self.leave()
         if self.take("!"):
-            return Unary(token.loc, "!", self.unary())
+            self.enter(token.loc)
+            try:
+                return Unary(token.loc, "!", self.unary())
+            finally:
+                self.leave()
         return self.primary()
 
     def primary(self) -> Expr:
@@ -166,7 +202,9 @@ class Parser:
         if self.take("NUMBER"):
             value = int(token.value)
             if value > I64_MAX:
-                raise NavaError("integer literal is outside the i64 range", token.loc)
+                raise make("E0108", "integer literal is outside the i64 range", token.loc,
+                           token.loc.advance(str(token.value)),
+                           "i64 holds -9223372036854775808 to 9223372036854775807")
             return Number(token.loc, value)
         if self.take("STRING"):
             return String(token.loc, str(token.value))
@@ -186,10 +224,14 @@ class Parser:
                 return Call(token.loc, name, args)
             return Variable(token.loc, name)
         if self.take("("):
-            result = self.expression()
-            self.expect(")")
-            return result
-        raise NavaError("expected an expression", token.loc)
+            self.enter(token.loc)
+            try:
+                result = self.expression()
+                self.expect(")")
+                return result
+            finally:
+                self.leave()
+        raise make("E0205", "expected an expression", token.loc)
 
 
 def parse(source: str) -> Program:

@@ -1,0 +1,20 @@
+fn fib(n: i64) -> i64 {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn mark(n: i64) -> i64 {
+    print(n)
+    return n
+}
+
+fn add(a: i64, b: i64) -> i64 {
+    return a + b
+}
+
+fn main() {
+    print(fib(10))
+    print(add(mark(1), mark(2)) + mark(3))
+}

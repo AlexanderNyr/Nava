@@ -30,6 +30,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from eval.reference import REFERENCE, check as check_reference  # noqa: E402
+from nava_lang.diagnostics import CODES  # noqa: E402
 
 #: Tools that the runtime, evaluation and benchmark gates require.  A missing
 #: tool must fail the guard: skipped runtime tests are not a passing suite.
@@ -78,10 +79,49 @@ REGISTERED_TESTS = {
     "BenchTests": {
         "test_json_record_has_environment_samples_and_missing_model_fields",
     },
+    "SpecDocumentationTests": {
+        "test_documented_examples_typecheck",
+        "test_referenced_fixtures_exist",
+        "test_every_registered_code_is_documented",
+        "test_documented_limits_match_the_implementation",
+        "test_documented_exit_codes_match_the_cli",
+    },
+    "NegativeFixtureTests": {
+        "test_fixture_files_and_entries_agree",
+        "test_each_fixture_fails_with_the_recorded_diagnostic",
+        "test_fixtures_cover_every_code_except_documented_exceptions",
+        "test_invalid_utf8_source_is_reported",
+    },
+    "WarningFixtureTests": {
+        "test_warning_is_reported_and_is_not_fatal",
+    },
+    "PositiveFixtureTests": {
+        "test_fixture_files_and_entries_agree",
+        "test_each_fixture_runs_and_matches_the_recorded_output",
+    },
+    "DiagnosticFormatTests": {
+        "test_human_format_is_path_line_column_code_message",
+        "test_json_report_shape_is_stable",
+        "test_json_success_report_and_warnings",
+        "test_cli_diagnostics_are_registered",
+        "test_unregistered_code_is_rejected_by_the_builder",
+    },
+    "LimitTests": {
+        "test_nesting_below_the_limit_is_accepted",
+        "test_nesting_above_the_limit_reports_e0401",
+        "test_pathological_input_terminates_quickly",
+        "test_recursion_safety_net_reports_e0402",
+    },
+    "FuzzTests": {
+        "test_random_token_soup_only_produces_diagnostics",
+        "test_mutated_valid_programs_only_produce_diagnostics",
+    },
     "RegistryTests": {
         "test_registered_tests_are_present_and_not_skipped",
         "test_required_tools_are_present",
         "test_task_fixtures_match_registry_and_reference",
+        "test_diagnostics_registry_is_complete",
+        "test_spec_fixtures_are_registered",
         "test_registry_module_guard_passes",
     },
 }
@@ -102,6 +142,25 @@ REGISTERED_TASKS = {
 #: Candidate languages the evaluator must support, with a labelled arithmetic
 #: contract.  `eval/evaluate.py` records the matching label in each report.
 REGISTERED_LANGUAGES = ("nava", "c", "cpp")
+
+#: Executable-specification fixture directories and their expected sizes.
+REGISTERED_FIXTURE_DIRS = {
+    "tests/fixtures/negative": 47,
+    "tests/fixtures/positive": 12,
+    "tests/fixtures/warnings": 1,
+}
+
+#: Diagnostic codes that no source fixture can produce, with the test that
+#: covers them instead. Mirrors `tests/test_spec.py`.
+CODES_TESTED_ELSEWHERE = {
+    "E0111": "tests/test_spec.py: test_invalid_utf8_source_is_reported",
+    "E0402": "tests/test_spec.py: test_recursion_safety_net_reports_e0402",
+    "E0501": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+    "E0502": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+    "E0503": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+    "E0504": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+    "E0505": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+}
 
 
 def tasks_path() -> Path:
@@ -126,9 +185,10 @@ def discovered_tests() -> dict[str, set[str]]:
         sys.path.insert(0, str(ROOT / "tests"))
     import test_nava  # noqa: PLC0415  (import after sys.path setup)
     import test_registry  # noqa: PLC0415
+    import test_spec  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_nava, test_registry):
+    for module in (test_nava, test_registry, test_spec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -221,6 +281,49 @@ def check_languages() -> list[str]:
     return problems
 
 
+def check_fixtures() -> list[str]:
+    problems: list[str] = []
+    for directory, expected in REGISTERED_FIXTURE_DIRS.items():
+        path = ROOT / directory
+        if not path.is_dir():
+            problems.append(f"{directory}: fixture directory is missing")
+            continue
+        found = sorted(item.name for item in path.glob("*.nv"))
+        if len(found) != expected:
+            problems.append(f"{directory}: registered {expected} fixtures, found {len(found)}")
+    for manifest, directory in (("tests/fixtures/negative.json", "tests/fixtures/negative"),
+                                ("tests/fixtures/positive.json", "tests/fixtures/positive"),
+                                ("tests/fixtures/warnings.json", "tests/fixtures/warnings")):
+        path = ROOT / manifest
+        if not path.is_file():
+            problems.append(f"{manifest}: manifest is missing")
+            continue
+        listed = {case["file"] for case in json.loads(path.read_text(encoding="utf-8"))["cases"]}
+        on_disk = {item.name for item in (ROOT / directory).glob("*.nv")}
+        for missing in sorted(listed - on_disk):
+            problems.append(f"{manifest}: {missing} has no fixture file")
+        for extra in sorted(on_disk - listed):
+            problems.append(f"{manifest}: {extra} has no expectation")
+    return problems
+
+
+def check_diagnostics() -> list[str]:
+    """Every registered code needs a fixture, a documented test or a language entry."""
+    problems: list[str] = []
+    negative = json.loads((ROOT / "tests/fixtures/negative.json").read_text(encoding="utf-8"))
+    warnings = json.loads((ROOT / "tests/fixtures/warnings.json").read_text(encoding="utf-8"))
+    covered = {case["code"] for case in negative["cases"]} | {case["code"] for case in warnings["cases"]}
+    for code in sorted(set(CODES) - covered - set(CODES_TESTED_ELSEWHERE)):
+        problems.append(f"{code} ({CODES[code][1]}): no fixture and no documented test")
+    for code in sorted(set(CODES_TESTED_ELSEWHERE) - set(CODES)):
+        problems.append(f"{code}: listed as tested elsewhere but not registered in CODES")
+    language = (ROOT / "LANGUAGE.md").read_text(encoding="utf-8")
+    for code in sorted(CODES):
+        if code not in language:
+            problems.append(f"{code}: not documented in LANGUAGE.md")
+    return problems
+
+
 def verify() -> list[str]:
     """Return every problem found; an empty list means the gate passes."""
     problems: list[str] = []
@@ -239,6 +342,8 @@ def verify() -> list[str]:
     problems.extend(check_registered_tests())
     problems.extend(check_tasks())
     problems.extend(check_languages())
+    problems.extend(check_fixtures())
+    problems.extend(check_diagnostics())
     return problems
 
 
@@ -250,8 +355,10 @@ def main() -> int:
         return 1
     tests = sum(len(methods) for methods in REGISTERED_TESTS.values())
     cases = sum(REGISTERED_TASKS.values())
+    fixtures = sum(REGISTERED_FIXTURE_DIRS.values())
     print(
         f"OK: {tests} registered tests, {len(REGISTERED_TASKS)} tasks with {cases} cases, "
+        f"{fixtures} spec fixtures, {len(CODES)} diagnostic codes, "
         f"tools {', '.join(REQUIRED_TOOLS)} present, languages {', '.join(REGISTERED_LANGUAGES)}"
     )
     return 0

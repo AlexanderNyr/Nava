@@ -1,0 +1,428 @@
+{
+  "note": "Expected front-end diagnostics for tests/fixtures/negative/*.nv. Every entry is checked by tests/test_spec.py; a change in code, location or message text must be intentional and reviewed.",
+  "cases": [
+    {
+      "file": "lex_unexpected_char.nv",
+      "code": "E0101",
+      "line": 1,
+      "column": 21,
+      "end_column": 22,
+      "message": "unexpected character '@'",
+      "hint": "identifiers use ASCII letters, digits and '_'"
+    },
+    {
+      "file": "lex_unterminated_string.nv",
+      "code": "E0102",
+      "line": 1,
+      "column": 19,
+      "end_column": null,
+      "message": "unterminated string",
+      "hint": null
+    },
+    {
+      "file": "lex_newline_in_string.nv",
+      "code": "E0103",
+      "line": 2,
+      "column": 11,
+      "end_column": null,
+      "message": "a string cannot contain a literal newline; use \\n",
+      "hint": null
+    },
+    {
+      "file": "lex_bad_escape.nv",
+      "code": "E0104",
+      "line": 1,
+      "column": 19,
+      "end_column": 23,
+      "message": "invalid string escape",
+      "hint": null
+    },
+    {
+      "file": "lex_nul_in_string.nv",
+      "code": "E0105",
+      "line": 1,
+      "column": 19,
+      "end_column": 27,
+      "message": "strings cannot contain a NUL character",
+      "hint": null
+    },
+    {
+      "file": "lex_surrogate_in_string.nv",
+      "code": "E0106",
+      "line": 1,
+      "column": 19,
+      "end_column": 27,
+      "message": "string contains an invalid Unicode surrogate",
+      "hint": null
+    },
+    {
+      "file": "lex_bad_underscore.nv",
+      "code": "E0107",
+      "line": 1,
+      "column": 19,
+      "end_column": 23,
+      "message": "invalid underscore in integer literal",
+      "hint": "digits may be separated by single underscores, as in 1_000_000"
+    },
+    {
+      "file": "lex_literal_range.nv",
+      "code": "E0108",
+      "line": 1,
+      "column": 19,
+      "end_column": 38,
+      "message": "integer literal is outside the i64 range",
+      "hint": "i64 holds -9223372036854775808 to 9223372036854775807"
+    },
+    {
+      "file": "lex_unmatched_paren.nv",
+      "code": "E0109",
+      "line": 1,
+      "column": 21,
+      "end_column": 22,
+      "message": "unmatched ')'",
+      "hint": null
+    },
+    {
+      "file": "lex_unclosed_paren.nv",
+      "code": "E0110",
+      "line": 1,
+      "column": 18,
+      "end_column": 19,
+      "message": "unclosed '('",
+      "hint": null
+    },
+    {
+      "file": "parse_expected_token.nv",
+      "code": "E0201",
+      "line": 1,
+      "column": 21,
+      "end_column": 26,
+      "message": "expected '{', got 'print'",
+      "hint": null
+    },
+    {
+      "file": "parse_missing_separator.nv",
+      "code": "E0202",
+      "line": 1,
+      "column": 23,
+      "end_column": null,
+      "message": "expected a newline, ';', or '}' after statement",
+      "hint": "end the statement with a newline or ';'"
+    },
+    {
+      "file": "parse_unknown_type.nv",
+      "code": "E0203",
+      "line": 1,
+      "column": 9,
+      "end_column": 12,
+      "message": "unknown type 'int'; use i64, bool, str, or void",
+      "hint": null
+    },
+    {
+      "file": "parse_unclosed_block.nv",
+      "code": "E0204",
+      "line": 3,
+      "column": 1,
+      "end_column": null,
+      "message": "expected '}' before end of file",
+      "hint": "the block opened at line 1 is not closed"
+    },
+    {
+      "file": "parse_expected_expression.nv",
+      "code": "E0205",
+      "line": 1,
+      "column": 21,
+      "end_column": null,
+      "message": "expected an expression",
+      "hint": null
+    },
+    {
+      "file": "sem_reserved_function.nv",
+      "code": "E0301",
+      "line": 1,
+      "column": 1,
+      "end_column": 6,
+      "message": "'print' is a reserved builtin",
+      "hint": "print() is built in and cannot be redefined"
+    },
+    {
+      "file": "sem_reserved_variable.nv",
+      "code": "E0301",
+      "line": 1,
+      "column": 17,
+      "end_column": 25,
+      "message": "'read_i64' is a reserved builtin",
+      "hint": null
+    },
+    {
+      "file": "sem_duplicate_function.nv",
+      "code": "E0302",
+      "line": 2,
+      "column": 1,
+      "end_column": 2,
+      "message": "duplicate function 'f'",
+      "hint": null
+    },
+    {
+      "file": "sem_missing_main.nv",
+      "code": "E0303",
+      "line": null,
+      "column": null,
+      "end_column": null,
+      "message": "program must define fn main()",
+      "hint": null
+    },
+    {
+      "file": "sem_main_signature.nv",
+      "code": "E0304",
+      "line": 1,
+      "column": 1,
+      "end_column": 8,
+      "message": "main must have no parameters and return void or i64",
+      "hint": null
+    },
+    {
+      "file": "sem_void_param.nv",
+      "code": "E0305",
+      "line": 1,
+      "column": 6,
+      "end_column": 7,
+      "message": "function parameters cannot have type void",
+      "hint": null
+    },
+    {
+      "file": "sem_missing_return.nv",
+      "code": "E0306",
+      "line": 1,
+      "column": 1,
+      "end_column": 5,
+      "message": "function 'f' must return i64 on every path",
+      "hint": "the analysis is conservative: even `while true` does not count as a return"
+    },
+    {
+      "file": "sem_duplicate_variable.nv",
+      "code": "E0307",
+      "line": 1,
+      "column": 28,
+      "end_column": 29,
+      "message": "duplicate variable 'a' in the same scope",
+      "hint": "shadowing is allowed only in a nested block, not in the same block"
+    },
+    {
+      "file": "sem_unknown_variable.nv",
+      "code": "E0308",
+      "line": 1,
+      "column": 19,
+      "end_column": 20,
+      "message": "unknown variable 'x'",
+      "hint": "declare it with `let` in this or an enclosing block before use"
+    },
+    {
+      "file": "sem_void_value.nv",
+      "code": "E0309",
+      "line": 1,
+      "column": 17,
+      "end_column": 18,
+      "message": "a variable cannot contain a void value",
+      "hint": null
+    },
+    {
+      "file": "sem_void_annotation.nv",
+      "code": "E0310",
+      "line": 1,
+      "column": 17,
+      "end_column": 18,
+      "message": "a variable cannot have type void",
+      "hint": null
+    },
+    {
+      "file": "sem_annotation_mismatch.nv",
+      "code": "E0311",
+      "line": 1,
+      "column": 17,
+      "end_column": 18,
+      "message": "expected bool, got i64",
+      "hint": "there are no implicit conversions between i64, bool and str"
+    },
+    {
+      "file": "sem_assign_mismatch.nv",
+      "code": "E0312",
+      "line": 1,
+      "column": 24,
+      "end_column": 25,
+      "message": "cannot assign bool to i64",
+      "hint": "there are no implicit conversions between i64, bool and str"
+    },
+    {
+      "file": "sem_expr_statement.nv",
+      "code": "E0313",
+      "line": 1,
+      "column": 13,
+      "end_column": null,
+      "message": "only function calls can be used as statements",
+      "hint": "remove the expression or use its value, as in `print(x)`"
+    },
+    {
+      "file": "sem_void_return.nv",
+      "code": "E0314",
+      "line": 1,
+      "column": 13,
+      "end_column": null,
+      "message": "a void call cannot be returned as a value",
+      "hint": null
+    },
+    {
+      "file": "sem_return_mismatch.nv",
+      "code": "E0315",
+      "line": 1,
+      "column": 20,
+      "end_column": null,
+      "message": "return expects i64, got bool",
+      "hint": null
+    },
+    {
+      "file": "sem_if_condition.nv",
+      "code": "E0316",
+      "line": 1,
+      "column": 16,
+      "end_column": null,
+      "message": "if condition must be bool, got i64",
+      "hint": "integers are not converted to bool; compare explicitly, as in x != 0"
+    },
+    {
+      "file": "sem_while_condition.nv",
+      "code": "E0317",
+      "line": 1,
+      "column": 19,
+      "end_column": null,
+      "message": "while condition must be bool, got i64",
+      "hint": "integers are not converted to bool; compare explicitly, as in x > 0"
+    },
+    {
+      "file": "sem_unary_operand.nv",
+      "code": "E0318",
+      "line": 1,
+      "column": 19,
+      "end_column": null,
+      "message": "operator '!' expects bool, got i64",
+      "hint": null
+    },
+    {
+      "file": "sem_arithmetic_operand.nv",
+      "code": "E0319",
+      "line": 1,
+      "column": 24,
+      "end_column": null,
+      "message": "operator '+' expects two i64 values",
+      "hint": null
+    },
+    {
+      "file": "sem_ordering_operand.nv",
+      "code": "E0319",
+      "line": 1,
+      "column": 23,
+      "end_column": null,
+      "message": "operator '<' expects two i64 values",
+      "hint": null
+    },
+    {
+      "file": "sem_equality_types.nv",
+      "code": "E0320",
+      "line": 1,
+      "column": 21,
+      "end_column": null,
+      "message": "operator '==' requires two values of the same type",
+      "hint": null
+    },
+    {
+      "file": "sem_logical_operands.nv",
+      "code": "E0321",
+      "line": 1,
+      "column": 21,
+      "end_column": null,
+      "message": "operator '&&' expects two bool values",
+      "hint": null
+    },
+    {
+      "file": "sem_print_arity.nv",
+      "code": "E0322",
+      "line": 1,
+      "column": 13,
+      "end_column": null,
+      "message": "print expects exactly one argument",
+      "hint": null
+    },
+    {
+      "file": "sem_print_type.nv",
+      "code": "E0323",
+      "line": 2,
+      "column": 13,
+      "end_column": null,
+      "message": "print expects an i64, bool, or str value",
+      "hint": null
+    },
+    {
+      "file": "sem_read_arity.nv",
+      "code": "E0324",
+      "line": 1,
+      "column": 13,
+      "end_column": null,
+      "message": "read_i64 expects no arguments",
+      "hint": null
+    },
+    {
+      "file": "sem_unknown_function.nv",
+      "code": "E0325",
+      "line": 1,
+      "column": 13,
+      "end_column": 24,
+      "message": "unknown function 'nonexistent'",
+      "hint": "define it with `fn`; functions may be called before their definition"
+    },
+    {
+      "file": "sem_argument_count.nv",
+      "code": "E0326",
+      "line": 2,
+      "column": 13,
+      "end_column": 14,
+      "message": "f expects 1 argument, got 0",
+      "hint": null
+    },
+    {
+      "file": "sem_argument_type.nv",
+      "code": "E0327",
+      "line": 2,
+      "column": 15,
+      "end_column": null,
+      "message": "argument 1 of f expects bool, got i64",
+      "hint": null
+    },
+    {
+      "file": "limit_nested_parens.nv",
+      "code": "E0401",
+      "line": 1,
+      "column": 218,
+      "end_column": null,
+      "message": "nesting is deeper than the supported limit of 200",
+      "hint": "simplify the expression or split it into named functions"
+    },
+    {
+      "file": "limit_nested_blocks.nv",
+      "code": "E0401",
+      "line": 1,
+      "column": 2011,
+      "end_column": null,
+      "message": "nesting is deeper than the supported limit of 200",
+      "hint": "simplify the expression or split it into named functions"
+    },
+    {
+      "file": "limit_long_chain.nv",
+      "code": "E0401",
+      "line": 1,
+      "column": 418,
+      "end_column": null,
+      "message": "expression nesting is deeper than the supported limit of 200",
+      "hint": "name intermediate results with `let` or split the work into functions"
+    }
+  ]
+}

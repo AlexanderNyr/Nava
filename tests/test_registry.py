@@ -44,6 +44,21 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(cases, sum(registry.REGISTERED_TASKS.values()))
         self.assertEqual([task["id"] for task in registry.load_tasks()], list(registry.REGISTERED_TASKS))
 
+    def test_diagnostics_registry_is_complete(self):
+        """Every diagnostic code has a fixture, a documented test and a doc entry."""
+        problems = registry.check_diagnostics()
+        self.assertEqual(problems, [], "\n".join(problems))
+        self.assertGreaterEqual(len(registry.CODES), 51)
+        for code, (severity, title) in registry.CODES.items():
+            self.assertIn(severity, ("error", "warning"), code)
+            self.assertTrue(title, f"{code} has no title")
+
+    def test_spec_fixtures_are_registered(self):
+        problems = registry.check_fixtures()
+        self.assertEqual(problems, [], "\n".join(problems))
+        for directory, expected in registry.REGISTERED_FIXTURE_DIRS.items():
+            self.assertEqual(len(list((registry.ROOT / directory).glob("*.nv"))), expected, directory)
+
     def test_registry_module_guard_passes(self):
         environment = dict(os.environ)
         environment.pop("NAVA_ALLOW_MISSING_TOOLS", None)
