@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+Phase N7 of `PLAN.md` (model-facing grammar and constrained generation). No
+model was called: the accuracy comparison is `not-measured` and the claim
+stays open.
+
+- `guides/nava-1.md`: a compact, versioned model guide (`nava-guide/1`) pinned
+  by `guides/manifest.json` (version, specification version, SHA-256, bytes,
+  characters, lines). Eight canonical programs live in `guides/examples/` with
+  their output recorded in `guides/examples.json`; `tests/test_guides.py`
+  compiles and runs each one, and checks that the guide names every keyword,
+  builtin and standard-library function.
+- `eval/tokens.py` counts tokens only with a real tokenizer and reports
+  `not-measured` with a reason otherwise — no estimate is ever substituted.
+  `eval/overhead.py` measures the complete prompt per language (guide, task,
+  instruction, total) and the difference between languages; two measured
+  records are in `eval/measurements/` (`cl100k_base`, `o200k_base`): the Nava
+  prompt carries 1374 more tokens than the C prompt for the same task.
+- `eval/grammar.py` describes the language once and drives two back ends: the
+  compiler's own token stream (conformance corpus) and GBNF text for an
+  inference engine. `eval/gbnf.py` parses the emitted GBNF back and recognises
+  text with it, so the artefact is executed by the tests instead of trusted.
+- `eval/constrained.py`: an optional adapter that builds the grammar fields for
+  `llamacpp` and `vllm`, marked `experimental` with `verified_against: null`.
+  `eval/ab.py` runs the same tasks in two arms whose prompts are identical and
+  whose request payloads differ only in that field, and
+  `eval/check_ab_record.py` refuses a claim attached to an unmeasured record.
+- `eval/feedback.py`: structured repair feedback (`nava-feedback/1`) with the
+  stage kept apart (`parse`, `compile`, `tests`), capped at 2048 bytes, dropped
+  items counted. `eval/study.py` gains `--feedback structured|text`,
+  `syntax_accepted` per round and repair accounting that cannot turn a repaired
+  attempt into a first-attempt success.
+- Tests: `tests/test_guides.py` (25), `tests/test_grammar.py` (24),
+  `tests/test_ab.py` (17). Suite 219 → 286 tests.
+
 Phase N6 of `PLAN.md` (modules and standard-library foundations).
 
 - Modules: `import name` loads `name.nv`, and its functions are called as

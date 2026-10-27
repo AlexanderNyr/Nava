@@ -7,6 +7,14 @@ Two workflows share one task set, one prompt builder and one isolation boundary:
 | `eval/evaluate.py` | check **one saved** answer for one task and language |
 | `eval/study.py` | run a **paired study**: many tasks × languages × attempts, with repairs, tokens, timing and aggregates |
 | `eval/check_study_record.py` | validate a saved record before anyone quotes it |
+| `eval/guide.py` | print or verify the versioned model guide (`guides/nava-1.md`) |
+| `eval/tokens.py` | count bytes, characters and — only with a real tokenizer — tokens |
+| `eval/overhead.py` | measure the complete guidance overhead of a prompt, per language |
+| `eval/grammar.py` | the language grammar, as a conformance checker and as GBNF text |
+| `eval/constrained.py` | the optional constrained-decoding adapter (`experimental`) |
+| `eval/ab.py` | free versus grammar-constrained generation, same tasks and settings |
+| `eval/check_ab_record.py` | validate an A/B record before anyone quotes it |
+| `eval/feedback.py` | structured compiler feedback for repair rounds |
 
 `eval/study.py` can call a model through an OpenAI-compatible endpoint, replay
 answers saved earlier, or run a deterministic mock. **No measured neural-model
@@ -110,6 +118,101 @@ record and on a deliberately broken endpoint.
 guide was included and how large it is, `environment` records Nava, Python,
 platform and the sandbox probe. Prompts and answers are stored only with
 `--store-raw`; by default only their SHA-256 and byte length are kept.
+
+## Model-facing guide, grammar and constrained decoding (N7)
+
+Four separate things live here, and none of them is a model result.
+
+**The guide.** `guides/nava-1.md` is the compact guide the prompt carries. It is
+versioned and pinned by `guides/manifest.json` — version, specification version,
+SHA-256, bytes, characters, lines — because a study record cites that digest: a
+later edit must not silently change what "the model saw" means.
+`guides/examples/` holds eight canonical programs whose stdout is recorded in
+`guides/examples.json` and re-produced on every test run, so the guide cannot
+describe a language the compiler does not implement.
+
+```bash
+python3 eval/guide.py --verify          # digests and sizes still match
+python3 eval/guide.py --print           # the exact text a prompt carries
+python3 eval/guide.py --examples        # canonical examples and their output
+```
+
+**The overhead.** An A/B run has to charge Nava for its guide, so the cost is
+measured, not guessed:
+
+```bash
+python3 eval/tokens.py --guide --encoding cl100k_base
+python3 eval/overhead.py --encoding cl100k_base --out eval/measurements/overhead-cl100k_base.json
+```
+
+`eval/tokens.py` reports `tokens: null` with a reason when no tokenizer can be
+constructed, and `--require measured` makes that an error instead of a silent
+zero. `eval/overhead.py` renders the whole prompt through `eval/prompt.py` for
+every task and language and records the guide, the task, the instruction, the
+total and the difference between languages. The measured records in
+`eval/measurements/` say which encoding produced their numbers:
+
+| Prompt (`collatz_steps`) | `cl100k_base` | `o200k_base` |
+|---|---|---|
+| Nava (guide + task) | 1484 tokens / 4975 chars | 1490 tokens / 4975 chars |
+| C (guide + task) | 110 tokens / 447 chars | 110 tokens / 447 chars |
+| C++ (guide + task) | 106 tokens / 427 chars | 106 tokens / 427 chars |
+| Nava − C | +1374 tokens / +4528 chars | +1380 tokens / +4528 chars |
+
+Those are measurements of two public encodings on this text. They are **not**
+measurements of any particular model's prompt: a different tokenizer gives a
+different number, and neither number is evidence about accuracy or latency.
+
+**The grammar.** `eval/grammar.py` describes Nava's grammar once and drives two
+back ends:
+
+* the compiler's own token stream — the conformance corpus, which is what the
+  tests check against the real lexer and parser;
+* GBNF text, which is what an inference engine consumes for constrained
+  decoding. `eval/gbnf.py` parses that text back and recognises input with it,
+  so the artefact is executed rather than trusted.
+
+```bash
+python3 eval/grammar.py --check answer.nv     # would the grammar accept it?
+python3 eval/grammar.py --emit grammar.gbnf   # the artefact for an engine
+python3 eval/grammar.py --validate grammar.gbnf
+```
+
+The grammar is a **syntax** filter. It accepts `let x: bool = 1` (a type error)
+and `100 / 0` (a runtime error): a context-free grammar cannot prove types,
+ownership or termination. `tests/test_grammar.py` measures exactly that
+boundary, and the repair accounting in `eval/study.py` keeps the three stages
+(`parse`, `compile`, `tests`) apart so a constrained run that removes parse
+failures cannot hide the failures it leaves behind.
+
+**The A/B run.** Two arms, one task set, one model, one set of settings:
+
+```bash
+python3 eval/ab.py --plan-only --provider openai --model <model> --attempts 30
+python3 eval/ab.py --provider openai --base-url https://api.example.com/v1 \
+  --model <model> --attempts 30 --interface llamacpp \
+  --encoding cl100k_base --out ab-<model>.json
+python3 eval/check_ab_record.py ab-<model>.json --require measured
+```
+
+The prompts are identical in both arms; only the request payload differs (the
+grammar field named by `eval/constrained.py`). Each arm records per-task
+aggregates, syntax acceptance per round, latency, provider-reported tokens
+(`null` when the provider reports none), first-attempt and final correctness,
+and the guidance overhead. `comparison.claim` is `null` and
+`comparison.claim_status` is `open`: the harness collects evidence, it does not
+assert an improvement. `eval/check_ab_record.py` re-derives the record's status
+from the attempts and refuses a claim attached to a `not-measured` record.
+
+The constrained adapter is **experimental**: `eval/constrained.py` knows the
+request field for `llamacpp` (`grammar`) and `vllm` (`guided_grammar`), but no
+server was running when it was written, so it records `verified_against: null`
+and a run must add the server version before anyone cites it.
+
+**Status: no model was called.** Every A/B record produced in this repository is
+`not-measured`, the accuracy comparison is open, and nothing in `README.md`,
+`PLAN.md` or this file claims that constrained decoding or the shorter guide
+improves speed or accuracy.
 
 ## Example
 

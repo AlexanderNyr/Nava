@@ -148,6 +148,84 @@ jobs:
           test "$status" -eq 1
           python3 eval/check_study_record.py "$RUNNER_TEMP/failed.json" --require not-measured
 
+  # N7 lane: the model-facing guide, the grammar, the constrained adapter and
+  # the A/B harness must work end to end without a model, and must refuse to
+  # look like a measurement when no model was called.
+  constrained-harness:
+    name: constrained generation harness (no model)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc g++
+
+      - name: Guide digests and canonical examples
+        run: |
+          python3 eval/guide.py --verify
+          python3 eval/guide.py --examples
+
+      - name: No tokenizer, no token count
+        run: |
+          python3 eval/tokens.py --probe > "$RUNNER_TEMP/probe.json"
+          python3 - "$RUNNER_TEMP/probe.json" <<'PY'
+          import json, sys
+          probe = json.load(open(sys.argv[1]))["probe"]
+          print("tokenizers:", probe)
+          assert probe["tiktoken"] is None, "this lane assumes no tokenizer is installed"
+          PY
+          set +e
+          python3 eval/tokens.py --guide --require measured > /dev/null 2>&1
+          measured=$?
+          python3 eval/overhead.py --require measured > /dev/null 2>&1
+          overhead=$?
+          set -e
+          test "$measured" -eq 1
+          test "$overhead" -eq 1
+          echo "both tools refused to report a token count without a tokenizer"
+
+      - name: Grammar artefact, executed
+        run: |
+          python3 eval/grammar.py --emit "$RUNNER_TEMP/nava.gbnf"
+          python3 eval/grammar.py --validate
+          python3 eval/grammar.py --check guides/examples/hello.nv
+          python3 eval/grammar.py --chars --check guides/examples/control.nv
+          set +e
+          printf 'fn main( {\n' > "$RUNNER_TEMP/broken.nv"
+          python3 eval/grammar.py --check "$RUNNER_TEMP/broken.nv"
+          status=$?
+          set -e
+          test "$status" -eq 1
+
+      - name: Constrained adapter declares itself unverified
+        run: |
+          python3 eval/constrained.py --interface llamacpp --check --summary > /dev/null
+          python3 eval/constrained.py --interface vllm --check --summary > /dev/null
+
+      - name: A/B harness without a model
+        run: |
+          python3 eval/ab.py --plan-only --provider openai --model ci --attempts 30 > /dev/null
+          python3 eval/ab.py --provider mock --task gcd --attempts 1 \
+            --out "$RUNNER_TEMP/ab.json"
+          python3 eval/check_ab_record.py "$RUNNER_TEMP/ab.json" --require not-measured
+          set +e
+          python3 eval/check_ab_record.py "$RUNNER_TEMP/ab.json" --require measured
+          status=$?
+          set -e
+          test "$status" -eq 1
+          echo "the A/B record cannot be presented as a measurement"
+
+      - name: Structured feedback keeps the stages apart
+        run: |
+          printf 'fn main( {\n' > "$RUNNER_TEMP/broken.nv"
+          python3 eval/feedback.py "$RUNNER_TEMP/broken.nv" | tee "$RUNNER_TEMP/feedback.txt"
+          grep -q "parse" "$RUNNER_TEMP/feedback.txt"
+          if grep -q "tests" "$RUNNER_TEMP/feedback.txt"; then
+            echo "::error::a syntactically invalid candidate was reported as a test failure"
+            exit 1
+          fi
+
   # Benchmark record lane: the script must produce a valid machine-readable
   # record. It is not a performance gate and results are not compared here.
   benchmark:

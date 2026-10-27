@@ -1,0 +1,17 @@
+{
+  "note": "Versioned model-facing guides. tests/test_guides.py fails when a digest, size or version here stops describing the file: a study record cites this digest, so the text cannot drift silently.",
+  "schema": "nava-guides/1",
+  "current": "nava-1",
+  "guides": {
+    "nava-1": {
+      "file": "nava-1.md",
+      "language": "nava",
+      "version": 1,
+      "spec_version": 1,
+      "sha256": "e8446c38d99a716b233f818029368d30c8fa517cab81c0df854d1aa303e11e44",
+      "bytes": 4708,
+      "chars": 4692,
+      "lines": 143
+    }
+  }
+}

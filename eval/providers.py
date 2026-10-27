@@ -49,6 +49,9 @@ class Request:
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     stream: bool = False
+    #: Extra request fields a server understands, e.g. a GBNF grammar for
+    #: constrained decoding. Recorded verbatim; `None` when nothing extra is sent.
+    extra: Optional[dict] = None
 
     @property
     def prompt_sha256(self) -> str:
@@ -219,6 +222,8 @@ class OpenAICompatibleProvider(Provider):
             payload["max_tokens"] = request.max_tokens
         if request.stream:
             payload["stream_options"] = {"include_usage": True}
+        if request.extra:
+            payload.update(request.extra)
         return payload
 
     def complete(self, request: Request) -> Response:  # pragma: no cover - network

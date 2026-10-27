@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2, N4, N5 and N6 DELIVERED; N3 infrastructure delivered, empirical result open; N7–N9 planned
+## Status: N0–N2 and N4–N7 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open; N8–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -15,14 +15,16 @@ This document answers one question:
 
 Phases N0 (measurement rig and test integrity), N1 (language specification and
 diagnostics), N2 (isolated build and execution), N4 (arrays and ownership),
-N5 (control flow and numerical coverage) and N6 (modules, standard library and
-capability-limited file access) are delivered, and N3's harness is
-delivered — **without** a model result,
+N5 (control flow and numerical coverage), N6 (modules, standard library and
+capability-limited file access) and N7 (model-facing grammar and constrained
+generation, **without** its model measurements) are delivered, and N3's harness
+is delivered — **without** a model result,
 which cannot be produced without a model to run: see the delivery records in
 the relevant subsections for the evidence, the commands that produce it and the
 items that are deliberately left open. N3's infrastructure exists; its
-empirical results do not. N7 is the next phase; its measurement half also
-depends on a model, so its non-measurement half is what can be built next.
+empirical results do not. N7 ships the guide, the grammar, the constrained
+adapter, the A/B harness and the structured feedback — the A/B *result* stays
+open for the same reason. N8 is the next phase and does not need a model.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -41,10 +43,11 @@ identify the baseline, not a claim about a published release.
 |---|---|---|
 | Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; module loader in `nava_lang/modules.py`; `check`, `emit-c`, `build` and `run` commands with `--root`, `--allow-read`, `--allow-write` and `--workdir`; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build; the C runtime needs POSIX `realpath` (`_XOPEN_SOURCE 700`) |
 | Language | `i64`, `bool`, `str` (a byte sequence), `f64` (IEEE-754 with explicit conversions), fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, `for` over ranges and arrays, `break`, `continue`, checked integer arithmetic, integer/float I/O, modules (`import name`, `name::function`) and a capability-limited file API; `LANGUAGE.md` is specification version 1 with EBNF, documented limits, float formatting, UTF-8 boundaries, module resolution and executable examples | No resizable collections, arrays of arrays, `f64` arrays, array copies or array results, labelled jumps, mathematical functions such as `sqrt`, string indexing or concatenation, module visibility keywords, networking, threads, a package manager or FFI |
-| Correctness | `python3 -m unittest discover -s tests -v`: 219 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 83 negative, 19 positive and 8 multi-file module fixtures assert exact codes, locations, messages, hints and output | Hidden tests are not in this repository by design; no coverage measurement |
+| Correctness | `python3 -m unittest discover -s tests -v`: 286 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 83 negative, 19 positive and 8 multi-file module fixtures assert exact codes, locations, messages, hints and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
 | Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; eleven public tasks with 76 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
+| Model-facing form | A versioned guide (`guides/nava-1.md`, digest-pinned) with eight canonical examples; the grammar as a conformance checker and as GBNF (`eval/grammar.py`, `eval/gbnf.py`); an experimental constrained adapter (`eval/constrained.py`); an A/B harness with a validating checker (`eval/ab.py`, `eval/check_ab_record.py`); structured repair feedback (`eval/feedback.py`); measured guidance overhead for two public encodings (`eval/measurements/`) | **No model result**: the guide's tokenizer is a public encoding, not the study model's; the accuracy A/B record is `not-measured` and the claim is open; the constrained adapter was never run against a live server (`verified_against: null`) |
 | Execution safety | `nava_lang/sandbox.py`: Linux namespaces (user, mount, PID, network, IPC, UTS) with a read-only minimal root and one writable directory, or a labelled rlimits-only fallback; `--isolation {auto,required,off}`; bounded output; process-group kill with survivor detection | Confinement against a misbehaving program, not against a kernel exploit; no seccomp, no cgroup quota; `rlimits` mode isolates nothing but resource use |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
@@ -111,13 +114,16 @@ complete by skipping its gate.
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | **Delivered** |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | **Delivered** |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Delivered |
-| N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | Planned |
+| N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | **Delivered, measurement open** |
 | N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | Planned |
 | N9 | Packaging, CI and release readiness | N1, N2, N3 | Clean installation and non-skipping CI pass on each declared platform | Planned |
 
 `N3` can deliver the measurement infrastructure before a provider is chosen,
 but its empirical comparison is not complete without real model results.
-`N7` and `N8` depend on measurements, not on assuming a particular outcome.
+`N7` is in the same position: the guide, the grammar, the adapter and the A/B
+harness are built and tested, the guidance overhead is measured in tokens, and
+the accuracy comparison is not. `N8` depends on measurements too, so it starts
+from measured native and compiler numbers rather than assumptions.
 
 ---
 
@@ -689,17 +695,49 @@ then measure whether it helps the chosen model.
 
 #### Tasks
 
-- [ ] Provide a compact, versioned language guide and canonical examples tied
+- [x] Provide a compact, versioned language guide and canonical examples tied
       to the implemented grammar. Measure the full guide and source with the
-      target model's actual tokenizer where available.
-- [ ] Prototype optional grammar-constrained decoding through a supported model
+      target model's actual tokenizer where available. → `guides/nava-1.md`
+      (`nava-guide/1`), pinned by `guides/manifest.json` (version, spec version,
+      SHA-256, bytes, characters, lines); eight canonical examples in
+      `guides/examples/` with output recorded in `guides/examples.json` and
+      compiled and run by `tests/test_guides.py`; `eval/tokens.py` counts tokens
+      only with a real tokenizer and reports `not-measured` with a reason
+      otherwise; `eval/overhead.py` measures the whole prompt per language, and
+      the measured records are in `eval/measurements/`. **No model tokenizer was
+      available**, so the recorded counts are for two public encodings
+      (`cl100k_base`, `o200k_base`) and the record says exactly that.
+- [x] Prototype optional grammar-constrained decoding through a supported model
       interface. Distinguish syntactic validity from type correctness and
-      runtime correctness; a grammar alone cannot prove the latter two.
-- [ ] Compare unconstrained and constrained generation using the N3 harness,
+      runtime correctness; a grammar alone cannot prove the latter two. →
+      `eval/grammar.py` describes the grammar once and drives two back ends —
+      the compiler's own token stream (conformance corpus, 83 negative, 19
+      positive and 14 module fixtures) and GBNF text for an inference engine
+      (`eval/gbnf.py` parses the artefact back and recognises text with it);
+      `eval/constrained.py` builds the request fields for `llamacpp` and `vllm`
+      and labels both `experimental` with `verified_against: null`.
+      `tests/test_grammar.py` shows the boundary: a type error and a division by
+      zero are accepted by the grammar, rejected or failed by the compiler and
+      the runtime.
+- [x] Compare unconstrained and constrained generation using the N3 harness,
       the same tasks/model/settings and the complete guidance overhead.
       Record latency, output tokens, compilation and first-attempt correctness.
-- [ ] Add structured compiler feedback for repair experiments, keeping
-      first-attempt and repaired results separate.
+      → `eval/ab.py` (schema `nava-ab/1`) runs the same tasks in two arms whose
+      prompts are identical and whose request payloads differ only in the
+      grammar field, and records per-task aggregates, syntax acceptance,
+      latency, provider-reported tokens (`null` when the provider does not
+      report them) and the guidance overhead; `eval/check_ab_record.py`
+      re-derives the record's status and rejects a claim attached to a
+      `not-measured` record. **No model was called**, so every A/B record is
+      `not-measured` and the claim stays open; the overhead itself is measured
+      (see below).
+- [x] Add structured compiler feedback for repair experiments, keeping
+      first-attempt and repaired results separate. → `eval/feedback.py`
+      (`nava-feedback/1`) emits one JSON object with the stage (`parse`,
+      `compile`, `tests`), the codes, ranges and hints, capped at 2048 bytes
+      with dropped items counted; `eval/study.py` gains `--feedback
+      structured|text` and records `syntax_accepted`, `first_attempt_passed`
+      and every repair round separately.
 
 #### Test gate
 
@@ -715,6 +753,40 @@ then measure whether it helps the chosen model.
 
 Versioned model guides, an optional constrained-generation adapter,
 conformance tests and a measured A/B report when a model is available.
+
+#### Delivery record (2026-10-27)
+
+Everything below was executed on this tree. The two rows marked **(open)** are
+the parts that need a model; nothing in the repository presents them as done.
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Versioned guide exists and cannot drift silently | `python3 eval/guide.py --verify` | `OK`, `nava-1`: 4708 bytes, 4692 characters, 143 lines, SHA-256 `e8446c38…` |
+| Canonical examples are real programs | `python3 -m unittest tests.test_guides` | 25 tests: every example in `guides/examples/` compiles, runs and matches its recorded stdout byte for byte (`hello` → `42\n-3\ntrue\nnava\n1.75\n`, `control` → `16\n111\n`, `functions` → `6765\n`, `arrays`, `floats`, `io`, `strings`, `modules/main`) |
+| Guide covers the implemented language | `tests.test_guides.GuideCoverageTests` | every keyword, builtin and standard-library function named; every program in the guide compiles; the stale claims of the draft guide are gone |
+| Token count is measured or missing, never estimated | `python3 eval/tokens.py --guide --probe` | without a tokenizer: `{"tiktoken": null, "transformers": null}` and `--require measured` exits 1. With `--encoding cl100k_base`: guide = 1408 tokens |
+| Complete guidance overhead | `python3 eval/overhead.py --encoding cl100k_base` | per prompt, `collatz_steps`: Nava 1484 tokens (4975 chars) vs C 110 tokens (447 chars) vs C++ 106 tokens (427 chars); overhead 1374 tokens (4528 chars); recorded in `eval/measurements/overhead-cl100k_base.json` and `…-o200k_base.json` (1490 tokens) |
+| Grammar conformance corpus | `python3 -m unittest tests.test_grammar` | 24 tests: all 19 positive, 14 module and 8 canonical examples accepted; every negative fixture classified as syntax (rejected) or semantics (accepted) agrees with the compiler |
+| Emitted GBNF artefact is executable, not decorative | `python3 eval/grammar.py --emit` → `eval/gbnf.py` | 4064 bytes, 114 lines, 106 rules; parsed back, checked for undefined rules, left recursion and unreachable rules; every canonical example and every positive fixture recognised by the *emitted text*, a deliberately malformed candidate rejected |
+| Syntax is not type or runtime correctness | `tests.test_grammar.SyntaxIsNotSemanticsTests` | `let x: bool = 1` accepted by the grammar, `E0311` from the compiler; `100 / read_i64()` with `0` accepted by both, exit 1 "division by zero"; `4000000000 * 4000000000` accepted, exit 1 "overflow" |
+| Constrained adapter declares its uncertainty | `python3 eval/constrained.py --check` | `OK` for `llamacpp` (`grammar`) and `vllm` (`guided_grammar`); both `experimental`, `verified_against: null` |
+| A/B harness runs end to end without a model | `python3 eval/ab.py --provider mock --task gcd --attempts 1 --out /tmp/ab.json` | both arms `pass@1` 1.0, delta `0.0 [0.0, 0.0]`, `status: not-measured`, `claim: open` |
+| A claim cannot be attached to an unmeasured record | `python3 eval/check_ab_record.py /tmp/ab.json --require not-measured` | exit 0; seven deliberate mutations — status flipped to `measured`, a claim without a measured run, prompts that differ between arms, a zero token count, a grammar in the `free` arm, an aggregate that does not match the attempts, and arms covering different work — each exit 1 |
+| Repairs cannot be first-attempt successes | `tests.test_ab.RepairAccountingTests` | with `--repair-rounds 1` the repaired attempt keeps `pass_at_1 = 0.0` while `final_pass = 1.0`, and `time_to_correct_ms` is `null` when the provider reports no time |
+| Structured feedback separates the stages | `python3 -m unittest tests.test_ab.FeedbackTests` | `fn main( {` → `parse`/`E0110`; `let x: bool = 1` → `compile`/`E0311` with line, column and hint; a failing case → `tests`; a five-case failure report capped at 600 bytes with the dropped items counted (`MAX_FEEDBACK_BYTES` is 2048 in a real run) |
+| **Model-specific A/B report** | `eval/ab.py --provider openai …` | **(open)** no model is available here, so no A/B result exists; the claim in `eval/README.md`, `README.md` and `PLAN.md` stays open |
+
+Negative controls (each must fail, and does): `eval/tokens.py --guide --require
+measured` with an encoding that cannot be loaded (exit 1, and the same command
+without any tokenizer is exercised by the CI lane, which asserts that
+`tiktoken` is absent first); `eval/overhead.py --require measured` under the
+same conditions (exit 1); `eval/feedback.py` on a syntactically invalid
+candidate (reports `parse`, never `tests`); `eval/gbnf.py … --validate` on a
+grammar with a missing rule reference (`refers to undefined rule 'missing'`)
+and on a left-recursive grammar (`rule 'root' is left recursive`), both exit 1;
+`eval/check_ab_record.py --require measured` on a mock record (exit 1) and on a
+record whose `status` was edited to `measured`; `tests/registry.py` after
+deleting a test method (reports the missing test).
 
 ---
 

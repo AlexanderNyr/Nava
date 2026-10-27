@@ -1,0 +1,7 @@
+fn main() {
+    let s = "café 😀"
+    print(bytes_len(s))
+    print(chars_len(s))
+    print(byte_at(s, 3))
+    print(s == "café 😀")
+}

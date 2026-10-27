@@ -1,0 +1,63 @@
+{
+  "note": "Canonical examples for guides/nava-1.md. tests/test_guides.py compiles and runs each one and compares stdout byte for byte; the recorded output was produced by this compiler, not written by hand.",
+  "schema": "nava-guide-examples/1",
+  "guide": "nava-1",
+  "examples": [
+    {
+      "id": "hello",
+      "entry": "hello.nv",
+      "stdin": "",
+      "stdout": "42\n-3\ntrue\nnava\n1.75\n",
+      "shows": "print of i64, bool, str and f64"
+    },
+    {
+      "id": "control",
+      "entry": "control.nv",
+      "stdin": "",
+      "stdout": "16\n111\n",
+      "shows": "if/else, while, for, break and continue"
+    },
+    {
+      "id": "functions",
+      "entry": "functions.nv",
+      "stdin": "",
+      "stdout": "fib(20)\n6765\n",
+      "shows": "recursion, a value-returning fn and a void fn"
+    },
+    {
+      "id": "arrays",
+      "entry": "arrays.nv",
+      "stdin": "",
+      "stdout": "5\n30\n100\n12\n",
+      "shows": "array_zeros, len, index read/write, for over an array, mut parameter"
+    },
+    {
+      "id": "floats",
+      "entry": "floats.nv",
+      "stdin": "",
+      "stdout": "0.3333333333333333\n1\n3.5\nfalse\n",
+      "shows": "f64 arithmetic, explicit conversions and printing"
+    },
+    {
+      "id": "io",
+      "entry": "io.nv",
+      "stdin": "7 35\n2.5\n",
+      "stdout": "42\n5.0\n",
+      "shows": "read_i64 and read_f64 from standard input"
+    },
+    {
+      "id": "strings",
+      "entry": "strings.nv",
+      "stdin": "",
+      "stdout": "10\n6\n195\ntrue\n",
+      "shows": "byte length, code point count and one byte of a UTF-8 string"
+    },
+    {
+      "id": "modules",
+      "entry": "modules/main.nv",
+      "stdin": "",
+      "stdout": "3.0\n9\n3\n6\n",
+      "shows": "import of a local module and of the standard library"
+    }
+  ]
+}

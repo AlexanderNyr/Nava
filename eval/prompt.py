@@ -10,21 +10,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-NAVA_GUIDE = '''Language: Nava 0.1.
-Output a complete Nava program with fn main() { ... }. No imports or global variables.
-One statement per line; semicolons are optional. Comments start with # or //.
-read_i64() reads one signed integer from standard input; print(value) prints one value and a newline.
-Types: i64, bool, str. Integer arithmetic is checked. let x = expression declares a mutable local, with inferred type.
-Functions: fn f(a: i64, b: i64) -> i64 { return a + b }. A function with no return type returns void.
-Control flow: if condition { ... } else { ... } and while condition { ... }; conditions must be bool.
-Operators: + - * / %; < <= > >= == !=; ! && ||. Division truncates toward zero.
-Calls and operators evaluate left to right; && and || short-circuit. Variables are block-scoped.
-Only these features are available: no arrays, for loops, string concatenation, external libraries, or casts.
-'''
+from eval import guide as guide_module  # noqa: E402
+
+#: The Nava guide is a versioned file, not a string in this file: a study record
+#: cites its SHA-256 so a later edit cannot quietly change what a model saw.
+_NAVA_GUIDE = guide_module.load()
+NAVA_GUIDE = _NAVA_GUIDE.text
+GUIDE_INFO = _NAVA_GUIDE.describe()
 
 C_GUIDE = '''Language: C11.
 Output a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.
@@ -35,6 +35,12 @@ Output a complete program with int main(). Use standard input and standard outpu
 '''
 
 GUIDES = {"nava": NAVA_GUIDE, "c": C_GUIDE, "cpp": CPP_GUIDE}
+
+#: Which guide each language uses. `nava` is versioned in `guides/`; the C and
+#: C++ guides are short constants, so their digest is computed the same way.
+GUIDE_DIGESTS = {"nava": GUIDE_INFO["sha256"],
+                 "c": guide_module.sha256(C_GUIDE),
+                 "cpp": guide_module.sha256(CPP_GUIDE)}
 LANGUAGES = tuple(GUIDES)
 
 OUTPUT_INSTRUCTION = ("Print only the requested result, with a newline. "
@@ -78,6 +84,8 @@ def main() -> int:
     if args.json:
         parts = build_parts(args.task, args.language, tasks, include_guide=not args.no_guide)
         parts["prompt"] = build_prompt(args.task, args.language, tasks, include_guide=not args.no_guide)
+        parts["guide_metadata"] = {"nava": GUIDE_INFO, "sha256": GUIDE_DIGESTS[args.language],
+                                   "name": GUIDE_INFO["name"] if args.language == "nava" else None}
         print(json.dumps(parts, ensure_ascii=False, indent=2))
         return 0
     print(build_prompt(args.task, args.language, tasks, include_guide=not args.no_guide), end="")

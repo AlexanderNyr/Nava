@@ -1,0 +1,7 @@
+fn main() {
+    print(42)
+    print(-7 / 2)
+    print(true)
+    print("nava")
+    print(1.5 + 0.25)
+}

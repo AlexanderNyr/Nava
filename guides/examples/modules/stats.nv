@@ -1,0 +1,17 @@
+fn mean(a: [i64]) -> f64 {
+    let sum = 0
+    for item in a {
+        sum = sum + item
+    }
+    return to_f64(sum) / to_f64(len(a))
+}
+
+fn max_of(a: [i64]) -> i64 {
+    let best = a[0]
+    for item in a {
+        if item > best {
+            best = item
+        }
+    }
+    return best
+}

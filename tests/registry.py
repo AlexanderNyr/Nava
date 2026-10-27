@@ -320,6 +320,99 @@ REGISTERED_TESTS = {
         "test_the_boundary_holds_inside_the_namespace_jail",
         "test_the_isolated_runner_allows_a_granted_file_and_denies_another",
     },
+    # --- N7: model-facing guide, grammar conformance, A/B and feedback ---------
+    "GuideManifestTests": {
+        "test_an_edited_guide_without_a_manifest_update_is_reported",
+        "test_recorded_digests_and_sizes_match_the_files",
+        "test_the_guide_tracks_the_documented_specification_version",
+        "test_the_manifest_names_a_current_guide_that_exists",
+    },
+    "GuideExampleTests": {
+        "test_every_example_file_is_reachable_from_a_recorded_entry",
+        "test_every_example_is_covered_by_the_grammar_and_the_compiler",
+        "test_every_example_runs_and_prints_its_recorded_output",
+        "test_the_manifest_lists_the_current_guide",
+    },
+    "GuideCoverageTests": {
+        "test_every_builtin_is_named",
+        "test_every_keyword_is_named",
+        "test_the_guide_keeps_the_implemented_features_and_drops_the_stale_denials",
+        "test_the_guide_lists_every_standard_library_function",
+        "test_the_whole_program_examples_in_the_guide_compile",
+    },
+    "GuidePromptTests": {
+        "test_the_c_and_cpp_guides_have_digests_too",
+        "test_the_prompt_builder_reports_the_guide_metadata",
+        "test_the_prompt_carries_the_versioned_guide_verbatim",
+    },
+    "GuideOverheadTests": {
+        "test_a_record_can_never_contain_an_invented_token_count",
+        "test_the_command_line_can_demand_a_measured_overhead",
+        "test_the_overhead_covers_every_task_and_language",
+        "test_the_overhead_is_the_difference_between_the_prompts",
+        "test_the_recorded_measurements_still_describe_the_current_guide",
+        "test_without_a_tokenizer_the_overhead_has_no_token_numbers",
+    },
+    "GuideTokenTests": {
+        "test_a_missing_tokenizer_library_is_reported_not_estimated",
+        "test_require_measured_fails_when_nothing_was_measured",
+        "test_sizes_are_exact_and_tokens_are_null_without_a_tokenizer",
+    },
+    "GrammarArtefactTests": {
+        "test_an_unclosed_string_is_rejected_by_both",
+        "test_every_canonical_example_is_recognised_by_the_emitted_text",
+        "test_a_left_recursive_grammar_is_refused",
+        "test_a_grammar_that_references_a_missing_rule_is_refused",
+        "test_gbnf_keyword_matching_is_documented_as_permissive",
+        "test_the_artefact_is_written_by_the_command_line",
+        "test_the_emitted_gbnf_has_no_structural_problem",
+        "test_the_emitted_text_rejects_a_deliberately_malformed_candidate",
+        "test_the_validate_command_accepts_the_artefact",
+    },
+    "CorpusConformanceTests": {
+        "test_every_corpus_code_is_classified",
+        "test_every_valid_fixture_is_accepted",
+        "test_multi_file_module_fixtures_are_accepted",
+        "test_negative_fixtures_are_accepted_or_rejected_as_classified",
+        "test_the_shipped_examples_are_accepted",
+    },
+    "SyntaxIsNotSemanticsTests": {
+        "test_a_runtime_failure_survives_both_the_grammar_and_the_compiler",
+        "test_a_type_error_is_accepted_by_the_grammar_and_rejected_by_the_compiler",
+        "test_an_overflow_is_accepted_by_both_and_still_fails_at_run_time",
+        "test_an_unmatched_bracket_is_rejected_before_types_are_considered",
+    },
+    "ConstrainedPayloadTests": {
+        "test_a_summary_preview_keeps_the_digest_and_drops_the_text",
+        "test_an_unknown_interface_is_an_error",
+        "test_checking_the_grammar_catches_a_broken_artefact",
+        "test_each_interface_puts_the_grammar_in_its_documented_field",
+        "test_the_adapter_declares_itself_unverified",
+        "test_the_command_line_preview_carries_the_whole_grammar",
+    },
+    "FeedbackTests": {
+        "test_a_syntax_error_is_reported_as_the_parse_stage",
+        "test_a_type_error_carries_the_code_and_the_hint",
+        "test_a_wrong_answer_is_reported_as_the_tests_stage",
+        "test_feedback_is_capped_and_dropped_items_are_counted",
+        "test_the_metadata_identifies_the_feedback_without_repeating_it",
+    },
+    "RepairAccountingTests": {
+        "test_a_missing_measurement_is_never_zero",
+        "test_structured_feedback_keeps_first_attempt_and_repair_apart",
+        "test_text_feedback_still_works_and_is_marked_as_such",
+    },
+    "ABRecordTests": {
+        "test_a_missing_token_count_is_null_with_a_reason",
+        "test_a_run_keeps_repairs_out_of_pass_at_1",
+        "test_no_claim_is_made_by_the_harness",
+        "test_plan_only_announces_both_arms_and_calls_nothing",
+        "test_require_measured_is_enforced",
+        "test_tampering_is_refused",
+        "test_the_arms_differ_only_in_the_request_payload",
+        "test_the_grammar_and_guide_digests_are_recorded",
+        "test_the_record_passes_its_own_validator",
+    },
     "RegistryTests": {
         "test_registered_tests_are_present_and_not_skipped",
         "test_required_tools_are_present",
@@ -408,10 +501,13 @@ def discovered_tests() -> dict[str, set[str]]:
     """Test-method names per class, imported from the real test module."""
     if str(ROOT / "tests") not in sys.path:
         sys.path.insert(0, str(ROOT / "tests"))
-    import test_arrays  # noqa: PLC0415  (import after sys.path setup)
+    import test_ab  # noqa: PLC0415  (import after sys.path setup)
+    import test_arrays  # noqa: PLC0415
     import test_control  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_grammar  # noqa: PLC0415
+    import test_guides  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
@@ -421,9 +517,9 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_arrays, test_control, test_files, test_float, test_modules,
-                   test_nava, test_registry, test_sandbox, test_spec, test_stdlib,
-                   test_study):
+    for module in (test_ab, test_arrays, test_control, test_files, test_float,
+                   test_grammar, test_guides, test_modules, test_nava, test_registry,
+                   test_sandbox, test_spec, test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

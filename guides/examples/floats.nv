@@ -1,0 +1,7 @@
+fn main() {
+    let x = 1.0 / 3.0
+    print(x)
+    print(to_i64(x * 3.0))
+    print(to_f64(7) / 2.0)
+    print(0.1 + 0.2 == 0.3)
+}

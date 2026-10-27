@@ -37,6 +37,8 @@ ROOT = HERE.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from eval import feedback as feedback_module  # noqa: E402
+from eval import guide as guide_module  # noqa: E402
 from eval import prompt as prompt_module  # noqa: E402
 from eval.extraction import extract_code  # noqa: E402
 from eval.providers import Request, Response, build_provider  # noqa: E402
@@ -166,33 +168,51 @@ def run_evaluator(source: Path, task_id: str, language: str, *, isolation: str,
     return report
 
 
-def build_repair_prompt(parts: dict[str, str], code: str, report: dict) -> str:
-    """Feedback for one repair round: the diagnostics, not the expected answer."""
-    if report.get("compile", {}).get("ok") is False:
-        diagnostics = report["compile"].get("stderr", "").strip()[:1200] or "(no compiler output)"
-        summary = "did not compile"
+def build_repair_prompt(parts: dict[str, str], code: str, report: dict, *,
+                        feedback_mode: str = "structured") -> tuple[str, dict]:
+    """The prompt for one repair round, and what was fed back.
+
+    `structured` sends one capped JSON object with an explicit stage (`parse`,
+    `compile` or `tests`), so a run can separate syntax failures from semantic
+    and runtime ones. `text` reproduces the free-form stderr behaviour of the
+    first implementation, kept for comparisons against old runs.
+    """
+    if feedback_mode == "structured":
+        document, summary, blob = feedback_module.build(code, report)
+        detail = f"Your previous answer {summary}. Feedback ({document['schema']}, stage {document['stage']}):\n{blob}"
+        metadata = feedback_module.describe(document, blob)
     else:
-        failed = [case for case in report.get("tests", []) if not case.get("passed")]
-        first = failed[0] if failed else {}
-        diagnostics = "\n".join(
-            f"test {case['case']}: stdin={case.get('stdin', '')!r} "
-            f"expected={case.get('expected_stdout', '')!r} actual={case.get('actual_stdout', '')!r}"
-            f" exit={case.get('exit_code')} reason={case.get('reason')}"
-            for case in failed[:3]
-        )
-        summary = f"failed {len(failed)} of {len(report.get('tests', []))} tests"
-    return (
+        if report.get("compile", {}).get("ok") is False:
+            diagnostics = report["compile"].get("stderr", "").strip()[:1200] or "(no compiler output)"
+            summary = "did not compile"
+        else:
+            failed = [case for case in report.get("tests", []) if not case.get("passed")]
+            diagnostics = "\n".join(
+                f"test {case['case']}: stdin={case.get('stdin', '')!r} "
+                f"expected={case.get('expected_stdout', '')!r} actual={case.get('actual_stdout', '')!r}"
+                f" exit={case.get('exit_code')} reason={case.get('reason')}"
+                for case in failed[:3]
+            )
+            summary = f"failed {len(failed)} of {len(report.get('tests', []))} tests"
+        detail = f"Your previous answer {summary}. Diagnostics:\n{diagnostics}"
+        metadata = {"schema": "text", "stage": None, "codes": [], "diagnostics": 0,
+                    "failures": 0, "elided": 0,
+                    "bytes": len(diagnostics.encode("utf-8")),
+                    "sha256": hashlib.sha256(diagnostics.encode("utf-8")).hexdigest()}
+    prompt = (
         f"{parts['guide']}\n\n{parts['task']}\n\n"
-        f"Your previous answer {summary}. Diagnostics:\n{diagnostics}\n\n"
+        f"{detail}\n\n"
         f"Previous answer:\n{code}\n\n"
         f"Return a corrected program. {parts['instruction']}\n"
     )
+    return prompt, metadata
 
 
 def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
                  request_template: dict, parts: dict[str, str], system: str | None,
                  repair_rounds: int, isolation: str, timeout: float, memory: int,
-                 store_raw: bool, workdir: Path) -> dict:
+                 store_raw: bool, workdir: Path, feedback_mode: str = "structured",
+                 syntax_check=None, request_extra: dict | None = None) -> dict:
     record = {
         "task": task_id,
         "language": language,
@@ -226,6 +246,7 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
             temperature=request_template.get("temperature"),
             max_tokens=request_template.get("max_tokens"),
             stream=request_template.get("stream", False),
+            extra=request_extra if request_extra is not None else request_template.get("extra"),
         )
         response: Response = provider.complete(request)
         round_record = {
@@ -249,6 +270,8 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
             "tests_passed": 0,
             "tests_total": 0,
             "isolation_backend": None,
+            "syntax_accepted": None,
+            "feedback": None,
         }
         if response.prompt_tokens is not None:
             prompt_tokens_sum += response.prompt_tokens
@@ -265,6 +288,10 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
             break
         code, provenance = extract_code(response.text, language)
         round_record["extraction"] = provenance
+        if syntax_check is not None:
+            # Syntactic validity of the candidate as written, independent of the
+            # compiler: a grammar-constrained arm can be compared with a free one.
+            round_record["syntax_accepted"] = bool(syntax_check(code))
         if store_raw:
             round_record["code"] = code
         candidate = workdir / f"{task_id}-{language}-{attempt_index}-{round_index}{SUFFIXES[language]}"
@@ -291,10 +318,13 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
         if summary.get("all_passed"):
             record["final_passed"] = True
             record["rounds_used"] = round_index + 1
-            time_to_correct = round(wall_sum, 3)
+            # A provider that reports no wall time leaves this missing; 0 would
+            # be a fabricated measurement (PLAN.md N3).
+            time_to_correct = round(wall_sum, 3) if wall_sum else None
             break
         if round_index < repair_rounds:
-            current_prompt = build_repair_prompt(parts, code, report)
+            current_prompt, round_record["feedback"] = build_repair_prompt(
+                parts, code, report, feedback_mode=feedback_mode)
     if not record["final_passed"]:
         record["rounds_used"] = len(record["rounds"])
     record["repaired"] = record["final_passed"] and not record["first_attempt_passed"]
@@ -350,6 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--stream", action="store_true", help="request a streaming response")
     parser.add_argument("--system-file", type=Path, help="system message; default: none")
     parser.add_argument("--no-guide", action="store_true", help="omit the language guide")
+    parser.add_argument("--feedback", choices=("structured", "text"), default="structured",
+                        help="repair feedback: one capped JSON document with an explicit "
+                             "stage (default), or the free-form compiler output")
     parser.add_argument("--isolation", choices=sandbox.MODES, default="required")
     parser.add_argument("--timeout", type=float, default=2.0)
     parser.add_argument("--memory", type=int, default=256)
@@ -391,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
         "order_policy": "languages rotated per attempt index; attempts are independent",
         "request": {"model": args.model, "temperature": args.temperature,
                     "max_tokens": args.max_tokens, "stream": args.stream,
-                    "system_message": bool(system), "guide_included": not args.no_guide},
+                    "system_message": bool(system), "guide_included": not args.no_guide,
+                    "feedback": args.feedback},
         "isolation": args.isolation,
         "store_raw": args.store_raw,
     }
@@ -415,6 +449,12 @@ def main(argv: list[str] | None = None) -> int:
             "guide_included": not args.no_guide,
             "guide_bytes": {language: len(prompt_module.GUIDES[language].encode("utf-8"))
                             for language in languages},
+            # The versioned Nava guide: name, version and digest, so the text a
+            # model saw can be identified even when it is not stored.
+            "guide": prompt_module.GUIDE_INFO if "nava" in languages else None,
+            "guide_sha256": {language: prompt_module.GUIDE_DIGESTS[language]
+                             for language in languages},
+            "feedback": args.feedback,
             "instruction": prompt_module.OUTPUT_INSTRUCTION,
             "system_message": system if args.store_raw else (hashlib.sha256(
                 system.encode("utf-8")).hexdigest() if system else None),
@@ -460,7 +500,7 @@ def main(argv: list[str] | None = None) -> int:
                         request_template=request_template, parts=parts, system=system,
                         repair_rounds=args.repair_rounds, isolation=args.isolation,
                         timeout=args.timeout, memory=args.memory, store_raw=args.store_raw,
-                        workdir=workdir,
+                        workdir=workdir, feedback_mode=args.feedback,
                     )
                     attempt["held_out"] = task["held_out"]
                     record["attempts"].append(attempt)

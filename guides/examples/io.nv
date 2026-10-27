@@ -1,0 +1,6 @@
+fn main() {
+    let a = read_i64()
+    let b = read_i64()
+    print(a + b)
+    print(read_f64() * 2.0)
+}

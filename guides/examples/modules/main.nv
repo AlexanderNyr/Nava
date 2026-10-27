@@ -1,0 +1,14 @@
+import stats
+import math
+
+fn main() {
+    let a = array_zeros(4)
+    a[0] = 5
+    a[1] = -3
+    a[2] = 9
+    a[3] = 1
+    print(stats::mean(a))
+    print(stats::max_of(a))
+    print(math::abs(a[1]))
+    print(math::gcd(48, 18))
+}

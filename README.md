@@ -42,6 +42,21 @@ explicit function types, inferred local types and checked arithmetic.
   missing, instead of reporting skipped tests as a pass (`tests/registry.py`).
 - Stable diagnostic codes with source ranges and hints, plus `--format json`
   for machine-readable diagnostics (`nava_lang/diagnostics.py`).
+- A versioned, model-facing guide (`guides/nava-1.md`, `nava-guide/1`) pinned by
+  its SHA-256, with eight canonical programs that the test suite compiles and
+  runs, a tokenizer measurement that reports `null` instead of an estimate, and
+  a measured guidance overhead for every prompt (`eval/guide.py`,
+  `eval/tokens.py`, `eval/overhead.py`).
+- The language grammar in two forms from one description (`eval/grammar.py`):
+  a conformance checker over the compiler's own token stream, and GBNF text for
+  grammar-constrained decoding, which `eval/gbnf.py` parses back and executes.
+  The grammar is a syntax filter only — it accepts type errors and runtime
+  failures by design — and `eval/constrained.py` is an optional, explicitly
+  experimental adapter for `llamacpp` and `vllm`.
+- Structured compiler feedback for repair experiments (`eval/feedback.py`):
+  one JSON object per failed attempt with the stage (`parse`, `compile`,
+  `tests`), the code, range and hint, capped and counted, and first-attempt
+  results kept apart from repaired ones (`eval/study.py`, `eval/ab.py`).
 - An executable specification: every example in [`LANGUAGE.md`](LANGUAGE.md)
   type-checks, 83 invalid fixtures assert the exact code and location, 19
   positive fixtures assert output and exit status, and 8 multi-file module
@@ -213,6 +228,14 @@ compiler versions, flags, warm-up policy, raw samples per phase and missing
 model fields as `null` with an explicit status. Recorded runs live in
 `bench/results/`.
 
+The model-facing guide, the grammar and the constrained-decoding adapter are
+part of the same harness. Their cost is measured: the prompt for one task is
+4975 characters (1484 tokens under `cl100k_base`) against 447 characters (110
+tokens) for the equivalent C prompt, so Nava's guidance overhead is +4528
+characters / +1374 tokens per prompt — recorded in `eval/measurements/`. What is
+*not* measured is whether that overhead buys accuracy; no model was called, the
+A/B record says `not-measured`, and the claim stays open.
+
 A separate, coarse Nava-versus-C authoring experiment is documented in
 [`experiment/`](experiment/README.md); its timings include tool latency and
 are not model-generation measurements.
@@ -265,6 +288,10 @@ is not, on which platforms, and how each claim is tested.
 | `nava_lang/stdlib/` | The versioned standard library in Nava source (`math`, `sort`, `text`) |
 | `examples/modules/` | Multi-file example: a local module plus three standard modules |
 | `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
+| `guides/` | Versioned model-facing guide, canonical examples and the measured guidance overhead |
+| `tests/test_guides.py` | Guide gate: digests, canonical examples, coverage of the implemented language, overhead records |
+| `tests/test_grammar.py` | Grammar gate: conformance corpus, the emitted GBNF artefact, syntax versus semantics |
+| `tests/test_ab.py` | A/B gate: feedback stages, repair accounting, record validation, no claim without a measurement |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |
 | `eval/` | Prompts, tasks, reference answers, saved-response evaluator and the paired study harness |
