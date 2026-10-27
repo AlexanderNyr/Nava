@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+Phase N3 of `PLAN.md` (real model evaluation). **No model was run**: this
+release adds the harness and the honesty rules, not a result.
+
+- `eval/study.py`: paired study over tasks × languages × attempts. Per attempt
+  it records the prompt hash (text only with `--store-raw`), extraction
+  provenance, compilation, failing tests, first-attempt versus final success,
+  every repair round with its diagnostics, time to a correct answer, wall time,
+  time to first token, provider-reported tokens and the isolation backend.
+  Aggregates carry percentile bootstrap intervals with a fixed seed.
+- `eval/providers.py`: `openai-compatible` (key from an environment variable,
+  redacted from errors, never recorded), `replay` (JSONL keyed by prompt
+  SHA-256) and `mock` (deterministic, measures nothing).
+- Self-classification: a study is `exploratory` below 10 tasks or 30 attempts
+  per task and language, with the reasons printed; `empirical` is refused
+  otherwise. `model_measurements.status` stays `not-measured` unless a model
+  was actually called and every attempt produced a compile-and-test result.
+- `--plan-only` prints the predeclared plan (tasks, order policy, request
+  parameters, expected scale) without calling anything.
+- `eval/prompt.py` refactored into `build_parts`/`build_prompt`: the guide, the
+  task and the output instruction are counted separately, so guide overhead is
+  recorded rather than assumed.
+- `eval/extraction.py`: fenced-block extraction with recorded provenance
+  (`tagged-fence`, `untagged-fence`, `whole-text`, `whole-text-fallback`); a
+  foreign fence is never silently rewritten.
+- `eval/check_study_record.py`: re-derives the claim from a saved record -- the
+  schema, the thresholds behind `empirical`, `measured` only for a non-mock run
+  with evaluated attempts and no provider errors, a reason for `not-measured`,
+  and aggregates that match the attempt list. CI runs it on a mock record and on
+  a deliberately unreachable endpoint, so "it ran" can never stand in for
+  "it measured".
+- `tests/test_study.py` (27 tests): classification thresholds, aggregates with
+  missing values, bootstrap determinism, provider error handling, credential
+  redaction, replay hits and misses, extraction cases, end-to-end mock study,
+  repair accounting, raw storage, and five record-validation rejections.
+- `tests/registry.py` tracks the new classes. Tests: 77 -> 104.
+
+## N2 (phase N2)
+
 Phase N2 of `PLAN.md` (isolated build and execution).
 
 - `nava_lang/sandbox.py`: two backends and three policies. `namespaces` uses

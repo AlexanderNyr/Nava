@@ -119,6 +119,35 @@ jobs:
           printf 'fn main() { print("ok") }\n' > "$RUNNER_TEMP/hello.nv"
           "$RUNNER_TEMP/venv/bin/nava" run "$RUNNER_TEMP/hello.nv"
 
+  # Study lane: the paired-study harness must run end to end without a model,
+  # and must refuse to present a model-less run as a measurement.
+  study-harness:
+    name: study harness (no model)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc g++
+      - name: Predeclared plan
+        run: python3 eval/study.py --plan-only --provider openai --model ci --attempts 30
+      - name: Mock study end to end
+        run: |
+          python3 eval/study.py --provider mock --task gcd --task sum_to_n \
+            --languages nava,c,cpp --attempts 2 --out "$RUNNER_TEMP/study.json"
+          python3 eval/check_study_record.py "$RUNNER_TEMP/study.json" --require not-measured
+      - name: A provider error must not look like a measurement
+        run: |
+          set +e
+          python3 eval/study.py --provider openai --base-url http://127.0.0.1:9/v1 \
+            --model ci --api-key-env CI_MISSING_KEY --task gcd --languages nava --attempts 1 \
+            --out "$RUNNER_TEMP/failed.json" --quiet
+          status=$?
+          set -e
+          test "$status" -eq 1
+          python3 eval/check_study_record.py "$RUNNER_TEMP/failed.json" --require not-measured
+
   # Benchmark record lane: the script must produce a valid machine-readable
   # record. It is not a performance gate and results are not compared here.
   benchmark:

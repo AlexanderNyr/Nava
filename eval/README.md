@@ -1,9 +1,18 @@
 # Evaluating Generation with a Specific Model
 
-These tools do not call a model API: send each prompt to the chosen model and
-save its answer yourself. The scripts compile saved answers and check them
-against tests. They provide measurement infrastructure, but **contain no
-measured neural-model results yet**.
+Two workflows share one task set, one prompt builder and one isolation boundary:
+
+| Tool | Use |
+|---|---|
+| `eval/evaluate.py` | check **one saved** answer for one task and language |
+| `eval/study.py` | run a **paired study**: many tasks × languages × attempts, with repairs, tokens, timing and aggregates |
+| `eval/check_study_record.py` | validate a saved record before anyone quotes it |
+
+`eval/study.py` can call a model through an OpenAI-compatible endpoint, replay
+answers saved earlier, or run a deterministic mock. **No measured neural-model
+result is included in this repository**: the mock and replay modes exist so the
+machinery can be tested and audited without a model, and every record says
+whether a model was actually called.
 
 **Safety:** the evaluator runs untrusted code through
 [`nava_lang/sandbox.py`](../SECURITY.md). On Linux that means user, mount, PID
@@ -25,6 +34,82 @@ instead of falling back to rlimits (exit status 2, `"available": false`).
 `--isolation off` is an explicit opt-in to the unsafe local mode, where the
 filesystem and the network are **not** isolated. Output is always collected
 with a byte limit, never with unbounded `capture_output`.
+
+## Paired study (`study.py`)
+
+```bash
+# 1. Predeclare the experiment. This prints the plan and calls nothing.
+python3 eval/study.py --plan-only --provider openai --model <model> --attempts 30
+
+# 2. Run it. The API key is read from an environment variable and never recorded.
+OPENAI_API_KEY=... python3 eval/study.py \
+  --provider openai --base-url https://api.example.com/v1 --model <model> \
+  --languages nava,c,cpp --attempts 30 --repair-rounds 1 \
+  --temperature 0 --max-tokens 1024 --isolation required \
+  --held-out /path/outside/the/repo/held_out_tasks.json \
+  --out study-<model>.json
+
+# 3. Dry run without a model, and replay of earlier answers.
+python3 eval/study.py --provider mock --task gcd --languages nava,c,cpp --attempts 2
+python3 eval/study.py --provider replay --replay-file answers.jsonl --languages nava
+```
+
+What one attempt records: the prompt hash (and the text with `--store-raw`), the
+extraction provenance, whether it compiled, which tests failed, whether it
+passed on the **first** attempt, every repair round and its diagnostics, the
+time to a correct answer, the wall time, the time to first token, the
+provider-reported token counts and the isolation backend that ran the program.
+
+Aggregates per task/language and per language: `pass_at_1`, `final_pass`,
+`compile_rate`, `repair_rate`, provider error count, median wall time, median
+time to a correct answer, median prompt and completion tokens, with a percentile
+bootstrap 95% interval (fixed seed, so a re-run reports the same interval).
+
+### Scale, and why the label matters
+
+`study.py` classifies itself using the thresholds in `PLAN.md` N3: at least
+**10 tasks** and **30 independent attempts per task and language**. Below either
+threshold the record is `exploratory`, the reasons are printed, and the summary
+line says so. The public task set has 8 tasks, so reaching `empirical` requires
+a held-out file with at least two more; keep that file **outside this
+repository** so it never appears in prompts or fixtures.
+
+### Missing values
+
+A provider that does not report token usage yields `null`, never `0` and never
+an estimate; `tokens_reported` counts how many of the attempts actually had a
+number. An attempt whose provider call failed is recorded with its error class,
+is excluded from repairs, and makes the run exit with status 1. If every call
+failed, or nothing was compiled and tested, `model_measurements.status` stays
+`not-measured` with the reason spelled out.
+
+### Records
+
+`--out PATH` writes `nava-study/1` JSON:
+
+```text
+schema, created_at_utc, plan, scale, provider, request, prompt_policy,
+environment, attempts[], aggregates{}, model_measurements{}, notes[]
+```
+
+Before quoting a record, run the validator:
+
+```bash
+python3 eval/check_study_record.py study-<model>.json --require measured
+python3 eval/check_study_record.py study-mock.json --require not-measured
+```
+
+It re-derives the claim from the attempts instead of trusting the labels: the
+schema and required keys, `empirical` only above the 10-task / 30-attempt line,
+`measured` only for a non-mock run with evaluated attempts, no provider errors,
+and reported token usage; `not-measured` must carry a reason. Aggregates must
+match the attempt list. Exit status 1 on any inconsistency. CI runs it on a mock
+record and on a deliberately broken endpoint.
+
+`plan` is what was predeclared, `prompt_policy` records whether the language
+guide was included and how large it is, `environment` records Nava, Python,
+platform and the sandbox probe. Prompts and answers are stored only with
+`--store-raw`; by default only their SHA-256 and byte length are kept.
 
 ## Example
 
@@ -102,7 +187,8 @@ files. Prefer API or inference-engine counters for actual usage; do not use
 
 1. Fix the model, inference engine, hardware, sampling settings, system
    message and limits. Run many independent attempts per task and language;
-   alternate the order to reduce systematic bias.
+   alternate the order to reduce systematic bias. `study.py` rotates the
+   language order per attempt index and records the rotation policy in `plan`.
 2. Use identical tasks. Count **all input tokens**, including the Nava guide,
    as well as output tokens. Report prompt caching or fine-tuning separately.
 3. Compare first-attempt correctness, compilation rate, full generation time,

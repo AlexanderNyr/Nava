@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0, N1 and N2 DELIVERED — N3–N9 planned
+## Status: N0–N2 DELIVERED; N3 infrastructure delivered, empirical result open; N4–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -14,7 +14,9 @@ This document answers one question:
 > source files?
 
 Phases N0 (measurement rig and test integrity), N1 (language specification and
-diagnostics) and N2 (isolated build and execution) are delivered: see the
+diagnostics) and N2 (isolated build and execution) are delivered, and N3's
+harness is delivered — **without** a model result, which cannot be produced
+without a model to run: see the
 delivery records in the relevant subsections for the evidence, the commands that
 produce it and the items that are deliberately left open. N3 is the next
 dependency; its infrastructure exists, its empirical results do not.
@@ -39,7 +41,7 @@ identify the baseline, not a claim about a published release.
 | Correctness | `python3 -m unittest discover -s tests -v`: 62 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code or required compiler is missing; 47 negative and 12 positive fixtures assert exact codes, locations and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
-| Model evaluation | `eval/prompt.py`, `eval/evaluate.py` for Nava, C and C++, eight public tasks with 49 cases, independent answers in `eval/reference.py`, optional tokenizer counts | No model API calls, held-out suite, measured model response time or measured pass rate |
+| Model evaluation | `eval/study.py`: paired study over tasks × languages × attempts with an OpenAI-compatible, replay or mock provider; repairs; first-attempt versus final success; provider-reported tokens; time to first token and to a correct answer; percentile bootstrap intervals; self-classification as exploratory or empirical. `eval/evaluate.py` runs one saved answer; eight public tasks with 49 cases; independent answers in `eval/reference.py` | **No model has been run**: every record says `not-measured`; no held-out task set is included (it must stay outside the repository); the public set has 8 tasks, below the 10 needed for an empirical label |
 | Execution safety | `nava_lang/sandbox.py`: Linux namespaces (user, mount, PID, network, IPC, UTS) with a read-only minimal root and one writable directory, or a labelled rlimits-only fallback; `--isolation {auto,required,off}`; bounded output; process-group kill with survivor detection | Confinement against a misbehaving program, not against a kernel exploit; no seccomp, no cgroup quota; `rlimits` mode isolates nothing but resource use |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
@@ -102,7 +104,7 @@ complete by skipping its gate.
 | N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | **Delivered** |
 | N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | **Delivered** |
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | **Delivered** |
-| N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | Planned |
+| N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Harness delivered, result open** |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | Planned |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | Planned |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Planned |
@@ -352,23 +354,41 @@ specific model, rather than inferring it from handwritten programs.
 
 #### Tasks
 
-- [ ] Add an opt-in provider adapter for a user-selected model; retain the
+- [x] Add an opt-in provider adapter for a user-selected model; retain the
       existing offline saved-response mode. Do not commit credentials, prompts
-      containing private data or generated answers without explicit consent.
-- [ ] Record exact model and inference settings, complete prompts, response
+      containing private data or generated answers without explicit consent. →
+      `eval/providers.py`: `openai-compatible` (key read from an environment
+      variable, redacted from errors and never recorded), `replay` (JSONL keyed
+      by prompt SHA-256) and `mock`. Prompts and answers are stored only with
+      `--store-raw`.
+- [x] Record exact model and inference settings, complete prompts, response
       and API-reported input/output token counts. Measure time to first token
       when supported and wall time to the final answer. Preserve missing values
-      as missing.
-- [ ] Compile and test Nava, C and C++ responses inside the N2 isolation
+      as missing. → `plan`, `request`, `prompt_policy`, per-round
+      `prompt_sha256`/`response_sha256`, `ttft_ms`, `wall_ms`,
+      `prompt_tokens`/`completion_tokens` as `null` when unreported, with
+      `tokens_reported` counting how many attempts actually had a number.
+- [x] Compile and test Nava, C and C++ responses inside the N2 isolation
       boundary. Record compilation, first-attempt correctness, each retry and
-      the time to a correct answer separately from native execution.
-- [ ] Use the same task contract, a predeclared prompt policy, fixed sampling
+      the time to a correct answer separately from native execution. → every
+      attempt runs `eval/evaluate.py --isolation <mode>`; rounds record
+      `compile_ok`, `passed`, `tests_passed/total`, `isolation_backend`;
+      `first_attempt_passed`, `final_passed`, `repaired`, `rounds_used` and
+      `time_to_correct_ms` are separate fields.
+- [x] Use the same task contract, a predeclared prompt policy, fixed sampling
       settings, randomized or alternated language order and a separate hidden
-      test set. Count grammar and system instructions, not only source code.
+      test set. Count grammar and system instructions, not only source code. →
+      `--plan-only` prints the predeclared plan; language order rotates per
+      attempt; `--held-out FILE` adds tasks that must live outside the
+      repository; the guide, system message and instruction are recorded and
+      their sizes reported.
 - [ ] For an empirical report, use at least 10 varied tasks and 30 paired
       independent attempts per task and language, subject to the chosen
       provider's cost limits. Report raw samples, failures, medians and a
-      stated uncertainty method; report smaller studies as exploratory.
+      stated uncertainty method; report smaller studies as exploratory. →
+      **the machinery is in place** (classification, bootstrap intervals, raw
+      attempts), but the run itself needs a named model and a held-out set:
+      **not done, and deliberately not simulated**.
 
 #### Test gate
 
@@ -386,6 +406,34 @@ specific model, rather than inferring it from handwritten programs.
 
 An opt-in model-evaluation runner, comparison corpus, machine-readable run
 records and a model-specific report when actual measurements exist.
+**Harness delivered; no model-specific report exists yet.**
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Evidence | Result |
+|---|---|---|
+| Mock-provider tests, no network or credentials | `tests/test_study.py` | 27 tests: providers, extraction, aggregates, scale, repairs, raw storage |
+| Streaming and non-streaming, missing counters, API errors, timeouts | `test_openai_provider_without_a_key_does_not_call_out`, `test_model_status_is_not_measured_when_every_call_failed`, `responses` with `error`/`error_class` | a failed call is an error, never an empty answer; status stays `not-measured` |
+| Malformed code | `test_foreign_fence_falls_back_without_editing` | extraction reports `whole-text-fallback`; compilation fails; nothing is "fixed" silently |
+| Retry accounting | `test_repairs_are_counted_separately_from_first_attempts` | first attempt stays failed, `repaired: true`, `rounds_used: 2` |
+| A wrong but compiling answer fails the correctness gate | `test_end_to_end_mock_study_is_labeled_as_not_measured` | `sum_to_n` compiles (rate 1.00) and passes 0 of 6 cases |
+| Missing counter stays missing | `test_missing_measurements_are_null_not_zero` | `null`, `tokens_reported: {prompt: 0, ...}` |
+| Scale is not overstated | `test_thresholds_match_the_plan` and the printed summary | 8 public tasks → `exploratory`, with the reason |
+| Credentials | `test_credentials_are_redacted_from_errors` | tokens removed from error text; `describe()` carries no key |
+| A saved record cannot overstate itself | `eval/check_study_record.py`, `RecordValidationTests` (5 tests) | re-derives the claim from the attempts; exit 1 on any inconsistency |
+| CI runs the harness without a model and without a network | `.github/workflows/ci.yml` job `study-harness` | plan-only, mock record validated as `not-measured`, unreachable endpoint → rc 1 and `not-measured` |
+| Whole suite | `python3 -m unittest discover -s tests` | 104 tests OK |
+
+Five negative controls were run by hand, each making the gate fail: forcing
+`model_measurements.status` to `measured`, turning missing token counts into
+`0`, counting a repaired answer as a first attempt, always labelling a study
+`empirical`, and treating a provider error as an answer. Five of those shapes
+are now rejected automatically by `eval/check_study_record.py`, so the controls
+no longer depend on someone repeating them by hand.
+
+What is missing is a model. Running it needs a provider, a key and a held-out
+task file; without those the question in the plan's preamble — whether Nava
+gives a model a shorter time to a correct answer than C or C++ — stays open.
 
 ---
 

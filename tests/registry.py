@@ -133,6 +133,45 @@ REGISTERED_TESTS = {
         "test_cli_run_reports_isolation_and_timeout",
         "test_cli_runtime_error_keeps_its_status",
     },
+    "ClassificationTests": {
+        "test_thresholds_match_the_plan",
+        "test_full_study_is_empirical",
+        "test_one_missing_threshold_keeps_it_exploratory",
+    },
+    "AggregateTests": {
+        "test_missing_measurements_are_null_not_zero",
+        "test_reported_values_are_summarized",
+        "test_bootstrap_is_deterministic_and_contains_the_point",
+        "test_empty_input_yields_nulls",
+    },
+    "ProviderTests": {
+        "test_mock_does_not_invent_timings_or_tokens",
+        "test_openai_provider_without_a_key_does_not_call_out",
+        "test_credentials_are_redacted_from_errors",
+        "test_replay_provider_matches_by_prompt_hash",
+    },
+    "ExtractionTests": {
+        "test_tagged_fence_wins",
+        "test_untagged_fence_is_used",
+        "test_no_fence_uses_the_whole_text",
+        "test_foreign_fence_falls_back_without_editing",
+    },
+    "RecordValidationTests": {
+        "test_a_genuine_record_passes",
+        "test_mock_labelled_measured_is_rejected",
+        "test_empirical_label_below_the_thresholds_is_rejected",
+        "test_measured_without_evaluated_attempts_is_rejected",
+        "test_require_status_is_enforced",
+    },
+    "StudyRunTests": {
+        "test_end_to_end_mock_study_is_labeled_as_not_measured",
+        "test_plan_only_does_not_call_anything",
+        "test_repairs_are_counted_separately_from_first_attempts",
+        "test_provider_error_is_recorded_and_not_mistaken_for_an_answer",
+        "test_study_exit_code_reports_provider_errors",
+        "test_model_status_is_not_measured_when_every_call_failed",
+        "test_store_raw_keeps_prompts_and_answers",
+    },
     "RegistryTests": {
         "test_registered_tests_are_present_and_not_skipped",
         "test_required_tools_are_present",
@@ -206,9 +245,10 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_registry  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
+    import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_nava, test_registry, test_sandbox, test_spec):
+    for module in (test_nava, test_registry, test_sandbox, test_spec, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

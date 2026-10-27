@@ -152,11 +152,14 @@ establish general superiority. The environment and limitations are recorded in
 [`BENCHMARK.md`](BENCHMARK.md).
 
 Model generation speed and accuracy have not been measured against a
-specified model. The prompt generator and evaluator in [`eval/`](eval/README.md)
-can check saved Nava, C and C++ responses on eight tasks without connecting to
-a model API; `eval/reference.py` recomputes every expected answer
-independently. Use the actual model's tokenizer and count the complete prompt
-as well as the output.
+specified model. [`eval/study.py`](eval/README.md) is a complete paired-study
+harness — many tasks × languages × attempts, repairs, first-attempt versus
+final success, provider-reported tokens, time to a correct answer, bootstrap
+intervals — and it labels every run `exploratory` or `empirical` using the
+thresholds in `PLAN.md`. The repository ships **no model result**: mock and
+replay providers exercise the pipeline without a model, and the record says
+`model_measurements.status: not-measured`. `eval/reference.py` recomputes every
+expected answer independently.
 
 `bench/run.py --json PATH` writes a machine-readable record: environment,
 compiler versions, flags, warm-up policy, raw samples per phase and missing
@@ -206,9 +209,10 @@ is not, on which platforms, and how each claim is tested.
 | `tests/registry.py` | Suite and fixture registry guard; fails on missing tests, fixtures, codes or tools |
 | `tests/test_spec.py` | Executable specification: documented examples, fixtures, limits, fuzzing |
 | `tests/test_sandbox.py` | Isolation gate: hostile programs, fail-closed behaviour, honest labels |
+| `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
 | `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |
-| `eval/` | Prompts, tasks, reference answers and tests for saved model responses |
+| `eval/` | Prompts, tasks, reference answers, saved-response evaluator and the paired study harness |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |
 | `.github/workflows/ci.yml` | Required, fail-closed, packaging and benchmark lanes |
 | [`pyproject.toml`](pyproject.toml) | Packaging metadata and the `nava` console script |
