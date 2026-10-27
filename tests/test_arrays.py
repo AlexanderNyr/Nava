@@ -554,9 +554,19 @@ fn main() {
 
     def test_the_runtime_documents_its_own_limit(self):
         code = frontend("fn main() { let a: [i64] = array_zeros(read_i64()); print(len(a)) }")
-        self.assertIn("nv_check_index", code)
         self.assertIn("4194304", code)
         self.assertIn("array length must not be negative", code)
+        # N8 emits only the runtime a program can reach, so the bounds-check
+        # helper appears exactly when the program can index — and never
+        # disappears from a program that can.
+        self.assertNotIn("nv_check_index", code,
+                         "a program that never indexes must not carry the check")
+        indexing = frontend("fn main() {\n"
+                            "    let a: [i64] = array_zeros(3)\n"
+                            "    a[0] = 1\n"
+                            "    print(a[0])\n"
+                            "}")
+        self.assertIn("nv_check_index", indexing)
 
 
 if __name__ == "__main__":

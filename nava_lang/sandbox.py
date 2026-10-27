@@ -50,11 +50,13 @@ import sys
 import tempfile
 import threading
 import time
+
+from . import limits
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
-MODES = ("off", "auto", "required")
+MODES = limits.ISOLATION_MODES
 BACKENDS = ("namespaces", "rlimits")
 
 #: Isolation label reported for each backend, in plain words.

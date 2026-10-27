@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2 and N4–N7 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open; N8–N9 planned
+## Status: N0–N2 and N4–N8 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open; N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -16,15 +16,19 @@ This document answers one question:
 Phases N0 (measurement rig and test integrity), N1 (language specification and
 diagnostics), N2 (isolated build and execution), N4 (arrays and ownership),
 N5 (control flow and numerical coverage), N6 (modules, standard library and
-capability-limited file access) and N7 (model-facing grammar and constrained
-generation, **without** its model measurements) are delivered, and N3's harness
+capability-limited file access), N7 (model-facing grammar and constrained
+generation, **without** its model measurements) and N8 (native and compiler
+performance, on measured before/after records) are delivered, and N3's harness
 is delivered — **without** a model result,
 which cannot be produced without a model to run: see the delivery records in
 the relevant subsections for the evidence, the commands that produce it and the
 items that are deliberately left open. N3's infrastructure exists; its
 empirical results do not. N7 ships the guide, the grammar, the constrained
 adapter, the A/B harness and the structured feedback — the A/B *result* stays
-open for the same reason. N8 is the next phase and does not need a model.
+open for the same reason. N8 needed no model: it ships the profiler, the
+comparison tool, the selective runtime, the lazy import path and a randomised
+differential gate whose twelve negative controls all fail as they should. N9 is
+the next phase.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -115,15 +119,17 @@ complete by skipping its gate.
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | **Delivered** |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Delivered |
 | N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | **Delivered, measurement open** |
-| N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | Planned |
+| N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | **Delivered** |
 | N9 | Packaging, CI and release readiness | N1, N2, N3 | Clean installation and non-skipping CI pass on each declared platform | Planned |
 
 `N3` can deliver the measurement infrastructure before a provider is chosen,
 but its empirical comparison is not complete without real model results.
 `N7` is in the same position: the guide, the grammar, the adapter and the A/B
 harness are built and tested, the guidance overhead is measured in tokens, and
-the accuracy comparison is not. `N8` depends on measurements too, so it starts
-from measured native and compiler numbers rather than assumptions.
+the accuracy comparison is not. `N8` started from measured native and compiler
+numbers rather than assumptions, and it is the first phase that reports a
+regression as well as improvements: the runtime symbol scan costs 0.5 ms on a
+10 KB program and that row is in `BENCHMARK.md` rather than edited out.
 
 ---
 
@@ -797,17 +803,45 @@ changing the result of existing programs.
 
 #### Tasks
 
-- [ ] Profile frontend, C emission, native compilation, startup and execution
-      separately on the N0 workloads; prioritize costs actually observed.
-- [ ] Consider constant folding, dead-helper elimination, generated-C quality
+- [x] Profile frontend, C emission, native compilation, startup and execution
+      separately on the N0 workloads; prioritize costs actually observed. →
+      `bench/profile.py` (`nava-profile/1`): `python_startup`, `import_and_cli`,
+      `frontend_total`, `lex`/`parse`/`check`/`emit`, `cli_emit_c`, `cc`,
+      `binary_startup`, `run`, on five workloads; `bench/compare.py`
+      (`nava-comparison/1`) classifies two records with an explicit noise rule;
+      the records and the classified difference are in `bench/results/`. The
+      profile found the build cost to be dominated by the Python import path
+      (`nava --version` 74.4 ms with `dataclasses` and `subprocess` imported
+      eagerly) and by 22.7 KB of runtime text emitted for every program, not by
+      the front end (0.6–1.3 ms).
+- [x] Consider constant folding, dead-helper elimination, generated-C quality
       and build reuse only where benchmarks justify them. Cache keys, if a
       cache is added, must include source, compiler identity, flags, platform
-      and compiler version; untrusted cache use must follow N2's boundary.
-- [ ] Preserve checked overflow, division errors, left-to-right side effects,
+      and compiler version; untrusted cache use must follow N2's boundary. →
+      dead-helper elimination delivered (`nava_lang/runtime.py`: the runtime is
+      split into units and only the reachable closure is emitted;
+      `NAVA_FULL_RUNTIME=1` reproduces the old output for comparison) and the
+      Python import path was made lazy (`nava_lang/records.py` replaces
+      `dataclasses` for the AST; `subprocess`, `tempfile`, `shutil` and
+      `nava_lang.sandbox` are imported inside the commands that use them).
+      **Constant folding and a build cache are deliberately not done**: the
+      front end is 0.4–1.3 ms of a 50 ms build, and a cache would need the key
+      material and the untrusted-input boundary the task names, for a `cc`
+      phase whose difference is inside the noise on every workload.
+- [x] Preserve checked overflow, division errors, left-to-right side effects,
       short-circuiting and defined collection lifetimes. Do not introduce C
-      undefined behaviour to obtain a faster result.
-- [ ] Compare with C and C++ programs under equivalent optimization and
-      arithmetic assumptions. Label unchecked variants separately.
+      undefined behaviour to obtain a faster result. → the semantics of the
+      emitted C are unchanged: `tests/test_differential.py` compares generated
+      programs against a model of the documented rules, compiling each
+      arithmetic case twice (builtin and `-DNAVA_FORCE_PORTABLE`), and
+      `bench/negative_controls.py` shows that twelve deliberately reintroduced
+      defects each fail the gate. The address/undefined-behaviour sanitizer
+      gate of `tests/test_arrays.py` still covers every array fixture.
+- [x] Compare with C and C++ programs under equivalent optimization and
+      arithmetic assumptions. Label unchecked variants separately. →
+      `bench/run.py` records Nava, checked C++ and unchecked C++ at `-O2`;
+      the unchecked variant is labelled as equivalent only for the bounded N0
+      workload. Records: `bench/results/2026-10-27-n8-{before,after}-bench.json`.
 
 #### Test gate
 
@@ -823,6 +857,32 @@ changing the result of existing programs.
 Measured compiler/backend improvements, regression tests and before/after
 benchmark receipts. A direct LLVM backend is a separate decision, not an
 assumed prerequisite or guaranteed speedup.
+
+#### Delivery record (2026-10-27)
+
+All rows were executed on this tree. "Before" is the delivered N7 commit
+checked out with `git worktree` and measured with the same profiler in the same
+session.
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Phases are separated and recorded | `python3 bench/profile.py --json …` | `nava-profile/1` for five workloads; medians, minima, standard deviations and raw samples; `model_measurements.status = "not-measured"` (nothing here calls a model) |
+| A difference is classified, not asserted | `python3 bench/compare.py before.json after.json` | 8 improved, 2 regressed, 31 inconclusive, 4 missing under the stated rule (\|Δ\| > 2σ **and** ≥ 5%); sizes compared exactly; a missing phase is `missing`, never `0` |
+| Command-line front end | `nava emit-c` on five workloads | 78.03 → 49.97 ms (`loop`), 78.10 → 50.56 (`arrays`), 87.02 → 55.28 (`modules`), 81.46 → 50.51 (`float`); improved on every workload (−35% to −38%) |
+| Compiler start-up | `nava --version` | 74.37 → 48.97 ms (improved, −34.6%); `python3 -c pass` 14.22 → 13.93 ms (inconclusive) |
+| Emitted C is smaller | `emitted_c_bytes` | `loop` 23442 → 4909 (−79%), `arrays` 24262 → 8641, `modules` 35528 → 22129, `float` 25323 → 12129, `synthetic` 54394 → 34801 (−36%) |
+| Binary size | `binary_bytes` | unchanged on every workload (16352, 16456, 16880, 17032, 20208): `-O2` already dropped the unused `static inline` helpers, so the gain is build-side, not on disk |
+| Costs are reported, not hidden | `emit` rows | `float` +0.070 ms (2.5σ) and `synthetic` +0.484 ms (9σ) **regressed**: the runtime symbol scan; `cc` stays inconclusive on all five workloads |
+| Program speed is unchanged | `python3 bench/run.py` before/after | front end 79.67 → 52.43 ms; run median 27.67 → 27.59 ms (inconclusive, σ 0.19–0.73); C++ checked 27.89 ms, unchecked 27.66 ms |
+| Semantics are still checked | `python3 -m unittest tests.test_differential` | 19 tests: randomised arithmetic against a model of the documented rules, `INT64_MIN / -1`, division and remainder by zero, truncation, bounds, evaluation order, short-circuiting, loop-scoped array release with `-DNAVA_TRACK_ALLOCS`, and a module call; each arithmetic case compiled twice (builtin and portable) |
+| The gate can fail | `python3 bench/negative_controls.py` | **12/12** controls caught: builtin and portable `+` overflow, `*`, unary `-`, `/` and `%` by zero, bounds check, array release, argument order, short-circuit, runtime closure, record factory; every file restored and verified by SHA-256 |
+| No skipped tests | `python3 -m unittest discover -s tests -q` | 356 tests, `OK`; registry `OK: 286 registered tests, 11 tasks with 76 cases, 112 fixtures, 92 diagnostic codes` |
+| Selection is sound, not lucky | `python3 -m unittest tests.test_runtime` | 16 tests: units re-index to their positions, `#if` blocks are never split, comments travel with their definition, the closure is closed for every example program, kept units appear verbatim, the scanner is a proven superset of the word-boundary pattern |
+| The `dataclasses` replacement keeps the contract | `python3 -m unittest tests.test_records` | 13 tests: positional/keyword forms, per-instance factories, `init=False`, inheritance order, frozen hashing and immutability, unhashable mutable records, native error wording, and agreement between the specialised constructor and the generic fallback |
+
+Left open on purpose: constant folding, a build cache and an LLVM backend. Each
+needs a benchmark that justifies it; the profile in `bench/results/` says the
+front end is 1–3% of a build, which is not that benchmark.
 
 ---
 

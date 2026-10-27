@@ -206,12 +206,14 @@ nesting limit is 200 (`nava_lang/limits.py`).
 
 ## Performance: measured and unmeasured
 
-In one local arithmetic-loop microbenchmark with five million iterations, the
-median was **28.16 ms** for Nava, **27.87 ms** for checked C++ and **28.09 ms**
-for unchecked C++. Each result used seven runs at `-O2` and includes process
-startup. The results are comparable on this one workload; they do **not**
-establish general superiority. The environment and limitations are recorded in
-[`BENCHMARK.md`](BENCHMARK.md).
+In the phase-N8 arithmetic-loop microbenchmark with five million iterations and
+five samples at `-O2`, the median run time was **27.59 ms** for Nava,
+**27.89 ms** for checked C++ and **27.66 ms** for unchecked C++, including
+process start-up. The results are comparable on this one workload — the
+differences are the same order as the sample spread — so they do **not**
+establish general superiority. Building that program takes Nava 52.4 ms of
+Python plus 66.1 ms of `cc`. The environment, samples and limitations are
+recorded in [`BENCHMARK.md`](BENCHMARK.md) and `bench/results/`.
 
 Model generation speed and accuracy have not been measured against a
 specified model. [`eval/study.py`](eval/README.md) is a complete paired-study
@@ -227,6 +229,18 @@ expected answer independently.
 compiler versions, flags, warm-up policy, raw samples per phase and missing
 model fields as `null` with an explicit status. Recorded runs live in
 `bench/results/`.
+
+Compiler cost is measured separately from program cost. `bench/profile.py`
+splits a build into interpreter start-up, command-line front end, lexer,
+parser, checker, C emission, `cc` and program start-up on five workloads, and
+`bench/compare.py` classifies two records with an explicit noise rule (a phase
+is only `improved` or `regressed` when it beats twice the larger standard
+deviation *and* 5% of the baseline; everything else is `inconclusive`). On the
+records in `bench/results/`, `nava emit-c` fell from 78 to 50 ms and the emitted
+C from 23442 to 4909 bytes for the loop workload, while the runtime symbol scan
+made `emit` 0.5 ms slower on a 10 KB program — a cost that is published, not
+edited out. `python3 bench/negative_controls.py` reintroduces twelve known
+compiler bugs and requires the differential gate to catch each one.
 
 The model-facing guide, the grammar and the constrained-decoding adapter are
 part of the same harness. Their cost is measured: the prompt for one task is
@@ -292,8 +306,10 @@ is not, on which platforms, and how each claim is tested.
 | `tests/test_guides.py` | Guide gate: digests, canonical examples, coverage of the implemented language, overhead records |
 | `tests/test_grammar.py` | Grammar gate: conformance corpus, the emitted GBNF artefact, syntax versus semantics |
 | `tests/test_ab.py` | A/B gate: feedback stages, repair accounting, record validation, no claim without a measurement |
+| `tests/test_runtime.py` | Selective-runtime gate: unit split invariants, closed closure, verbatim units, scanner superset |
+| `tests/test_differential.py` | Randomised differential gate for arithmetic, collections, evaluation order and short-circuiting |
 | `tests/fixtures/` | Negative, positive and warning fixtures with recorded expectations |
-| `bench/` | Reproducible comparison with C++; JSON records in `bench/results/` |
+| `bench/` | Reproducible comparison with C++, phase-by-phase compiler profile, record comparison and negative controls; JSON records in `bench/results/` |
 | `eval/` | Prompts, tasks, reference answers, saved-response evaluator and the paired study harness |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |
 | `.github/workflows/ci.yml` | Required, fail-closed, packaging and benchmark lanes |

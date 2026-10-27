@@ -1,0 +1,606 @@
+{
+  "schema": "nava-comparison/1",
+  "rule": {
+    "sigma": 2.0,
+    "floor": 0.05,
+    "note": "a phase is improved or regressed only when the median difference exceeds sigma times the larger standard deviation and floor of the baseline median; everything else is inconclusive, and a missing phase is never zero"
+  },
+  "before": {
+    "label": "N8 imports only: whole runtime kept (isolates the runtime change)",
+    "runtime": "full",
+    "recorded_at_utc": "2026-10-27T18:31:29+00:00"
+  },
+  "after": {
+    "label": "N8: reachable runtime units, deferred imports, specialised records",
+    "runtime": "selected",
+    "recorded_at_utc": "2026-10-27T18:31:22+00:00"
+  },
+  "environment_mismatches": [],
+  "processes": {
+    "python_startup": {
+      "before_ms": 13.8292,
+      "after_ms": 13.9325,
+      "verdict": "inconclusive",
+      "delta_ms": 0.1033,
+      "relative": 0.0075,
+      "spread_ms": 0.3134,
+      "delta_over_spread": 0.33
+    },
+    "import_and_cli": {
+      "before_ms": 46.9492,
+      "after_ms": 48.9675,
+      "verdict": "inconclusive",
+      "delta_ms": 2.0183,
+      "relative": 0.043,
+      "spread_ms": 3.8572,
+      "delta_over_spread": 0.523
+    }
+  },
+  "workloads": [
+    {
+      "workload": "loop",
+      "phases": {
+        "frontend_total": {
+          "before_ms": 0.4134,
+          "after_ms": 0.4065,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0069,
+          "relative": -0.0167,
+          "spread_ms": 0.054,
+          "delta_over_spread": 0.128
+        },
+        "lex": {
+          "before_ms": 0.1492,
+          "after_ms": 0.1547,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0055,
+          "relative": 0.0369,
+          "spread_ms": 0.0871,
+          "delta_over_spread": 0.063
+        },
+        "parse": {
+          "before_ms": 0.2335,
+          "after_ms": 0.2069,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0266,
+          "relative": -0.1139,
+          "spread_ms": 0.0379,
+          "delta_over_spread": 0.702
+        },
+        "check": {
+          "before_ms": 0.0226,
+          "after_ms": 0.0224,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0002,
+          "relative": -0.0088,
+          "spread_ms": 0.0241,
+          "delta_over_spread": 0.008
+        },
+        "emit": {
+          "before_ms": 0.0265,
+          "after_ms": 0.0524,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0259,
+          "relative": 0.9774,
+          "spread_ms": 0.313,
+          "delta_over_spread": 0.083
+        },
+        "cli_emit_c": {
+          "before_ms": 47.4001,
+          "after_ms": 49.972,
+          "verdict": "inconclusive",
+          "delta_ms": 2.5719,
+          "relative": 0.0543,
+          "spread_ms": 4.4113,
+          "delta_over_spread": 0.583
+        },
+        "cc": {
+          "before_ms": 66.3658,
+          "after_ms": 65.992,
+          "verdict": "inconclusive",
+          "delta_ms": -0.3738,
+          "relative": -0.0056,
+          "spread_ms": 4.7912,
+          "delta_over_spread": 0.078
+        },
+        "binary_startup": {
+          "before_ms": 1.2432,
+          "after_ms": 1.3747,
+          "verdict": "inconclusive",
+          "delta_ms": 0.1315,
+          "relative": 0.1058,
+          "spread_ms": 0.1186,
+          "delta_over_spread": 1.109
+        },
+        "run": {
+          "before_ms": 6.5204,
+          "after_ms": 6.8802,
+          "verdict": "inconclusive",
+          "delta_ms": 0.3598,
+          "relative": 0.0552,
+          "spread_ms": 0.4232,
+          "delta_over_spread": 0.85
+        }
+      },
+      "sizes": {
+        "emitted_c_bytes": {
+          "before": 23442,
+          "after": 4909,
+          "delta": -18533,
+          "relative": -0.7906,
+          "verdict": "reduced"
+        },
+        "binary_bytes": {
+          "before": 16352,
+          "after": 16352,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        },
+        "source_bytes": {
+          "before": 172,
+          "after": 172,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        }
+      },
+      "verdict": "inconclusive"
+    },
+    {
+      "workload": "arrays",
+      "phases": {
+        "frontend_total": {
+          "before_ms": 0.8115,
+          "after_ms": 0.8835,
+          "verdict": "inconclusive",
+          "delta_ms": 0.072,
+          "relative": 0.0887,
+          "spread_ms": 0.1153,
+          "delta_over_spread": 0.624
+        },
+        "lex": {
+          "before_ms": 0.3897,
+          "after_ms": 0.3968,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0071,
+          "relative": 0.0182,
+          "spread_ms": 0.0346,
+          "delta_over_spread": 0.205
+        },
+        "parse": {
+          "before_ms": 0.4905,
+          "after_ms": 0.5165,
+          "verdict": "inconclusive",
+          "delta_ms": 0.026,
+          "relative": 0.053,
+          "spread_ms": 0.0371,
+          "delta_over_spread": 0.701
+        },
+        "check": {
+          "before_ms": 0.0491,
+          "after_ms": 0.0556,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0065,
+          "relative": 0.1324,
+          "spread_ms": 0.0179,
+          "delta_over_spread": 0.363
+        },
+        "emit": {
+          "before_ms": 0.0522,
+          "after_ms": 0.0963,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0441,
+          "relative": 0.8448,
+          "spread_ms": 0.0333,
+          "delta_over_spread": 1.324
+        },
+        "cli_emit_c": {
+          "before_ms": 48.4229,
+          "after_ms": 50.5609,
+          "verdict": "inconclusive",
+          "delta_ms": 2.138,
+          "relative": 0.0442,
+          "spread_ms": 2.4161,
+          "delta_over_spread": 0.885
+        },
+        "cc": {
+          "before_ms": 82.5673,
+          "after_ms": 80.3069,
+          "verdict": "inconclusive",
+          "delta_ms": -2.2604,
+          "relative": -0.0274,
+          "spread_ms": 6.4008,
+          "delta_over_spread": 0.353
+        },
+        "binary_startup": {
+          "before_ms": 1.3132,
+          "after_ms": 1.2903,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0229,
+          "relative": -0.0174,
+          "spread_ms": 0.1108,
+          "delta_over_spread": 0.207
+        },
+        "run": {
+          "before_ms": 1.2754,
+          "after_ms": 1.1591,
+          "verdict": "inconclusive",
+          "delta_ms": -0.1163,
+          "relative": -0.0912,
+          "spread_ms": 0.1437,
+          "delta_over_spread": 0.809
+        }
+      },
+      "sizes": {
+        "emitted_c_bytes": {
+          "before": 24262,
+          "after": 8641,
+          "delta": -15621,
+          "relative": -0.6438,
+          "verdict": "reduced"
+        },
+        "binary_bytes": {
+          "before": 16456,
+          "after": 16456,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        },
+        "source_bytes": {
+          "before": 528,
+          "after": 528,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        }
+      },
+      "verdict": "inconclusive"
+    },
+    {
+      "workload": "modules",
+      "phases": {
+        "frontend_total": {
+          "before_ms": 7.9575,
+          "after_ms": 8.0756,
+          "verdict": "inconclusive",
+          "delta_ms": 0.1181,
+          "relative": 0.0148,
+          "spread_ms": 1.9117,
+          "delta_over_spread": 0.062
+        },
+        "lex": {
+          "before_ms": null,
+          "after_ms": null,
+          "verdict": "missing",
+          "delta_ms": null,
+          "relative": null,
+          "spread_ms": null,
+          "delta_over_spread": null
+        },
+        "parse": {
+          "before_ms": 9.3444,
+          "after_ms": 6.3542,
+          "verdict": "inconclusive",
+          "delta_ms": -2.9902,
+          "relative": -0.32,
+          "spread_ms": 1.6993,
+          "delta_over_spread": 1.76
+        },
+        "check": {
+          "before_ms": 0.8721,
+          "after_ms": 0.4703,
+          "verdict": "improved",
+          "delta_ms": -0.4018,
+          "relative": -0.4607,
+          "spread_ms": 0.0985,
+          "delta_over_spread": 4.079
+        },
+        "emit": {
+          "before_ms": 0.8887,
+          "after_ms": 0.7017,
+          "verdict": "inconclusive",
+          "delta_ms": -0.187,
+          "relative": -0.2104,
+          "spread_ms": 0.1852,
+          "delta_over_spread": 1.01
+        },
+        "cli_emit_c": {
+          "before_ms": 57.3687,
+          "after_ms": 55.275,
+          "verdict": "inconclusive",
+          "delta_ms": -2.0937,
+          "relative": -0.0365,
+          "spread_ms": 1.1783,
+          "delta_over_spread": 1.777
+        },
+        "cc": {
+          "before_ms": 123.5334,
+          "after_ms": 112.632,
+          "verdict": "improved",
+          "delta_ms": -10.9014,
+          "relative": -0.0882,
+          "spread_ms": 4.9259,
+          "delta_over_spread": 2.213
+        },
+        "binary_startup": {
+          "before_ms": 1.2913,
+          "after_ms": 1.2257,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0656,
+          "relative": -0.0508,
+          "spread_ms": 0.1427,
+          "delta_over_spread": 0.46
+        },
+        "run": {
+          "before_ms": 1.2231,
+          "after_ms": 1.3165,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0934,
+          "relative": 0.0764,
+          "spread_ms": 0.0946,
+          "delta_over_spread": 0.987
+        }
+      },
+      "sizes": {
+        "emitted_c_bytes": {
+          "before": 35528,
+          "after": 22129,
+          "delta": -13399,
+          "relative": -0.3771,
+          "verdict": "reduced"
+        },
+        "binary_bytes": {
+          "before": 16880,
+          "after": 16880,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        },
+        "source_bytes": {
+          "before": 638,
+          "after": 638,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        }
+      },
+      "verdict": "improved"
+    },
+    {
+      "workload": "float",
+      "phases": {
+        "frontend_total": {
+          "before_ms": 1.2488,
+          "after_ms": 1.3337,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0849,
+          "relative": 0.068,
+          "spread_ms": 0.0583,
+          "delta_over_spread": 1.456
+        },
+        "lex": {
+          "before_ms": 0.5917,
+          "after_ms": 0.5877,
+          "verdict": "inconclusive",
+          "delta_ms": -0.004,
+          "relative": -0.0068,
+          "spread_ms": 0.042,
+          "delta_over_spread": 0.095
+        },
+        "parse": {
+          "before_ms": 0.7518,
+          "after_ms": 0.7483,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0035,
+          "relative": -0.0047,
+          "spread_ms": 0.043,
+          "delta_over_spread": 0.081
+        },
+        "check": {
+          "before_ms": 0.0882,
+          "after_ms": 0.088,
+          "verdict": "inconclusive",
+          "delta_ms": -0.0002,
+          "relative": -0.0023,
+          "spread_ms": 0.0202,
+          "delta_over_spread": 0.01
+        },
+        "emit": {
+          "before_ms": 0.0926,
+          "after_ms": 0.1593,
+          "verdict": "regressed",
+          "delta_ms": 0.0667,
+          "relative": 0.7203,
+          "spread_ms": 0.0276,
+          "delta_over_spread": 2.417
+        },
+        "cli_emit_c": {
+          "before_ms": 49.9418,
+          "after_ms": 50.5059,
+          "verdict": "inconclusive",
+          "delta_ms": 0.5641,
+          "relative": 0.0113,
+          "spread_ms": 1.5723,
+          "delta_over_spread": 0.359
+        },
+        "cc": {
+          "before_ms": 104.6627,
+          "after_ms": 102.0472,
+          "verdict": "inconclusive",
+          "delta_ms": -2.6155,
+          "relative": -0.025,
+          "spread_ms": 3.8156,
+          "delta_over_spread": 0.685
+        },
+        "binary_startup": {
+          "before_ms": null,
+          "after_ms": null,
+          "verdict": "missing",
+          "delta_ms": null,
+          "relative": null,
+          "spread_ms": null,
+          "delta_over_spread": null
+        },
+        "run": {
+          "before_ms": null,
+          "after_ms": null,
+          "verdict": "missing",
+          "delta_ms": null,
+          "relative": null,
+          "spread_ms": null,
+          "delta_over_spread": null
+        }
+      },
+      "sizes": {
+        "emitted_c_bytes": {
+          "before": 25323,
+          "after": 12129,
+          "delta": -13194,
+          "relative": -0.521,
+          "verdict": "reduced"
+        },
+        "binary_bytes": {
+          "before": 17032,
+          "after": 17032,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        },
+        "source_bytes": {
+          "before": 755,
+          "after": 755,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        }
+      },
+      "verdict": "regressed"
+    },
+    {
+      "workload": "synthetic",
+      "phases": {
+        "frontend_total": {
+          "before_ms": 13.3533,
+          "after_ms": 15.8792,
+          "verdict": "inconclusive",
+          "delta_ms": 2.5259,
+          "relative": 0.1892,
+          "spread_ms": 3.9211,
+          "delta_over_spread": 0.644
+        },
+        "lex": {
+          "before_ms": 9.0724,
+          "after_ms": 9.4089,
+          "verdict": "inconclusive",
+          "delta_ms": 0.3365,
+          "relative": 0.0371,
+          "spread_ms": 0.964,
+          "delta_over_spread": 0.349
+        },
+        "parse": {
+          "before_ms": 10.8226,
+          "after_ms": 12.0553,
+          "verdict": "inconclusive",
+          "delta_ms": 1.2327,
+          "relative": 0.1139,
+          "spread_ms": 2.2828,
+          "delta_over_spread": 0.54
+        },
+        "check": {
+          "before_ms": 1.0247,
+          "after_ms": 1.348,
+          "verdict": "inconclusive",
+          "delta_ms": 0.3233,
+          "relative": 0.3155,
+          "spread_ms": 0.1741,
+          "delta_over_spread": 1.857
+        },
+        "emit": {
+          "before_ms": 1.0022,
+          "after_ms": 1.5562,
+          "verdict": "regressed",
+          "delta_ms": 0.554,
+          "relative": 0.5528,
+          "spread_ms": 0.052,
+          "delta_over_spread": 10.654
+        },
+        "cli_emit_c": {
+          "before_ms": null,
+          "after_ms": null,
+          "verdict": "missing",
+          "delta_ms": null,
+          "relative": null,
+          "spread_ms": null,
+          "delta_over_spread": null
+        },
+        "cc": {
+          "before_ms": 142.9857,
+          "after_ms": 146.2616,
+          "verdict": "inconclusive",
+          "delta_ms": 3.2759,
+          "relative": 0.0229,
+          "spread_ms": 4.7662,
+          "delta_over_spread": 0.687
+        },
+        "binary_startup": {
+          "before_ms": 1.1487,
+          "after_ms": 1.2291,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0804,
+          "relative": 0.07,
+          "spread_ms": 0.1254,
+          "delta_over_spread": 0.641
+        },
+        "run": {
+          "before_ms": 1.2002,
+          "after_ms": 1.2154,
+          "verdict": "inconclusive",
+          "delta_ms": 0.0152,
+          "relative": 0.0127,
+          "spread_ms": 0.0491,
+          "delta_over_spread": 0.31
+        }
+      },
+      "sizes": {
+        "emitted_c_bytes": {
+          "before": 54394,
+          "after": 34801,
+          "delta": -19593,
+          "relative": -0.3602,
+          "verdict": "reduced"
+        },
+        "binary_bytes": {
+          "before": 20208,
+          "after": 20208,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        },
+        "source_bytes": {
+          "before": 10368,
+          "after": 10368,
+          "delta": 0,
+          "relative": 0.0,
+          "verdict": "unchanged"
+        }
+      },
+      "verdict": "regressed"
+    }
+  ],
+  "summary": {
+    "improved": 2,
+    "regressed": 2,
+    "inconclusive": 37,
+    "missing": 4,
+    "missing_workloads": [],
+    "regressions": [
+      "float.emit",
+      "synthetic.emit"
+    ],
+    "improvements": [
+      "modules.check",
+      "modules.cc"
+    ]
+  }
+}

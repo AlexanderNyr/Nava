@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Optional
+from .records import field, record
 
 
 class Severity:
@@ -11,7 +10,7 @@ class Severity:
     WARNING = "warning"
 
 
-@dataclass(frozen=True)
+@record(frozen=True)
 class Location:
     """A position in one source file.
 
@@ -21,7 +20,7 @@ class Location:
 
     line: int
     column: int
-    path: Optional[str] = None
+    path: str | None = None
 
     def advance(self, text: str) -> "Location":
         """End location of `text` when it starts at this location."""
@@ -35,24 +34,24 @@ class Location:
         return Location(line, column, self.path)
 
 
-@dataclass(frozen=True)
+@record(frozen=True)
 class Diagnostic:
     """A message with a stable code, a source range and an optional hint."""
 
     code: str
     severity: str
     message: str
-    loc: Optional[Location] = None
-    end: Optional[Location] = None
-    hint: Optional[str] = None
+    loc: Location | None = None
+    end: Location | None = None
+    hint: str | None = None
 
 
 class NavaError(Exception):
     """A compilation error. `code` is a stable identifier from diagnostics.py."""
 
-    def __init__(self, message: str, loc: Optional[Location] = None,
-                 code: str = "E0000", end: Optional[Location] = None,
-                 hint: Optional[str] = None):
+    def __init__(self, message: str, loc: Location | None = None,
+                 code: str = "E0000", end: Location | None = None,
+                 hint: str | None = None):
         super().__init__(message)
         self.message = message
         self.loc = loc
@@ -72,14 +71,14 @@ class NavaError(Exception):
         )
 
 
-@dataclass(frozen=True)
+@record(frozen=True)
 class Token:
     kind: str
     value: object
     loc: Location
 
 
-@dataclass
+@record()
 class Symbol:
     name: str
     typ: str
@@ -94,42 +93,42 @@ class Symbol:
     readonly: bool = False
 
 
-@dataclass
+@record()
 class Expr:
     loc: Location
-    typ: Optional[str] = field(default=None, init=False)
+    typ: str | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Number(Expr):
     value: int
 
 
-@dataclass
+@record()
 class Float(Expr):
     """An `f64` literal. The value is an IEEE-754 binary64 number."""
 
     value: float
 
 
-@dataclass
+@record()
 class String(Expr):
     value: str
 
 
-@dataclass
+@record()
 class Boolean(Expr):
     value: bool
 
 
-@dataclass
+@record()
 class ArrayLiteral(Expr):
     """`[a, b, c]`: a new owned array. The element type comes from the items."""
 
     items: list[Expr]
 
 
-@dataclass
+@record()
 class Index(Expr):
     """`a[i]`: a checked read of one element. Only a variable can be indexed."""
 
@@ -137,23 +136,23 @@ class Index(Expr):
     index: Expr
 
 
-@dataclass
+@record()
 class Variable(Expr):
     name: str
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Call(Expr):
     name: str
     args: list[Expr]
     #: The module named before `::` in `math::abs(x)`, or None for a call that
     #: is resolved in the calling module.
-    module: Optional[str] = None
-    target: Optional[Function] = field(default=None, init=False)
+    module: str | None = None
+    target: Function | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Range(Expr):
     """`a..b`: the iterable of a `for` loop, half-open, bounds evaluated once."""
 
@@ -161,75 +160,75 @@ class Range(Expr):
     end: Expr
 
 
-@dataclass
+@record()
 class Unary(Expr):
     op: str
     operand: Expr
 
 
-@dataclass
+@record()
 class Binary(Expr):
     op: str
     left: Expr
     right: Expr
 
 
-@dataclass
+@record()
 class Stmt:
     loc: Location
 
 
-@dataclass
+@record()
 class Let(Stmt):
     name: str
-    annotation: Optional[str]
+    annotation: str | None
     value: Expr
-    name_loc: Optional[Location] = None
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    name_loc: Location | None = None
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Assign(Stmt):
     name: str
     value: Expr
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class IndexAssign(Stmt):
     """`a[i] = value`: write one element of a mutable array."""
 
     name: str
     index: Expr
     value: Expr
-    name_loc: Optional[Location] = None
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    name_loc: Location | None = None
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class ExprStmt(Stmt):
     expr: Expr
 
 
-@dataclass
+@record()
 class Return(Stmt):
-    value: Optional[Expr]
+    value: Expr | None
 
 
-@dataclass
+@record()
 class If(Stmt):
     condition: Expr
     then_body: list[Stmt]
-    else_body: Optional[list[Stmt]]
+    else_body: list[Stmt] | None
 
 
-@dataclass
+@record()
 class While(Stmt):
     condition: Expr
     body: list[Stmt]
 
 
-@dataclass
+@record()
 class For(Stmt):
     """`for name in iterable`: a range or an array.
 
@@ -240,31 +239,31 @@ class For(Stmt):
     name: str
     iterable: Expr
     body: list[Stmt]
-    name_loc: Optional[Location] = None
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    name_loc: Location | None = None
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Break(Stmt):
     pass
 
 
-@dataclass
+@record()
 class Continue(Stmt):
     pass
 
 
-@dataclass
+@record()
 class Param:
     name: str
     typ: str
     loc: Location
     #: True for `mut [T]`: a mutable borrow, so element writes are allowed.
     mutable: bool = False
-    symbol: Optional[Symbol] = field(default=None, init=False)
+    symbol: Symbol | None = field(default=None, init=False)
 
 
-@dataclass
+@record()
 class Import:
     """`import name`: the whole content of another file on disk."""
 
@@ -275,7 +274,7 @@ class Import:
     standard: bool = False
 
 
-@dataclass
+@record()
 class Function:
     name: str
     params: list[Param]
@@ -291,7 +290,7 @@ class Function:
         return f"{self.module}::{self.name}" if self.module else self.name
 
 
-@dataclass
+@record()
 class Program:
     """The whole translation unit: every function of every loaded module."""
 

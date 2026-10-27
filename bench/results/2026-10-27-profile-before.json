@@ -1,0 +1,947 @@
+{
+  "schema": "nava-profile/1",
+  "label": "N7 baseline: whole runtime, eager imports",
+  "runtime": "full",
+  "environment": {
+    "recorded_at_utc": "2026-10-27T18:25:19+00:00",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.41",
+    "machine": "x86_64",
+    "cpu_count": 2,
+    "python": "3.13.16",
+    "nava_version": "0.1.0",
+    "cc_command": [
+      "cc"
+    ],
+    "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
+    "cc_flags": [
+      "-std=c11",
+      "-O2"
+    ],
+    "isolation": "none: timings come from a shared, non-isolated host; compare medians, not single runs"
+  },
+  "configuration": {
+    "opt": "O2",
+    "stage_samples": 15,
+    "process_samples": 7,
+    "synthetic_functions": 60,
+    "runtime_env": "1"
+  },
+  "processes": {
+    "python_startup": {
+      "samples": [
+        14.8258,
+        15.7992,
+        14.2677,
+        14.2241,
+        14.1957,
+        14.0734,
+        13.7216
+      ],
+      "median_ms": 14.2241,
+      "min_ms": 13.7216,
+      "stdev_ms": 0.681
+    },
+    "import_and_cli": {
+      "samples": [
+        75.9308,
+        74.9786,
+        74.8833,
+        74.4686,
+        74.9307,
+        74.6597,
+        75.9251
+      ],
+      "median_ms": 74.9307,
+      "min_ms": 74.4686,
+      "stdev_ms": 0.5849
+    }
+  },
+  "workloads": [
+    {
+      "workload": "loop",
+      "source": "bench/loop.nv",
+      "note": "the N0 workload: one checked arithmetic loop",
+      "source_bytes": 172,
+      "stages_ms": {
+        "lex": {
+          "samples": [
+            0.3749,
+            0.1539,
+            0.1463,
+            0.1535,
+            0.1413,
+            0.1687,
+            0.1514,
+            0.1427,
+            0.1413,
+            0.1402,
+            0.1689,
+            0.1436,
+            0.2085,
+            0.2284,
+            0.2972
+          ],
+          "median_ms": 0.1535,
+          "min_ms": 0.1402,
+          "stdev_ms": 0.0684
+        },
+        "parse": {
+          "samples": [
+            0.462,
+            0.3441,
+            0.3729,
+            0.3296,
+            0.3262,
+            0.3475,
+            0.3202,
+            0.3245,
+            0.3859,
+            0.379,
+            0.3217,
+            0.3619,
+            0.3323,
+            0.3367,
+            0.3672
+          ],
+          "median_ms": 0.3441,
+          "min_ms": 0.3202,
+          "stdev_ms": 0.0371
+        },
+        "check": {
+          "samples": [
+            0.1322,
+            0.0541,
+            0.0421,
+            0.0462,
+            0.0383,
+            0.0341,
+            0.0781,
+            0.0354,
+            0.0383,
+            0.0355,
+            0.0362,
+            0.0378,
+            0.0327,
+            0.0334,
+            0.0322
+          ],
+          "median_ms": 0.0378,
+          "min_ms": 0.0322,
+          "stdev_ms": 0.0263
+        },
+        "emit": {
+          "samples": [
+            0.1764,
+            0.0751,
+            0.0533,
+            0.0443,
+            0.0417,
+            0.0419,
+            0.0921,
+            0.0518,
+            0.0431,
+            0.041,
+            0.04,
+            0.0415,
+            0.0483,
+            0.0418,
+            0.0403
+          ],
+          "median_ms": 0.0431,
+          "min_ms": 0.04,
+          "stdev_ms": 0.0359
+        },
+        "frontend_total": {
+          "samples": [
+            0.7456,
+            0.6489,
+            0.5849,
+            0.664,
+            0.6643,
+            0.569,
+            0.6093,
+            0.6471,
+            0.6026,
+            0.6312,
+            0.5969,
+            0.6214,
+            0.7182,
+            0.6855,
+            0.5945
+          ],
+          "median_ms": 0.6312,
+          "min_ms": 0.569,
+          "stdev_ms": 0.0503
+        }
+      },
+      "emitted_c_bytes": 23442,
+      "runtime_units": {
+        "variant": "full",
+        "selective": false,
+        "units": null,
+        "runtime_bytes": null,
+        "emitted_bytes": 23442
+      },
+      "processes_ms": {
+        "cli_emit_c": {
+          "samples": [
+            78.8414,
+            75.4481,
+            76.0701,
+            74.6207,
+            111.5666,
+            86.8664,
+            78.0254
+          ],
+          "median_ms": 78.0254,
+          "min_ms": 74.6207,
+          "stdev_ms": 13.2179
+        },
+        "cc": {
+          "samples": [
+            86.8867,
+            80.3681,
+            67.0944,
+            72.3136,
+            66.9407,
+            71.698,
+            70.9196
+          ],
+          "median_ms": 71.698,
+          "min_ms": 66.9407,
+          "stdev_ms": 7.318
+        },
+        "binary_startup": {
+          "samples": [
+            1.3997,
+            1.3896,
+            1.4059,
+            1.4181,
+            1.5116,
+            1.3941,
+            1.4657
+          ],
+          "median_ms": 1.4059,
+          "min_ms": 1.3896,
+          "stdev_ms": 0.0455
+        },
+        "run": {
+          "samples": [
+            6.7995,
+            6.9201,
+            6.7672,
+            6.761,
+            6.7809,
+            6.7379,
+            6.6686
+          ],
+          "median_ms": 6.7672,
+          "min_ms": 6.6686,
+          "stdev_ms": 0.0759
+        }
+      },
+      "binary_bytes": 16352,
+      "output": "666452314\n",
+      "failure": null
+    },
+    {
+      "workload": "arrays",
+      "source": "tests/fixtures/positive/arrays_sieve.nv",
+      "note": "arrays, bounds checks and a nested loop",
+      "source_bytes": 528,
+      "stages_ms": {
+        "lex": {
+          "samples": [
+            0.77,
+            0.814,
+            0.7648,
+            0.8666,
+            0.7077,
+            0.7563,
+            0.7791,
+            0.7732,
+            0.8159,
+            0.7251,
+            0.7799,
+            0.76,
+            0.7882,
+            0.8047,
+            0.777
+          ],
+          "median_ms": 0.777,
+          "min_ms": 0.7077,
+          "stdev_ms": 0.038
+        },
+        "parse": {
+          "samples": [
+            1.1204,
+            0.9126,
+            1.0149,
+            0.9537,
+            0.855,
+            0.9297,
+            1.0187,
+            0.9315,
+            0.9122,
+            0.9276,
+            1.0189,
+            0.9336,
+            0.9336,
+            0.9052,
+            0.4973
+          ],
+          "median_ms": 0.9315,
+          "min_ms": 0.4973,
+          "stdev_ms": 0.1345
+        },
+        "check": {
+          "samples": [
+            0.1363,
+            0.0764,
+            0.0615,
+            0.0567,
+            0.057,
+            0.0549,
+            0.0822,
+            0.0584,
+            0.054,
+            0.0521,
+            0.052,
+            0.0514,
+            0.0508,
+            0.0507,
+            0.0503
+          ],
+          "median_ms": 0.0549,
+          "min_ms": 0.0503,
+          "stdev_ms": 0.0224
+        },
+        "emit": {
+          "samples": [
+            0.1231,
+            0.091,
+            0.0914,
+            0.0595,
+            0.0649,
+            0.0563,
+            0.0538,
+            0.053,
+            0.0517,
+            0.0541,
+            0.0518,
+            0.052,
+            0.0845,
+            0.0629,
+            0.0547
+          ],
+          "median_ms": 0.0563,
+          "min_ms": 0.0517,
+          "stdev_ms": 0.021
+        },
+        "frontend_total": {
+          "samples": [
+            0.9802,
+            1.2145,
+            0.9194,
+            0.8768,
+            0.827,
+            0.8502,
+            0.8237,
+            0.8758,
+            0.83,
+            0.8293,
+            0.8414,
+            0.7966,
+            0.8107,
+            0.798,
+            0.7852
+          ],
+          "median_ms": 0.83,
+          "min_ms": 0.7852,
+          "stdev_ms": 0.1079
+        }
+      },
+      "emitted_c_bytes": 24262,
+      "runtime_units": {
+        "variant": "full",
+        "selective": false,
+        "units": null,
+        "runtime_bytes": null,
+        "emitted_bytes": 24262
+      },
+      "processes_ms": {
+        "cli_emit_c": {
+          "samples": [
+            79.4231,
+            77.3341,
+            78.1038,
+            77.8974,
+            78.6469,
+            80.0953,
+            76.409
+          ],
+          "median_ms": 78.1038,
+          "min_ms": 76.409,
+          "stdev_ms": 1.2456
+        },
+        "cc": {
+          "samples": [
+            77.4928,
+            74.6613,
+            73.1593,
+            73.1994,
+            73.97,
+            72.8917,
+            71.8372
+          ],
+          "median_ms": 73.1994,
+          "min_ms": 71.8372,
+          "stdev_ms": 1.8167
+        },
+        "binary_startup": {
+          "samples": [
+            1.2562,
+            1.2643,
+            1.1325,
+            0.969,
+            1.0938,
+            1.0606,
+            1.0251
+          ],
+          "median_ms": 1.0938,
+          "min_ms": 0.969,
+          "stdev_ms": 0.1121
+        },
+        "run": {
+          "samples": [
+            1.0532,
+            1.1544,
+            1.0471,
+            1.1054,
+            1.1111,
+            1.1574,
+            1.0934
+          ],
+          "median_ms": 1.1054,
+          "min_ms": 1.0471,
+          "stdev_ms": 0.0435
+        }
+      },
+      "binary_bytes": 16456,
+      "output": "46\n",
+      "failure": null
+    },
+    {
+      "workload": "modules",
+      "source": "examples/modules/main.nv",
+      "note": "three files: a local module plus the standard library",
+      "source_bytes": 638,
+      "stages_ms": {
+        "lex": {
+          "samples": [],
+          "median_ms": null,
+          "min_ms": null,
+          "stdev_ms": null,
+          "note": "not measured: the workload is several files"
+        },
+        "parse": {
+          "samples": [
+            6.2195,
+            6.6332,
+            7.177,
+            6.4334,
+            6.3125,
+            6.4451,
+            6.3272,
+            7.0102,
+            6.6339,
+            9.011,
+            6.3572,
+            6.2481,
+            6.3562,
+            7.0674,
+            7.1331
+          ],
+          "median_ms": 6.4451,
+          "min_ms": 6.2195,
+          "stdev_ms": 0.7092
+        },
+        "check": {
+          "samples": [
+            0.6155,
+            0.4924,
+            0.4303,
+            0.452,
+            0.4448,
+            0.4367,
+            0.4724,
+            0.4425,
+            0.4666,
+            0.5687,
+            0.4606,
+            0.41,
+            0.4588,
+            0.4259,
+            0.4496
+          ],
+          "median_ms": 0.452,
+          "min_ms": 0.41,
+          "stdev_ms": 0.0548
+        },
+        "emit": {
+          "samples": [
+            0.6202,
+            0.6412,
+            0.5997,
+            0.5702,
+            0.6575,
+            0.5859,
+            0.5095,
+            0.5056,
+            0.467,
+            0.5373,
+            0.5183,
+            0.5003,
+            0.4551,
+            0.4938,
+            0.4531
+          ],
+          "median_ms": 0.5183,
+          "min_ms": 0.4531,
+          "stdev_ms": 0.0673
+        },
+        "frontend_total": {
+          "samples": [
+            8.0697,
+            7.8141,
+            8.0171,
+            7.8957,
+            7.3141,
+            10.4372,
+            7.4536,
+            7.3967,
+            7.4593,
+            7.3931,
+            7.865,
+            8.0383,
+            7.9086,
+            7.5862,
+            8.3251
+          ],
+          "median_ms": 7.865,
+          "min_ms": 7.3141,
+          "stdev_ms": 0.7568
+        }
+      },
+      "emitted_c_bytes": 35528,
+      "runtime_units": {
+        "variant": "full",
+        "selective": false,
+        "units": null,
+        "runtime_bytes": null,
+        "emitted_bytes": 35528
+      },
+      "processes_ms": {
+        "cli_emit_c": {
+          "samples": [
+            79.8895,
+            81.7227,
+            87.0212,
+            82.0135,
+            88.9658,
+            104.7108,
+            100.3149
+          ],
+          "median_ms": 87.0212,
+          "min_ms": 79.8895,
+          "stdev_ms": 9.6881
+        },
+        "cc": {
+          "samples": [
+            117.0262,
+            126.1256,
+            124.4498,
+            116.3438,
+            132.0389,
+            117.6582,
+            118.0674
+          ],
+          "median_ms": 118.0674,
+          "min_ms": 116.3438,
+          "stdev_ms": 5.9735
+        },
+        "binary_startup": {
+          "samples": [
+            1.4905,
+            1.663,
+            1.2548,
+            1.2398,
+            1.1938,
+            1.2579,
+            1.3212
+          ],
+          "median_ms": 1.2579,
+          "min_ms": 1.1938,
+          "stdev_ms": 0.1696
+        },
+        "run": {
+          "samples": [
+            1.379,
+            1.254,
+            1.2678,
+            1.3328,
+            1.387,
+            1.3037,
+            1.2214
+          ],
+          "median_ms": 1.3037,
+          "min_ms": 1.2214,
+          "stdev_ms": 0.0631
+        }
+      },
+      "binary_bytes": 16880,
+      "output": "3\n7\n19\n23\n42\n88\ntrue\n182\n2\n30.333333333333332\ntrue\n6\n",
+      "failure": null
+    },
+    {
+      "workload": "float",
+      "source": "examples/stats.nv",
+      "note": "f64 formatting and conversions; not run (it takes no input)",
+      "source_bytes": 755,
+      "stages_ms": {
+        "lex": {
+          "samples": [
+            0.64,
+            0.602,
+            0.6543,
+            0.5876,
+            0.582,
+            0.5523,
+            0.5803,
+            0.5532,
+            0.5961,
+            0.6136,
+            0.6087,
+            0.5899,
+            0.5449,
+            0.581,
+            0.5485
+          ],
+          "median_ms": 0.5876,
+          "min_ms": 0.5449,
+          "stdev_ms": 0.0321
+        },
+        "parse": {
+          "samples": [
+            0.8512,
+            0.816,
+            0.7883,
+            0.8562,
+            0.7566,
+            0.8392,
+            0.7492,
+            0.7476,
+            0.7499,
+            0.7323,
+            0.7831,
+            0.7318,
+            0.7161,
+            0.6927,
+            0.8155
+          ],
+          "median_ms": 0.7566,
+          "min_ms": 0.6927,
+          "stdev_ms": 0.051
+        },
+        "check": {
+          "samples": [
+            0.1513,
+            0.1026,
+            0.0916,
+            0.0886,
+            0.1344,
+            0.1259,
+            0.131,
+            0.1219,
+            0.1389,
+            0.1078,
+            0.0869,
+            0.0825,
+            0.0838,
+            0.1305,
+            0.0924
+          ],
+          "median_ms": 0.1078,
+          "min_ms": 0.0825,
+          "stdev_ms": 0.0231
+        },
+        "emit": {
+          "samples": [
+            0.1581,
+            0.1048,
+            0.0959,
+            0.091,
+            0.0885,
+            0.0852,
+            0.0856,
+            0.0844,
+            0.1284,
+            0.0897,
+            0.0885,
+            0.1382,
+            0.1014,
+            0.0892,
+            0.0866
+          ],
+          "median_ms": 0.0897,
+          "min_ms": 0.0844,
+          "stdev_ms": 0.0225
+        },
+        "frontend_total": {
+          "samples": [
+            1.6279,
+            1.3821,
+            1.3562,
+            1.2144,
+            1.1822,
+            1.5836,
+            1.2369,
+            1.2657,
+            1.4354,
+            1.3373,
+            1.2605,
+            1.4048,
+            1.2285,
+            1.2527,
+            1.3672
+          ],
+          "median_ms": 1.3373,
+          "min_ms": 1.1822,
+          "stdev_ms": 0.1313
+        }
+      },
+      "emitted_c_bytes": 25323,
+      "runtime_units": {
+        "variant": "full",
+        "selective": false,
+        "units": null,
+        "runtime_bytes": null,
+        "emitted_bytes": 25323
+      },
+      "processes_ms": {
+        "cli_emit_c": {
+          "samples": [
+            75.0911,
+            73.5166,
+            73.6286,
+            93.5198,
+            103.4223,
+            81.4633,
+            83.0382
+          ],
+          "median_ms": 81.4633,
+          "min_ms": 73.5166,
+          "stdev_ms": 11.3239
+        },
+        "cc": {
+          "samples": [
+            104.504,
+            105.385,
+            103.2637,
+            107.2233,
+            104.4322,
+            107.0202,
+            105.6041
+          ],
+          "median_ms": 105.385,
+          "min_ms": 103.2637,
+          "stdev_ms": 1.4303
+        },
+        "binary_startup": null,
+        "run": null
+      },
+      "binary_bytes": 17032,
+      "output": null,
+      "failure": null
+    },
+    {
+      "workload": "synthetic",
+      "source": "synthetic:60 functions",
+      "note": "generated: 60 functions, to measure how the front end scales",
+      "source_bytes": 10368,
+      "stages_ms": {
+        "lex": {
+          "samples": [
+            14.2301,
+            9.1882,
+            9.2128,
+            9.3695,
+            9.3254,
+            9.161,
+            8.9818,
+            8.9953,
+            9.2546,
+            9.0516,
+            9.139,
+            8.9635,
+            9.2688,
+            9.0935,
+            8.7745
+          ],
+          "median_ms": 9.161,
+          "min_ms": 8.7745,
+          "stdev_ms": 1.3268
+        },
+        "parse": {
+          "samples": [
+            11.2513,
+            10.8496,
+            11.3609,
+            11.479,
+            11.617,
+            12.1288,
+            11.6266,
+            11.5815,
+            11.5301,
+            11.4346,
+            15.8582,
+            11.5711,
+            11.5088,
+            11.2577,
+            11.0256
+          ],
+          "median_ms": 11.5088,
+          "min_ms": 10.8496,
+          "stdev_ms": 1.1762
+        },
+        "check": {
+          "samples": [
+            1.1342,
+            1.0344,
+            1.0494,
+            0.9976,
+            1.0011,
+            1.0071,
+            1.0349,
+            1.227,
+            1.0926,
+            1.0132,
+            1.0232,
+            0.9456,
+            1.0241,
+            1.267,
+            1.7752
+          ],
+          "median_ms": 1.0344,
+          "min_ms": 0.9456,
+          "stdev_ms": 0.2041
+        },
+        "emit": {
+          "samples": [
+            1.2311,
+            1.0634,
+            1.1053,
+            1.1084,
+            1.1074,
+            1.0493,
+            1.1119,
+            1.0953,
+            1.0889,
+            1.0607,
+            1.0295,
+            1.0722,
+            1.0182,
+            1.0228,
+            1.0309
+          ],
+          "median_ms": 1.0722,
+          "min_ms": 1.0182,
+          "stdev_ms": 0.0535
+        },
+        "frontend_total": {
+          "samples": [
+            13.5638,
+            12.7545,
+            12.6022,
+            12.9439,
+            12.8665,
+            13.3145,
+            13.9357,
+            13.8705,
+            13.6929,
+            13.8336,
+            13.6838,
+            13.9556,
+            13.7583,
+            13.908,
+            13.9821
+          ],
+          "median_ms": 13.6929,
+          "min_ms": 12.6022,
+          "stdev_ms": 0.4849
+        }
+      },
+      "emitted_c_bytes": 54394,
+      "runtime_units": {
+        "variant": "full",
+        "selective": false,
+        "units": null,
+        "runtime_bytes": null,
+        "emitted_bytes": 54394
+      },
+      "processes_ms": {
+        "cli_emit_c": null,
+        "cc": {
+          "samples": [
+            148.0679,
+            144.8991,
+            150.021,
+            146.7001,
+            147.8932,
+            145.8714,
+            154.1327
+          ],
+          "median_ms": 147.8932,
+          "min_ms": 144.8991,
+          "stdev_ms": 3.0873
+        },
+        "binary_startup": {
+          "samples": [
+            1.4647,
+            1.3098,
+            1.3111,
+            1.3285,
+            1.2053,
+            1.2789,
+            1.2926
+          ],
+          "median_ms": 1.3098,
+          "min_ms": 1.2053,
+          "stdev_ms": 0.0779
+        },
+        "run": {
+          "samples": [
+            1.2536,
+            1.6574,
+            1.3897,
+            1.2626,
+            1.2578,
+            1.2449,
+            1.2473
+          ],
+          "median_ms": 1.2578,
+          "min_ms": 1.2449,
+          "stdev_ms": 0.153
+        }
+      },
+      "binary_bytes": 20208,
+      "output": "693\n759\n828\n900\n975\n1053\n1134\n1218\n1305\n1395\n1488\n1584\n1683\n1785\n1890\n1998\n2109\n2223\n2340\n2460\n2583\n2709\n2838\n2970\n3105\n3243\n3384\n3528\n3675\n3825\n3978\n4134\n4293\n4455\n4620\n4788\n4959\n5133\n5310\n5490\n5673\n",
+      "failure": null
+    }
+  ],
+  "failures": [],
+  "model_measurements": {
+    "status": "not-measured",
+    "note": "no model is called; generation time and token usage are not estimated"
+  }
+}

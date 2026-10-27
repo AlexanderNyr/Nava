@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+Phase N8 of `PLAN.md` (native and compiler performance). Nothing here weakens a
+checked operation, and the costs are published next to the gains.
+
+- `bench/profile.py` (`nava-profile/1`) measures a build by phase —
+  `python_startup`, `import_and_cli`, `lex`/`parse`/`check`/`emit`,
+  `frontend_total`, `cli_emit_c`, `cc`, `binary_startup`, `run` — on five
+  workloads. `bench/compare.py` (`nava-comparison/1`) classifies two records
+  with a stated rule: a phase is `improved` or `regressed` only when the median
+  difference exceeds twice the larger standard deviation and 5% of the
+  baseline; everything else is `inconclusive`, sizes are compared exactly and a
+  missing phase is `missing`, never zero.
+- `nava_lang/runtime.py`: the runtime is split into units and only the
+  reachable closure is emitted, so the loop workload's translation unit drops
+  from 23442 to 4909 bytes (−79%). `NAVA_FULL_RUNTIME=1` restores the old
+  output for comparison. The whole selection is a pure function of the emitted
+  body, and `tests/test_runtime.py` checks that the closure is closed.
+- The command-line start-up path no longer imports what it does not use:
+  `nava_lang/records.py` replaces `dataclasses` for the AST nodes and
+  `subprocess`, `tempfile`, `shutil` and `nava_lang.sandbox` are imported
+  inside the commands that need them. `nava --version` went from 74.4 to 49.0 ms
+  and `nava emit-c` from 78.0 to 50.0 ms on the measured records.
+- `tests/test_differential.py`: randomised differential gate — generated
+  programs are compared, value by value and error by error, against a model of
+  the documented semantics (overflow, division and remainder by zero,
+  `INT64_MIN / -1`, truncation, evaluation order, short-circuiting, bounds,
+  loop-scoped array release), each arithmetic case compiled twice (builtin and
+  `-DNAVA_FORCE_PORTABLE`).
+- `bench/negative_controls.py`: twelve deliberately reintroduced defects, each
+  required to make its gate fail; 12/12 caught, every file restored and verified
+  by SHA-256.
+- Tests: `tests/test_runtime.py` (16), `tests/test_records.py` (13),
+  `tests/test_bench_compare.py` (22), `tests/test_differential.py` (19).
+  Suite 286 → 356 tests.
+
 Phase N7 of `PLAN.md` (model-facing grammar and constrained generation). No
 model was called: the accuracy comparison is `not-measured` and the claim
 stays open.

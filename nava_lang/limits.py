@@ -40,3 +40,9 @@ MAX_READ_CALLS = 64
 
 I64_MIN = -(2**63)
 I64_MAX = 2**63 - 1
+
+#: Isolation modes accepted by `nava run`.  They live here, next to the other
+#: documented limits, so that parsing the command line does not have to import
+#: `nava_lang/sandbox.py` (and with it `subprocess`, `tempfile` and `shutil`):
+#: `bench/profile.py` shows imports dominating the start-up of a small build.
+ISOLATION_MODES = ("off", "auto", "required")

@@ -3,24 +3,39 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import shutil
-import subprocess
 import sys
-import tempfile
-from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import __version__
+# N8: `subprocess`, `tempfile`, `shutil` and `nava_lang/sandbox.py` are imported
+# by the commands that need them instead of at start-up.  None of them is used
+# by `check`, `emit-c` or `--version`, and importing them costs more than the
+# whole front end of a small program (see bench/profile.py).
+from . import __version__, limits
 from .cgen import generate
 from .checker import check
 from . import modules
-from . import sandbox
 from .diagnostics import format_human, make, report_json
 from .model import Diagnostic, NavaError
 from .parser import parse
+from .records import field, record
 
 
-@dataclass
+def __getattr__(name: str):
+    """Create `cli.sandbox` on first use (PEP 562).
+
+    The sandbox is only needed by `run`, so the module is imported inside that
+    command; tests and embedders still reach it as `cli.sandbox`, which would
+    otherwise raise `AttributeError`.  Nothing is imported here that the caller
+    did not ask for.
+    """
+    if name == "sandbox":
+        from . import sandbox as module
+        globals()["sandbox"] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+@record()
 class Compilation:
     """Result of the front end: generated C and non-fatal diagnostics."""
 
@@ -158,7 +173,7 @@ def make_parser() -> argparse.ArgumentParser:
     run.add_argument("--timeout", type=positive_float, help="terminate the program after this many seconds")
     run.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     run.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
-    run.add_argument("--isolation", choices=sandbox.MODES, default="auto",
+    run.add_argument("--isolation", choices=limits.ISOLATION_MODES, default="auto",
                      help="isolation policy: auto (default), required, or off (explicitly unsafe)")
     run.add_argument("--memory", type=int, default=256,
                      help="address-space limit for the program in MiB (default: 256)")
@@ -169,6 +184,9 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def compile_c(code: str, binary: Path, cc: str | None, opt: str) -> bool:
+    import subprocess  # imported here, not at start-up (N8)
+    import tempfile
+
     try:
         command = shlex.split(cc or os.environ.get("CC") or "cc")
     except ValueError as exc:
@@ -270,6 +288,11 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Built: {output}")
             return 0
         if args.command == "run":
+            import shutil
+            import tempfile
+
+            from . import sandbox
+
             with tempfile.TemporaryDirectory(prefix="nava-run-") as temp:
                 binary = Path(temp) / "program"
                 if not compile_c(code, binary, args.cc, args.opt):
@@ -284,13 +307,14 @@ def main(argv: list[str] | None = None) -> int:
                     except OSError as exc:
                         raise make("E0507", f"cannot place the program in {workdir}: {exc}") from exc
                     binary = staged
-                limits = sandbox.Limits(
+                sandbox_limits = sandbox.Limits(
                     wall_seconds=args.timeout,
                     cpu_seconds=max(1, int(args.timeout) if args.timeout else 3600),
                     memory_bytes=max(1, args.memory) * 1024 * 1024,
                 )
                 try:
-                    outcome = sandbox.run([str(binary)], limits=limits, mode=args.isolation,
+                    outcome = sandbox.run([str(binary)], limits=sandbox_limits,
+                                          mode=args.isolation,
                                           workdir=workdir or Path(temp), capture=False)
                 except sandbox.SandboxUnavailable as exc:
                     raise make("E0601", str(exc)) from exc

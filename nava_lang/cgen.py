@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from . import limits
+import os
+
+from . import limits, runtime
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
     Float, For, Function, If, Index, IndexAssign, Let, Number, Program, Range,
@@ -635,8 +637,6 @@ class CGenerator:
         return f"static {C_TYPES[function.returns]} {function.cname}({params})"
 
     def generate(self) -> str:
-        self.lines.append(RUNTIME.replace("/* NV_CAPABILITIES */",
-                                         capability_block(self.capabilities)))
         for function in self.program.functions:
             self.line(self.signature(function) + ";")
         self.line()
@@ -661,7 +661,25 @@ class CGenerator:
             self.line(f"return (int)(uint8_t){main.cname}();")
         self.indent -= 1
         self.line("}")
-        return "\n".join(self.lines) + "\n"
+        return self.assemble()
+
+    def assemble(self) -> str:
+        """Runtime units the program can reach, then the translated program.
+
+        Selecting the runtime is the N8 optimisation: a program that never
+        touches files, `f64` or `[bool]` arrays no longer pays the C compiler
+        for those helpers. The closure is computed from the identifiers the
+        generated body mentions, so nothing that can be called is dropped.
+        """
+        body = "\n".join(self.lines) + "\n"
+        if os.environ.get("NAVA_FULL_RUNTIME") == "1":
+            # Escape hatch for benchmarks and for bisecting a suspected helper
+            # dependency: emit the whole runtime exactly as N7 did.
+            text = RUNTIME
+        else:
+            text = runtime.select(RUNTIME, set(runtime.SYMBOL.findall(body)))
+        text = text.replace("/* NV_CAPABILITIES */", capability_block(self.capabilities))
+        return text + "\n" + body
 
     def release(self, since: int = 0) -> None:
         """Emit one `free` per owned array, innermost block and binding last-first."""
