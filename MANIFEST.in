@@ -1,0 +1,28 @@
+# Files that belong in the source distribution but are not Python packages.
+include LICENSE
+include NOTICE
+include README.md
+include LANGUAGE.md
+include CHANGELOG.md
+include SECURITY.md
+include BENCHMARK.md
+include RELEASE.md
+include PLAN.md
+include pyproject.toml
+include MANIFEST.in
+
+# The compiler, its tests and the material a reader needs to reproduce the
+# documented gates. Benchmark result records are deliberately not shipped: they
+# describe one host at one moment and would age silently inside a release.
+recursive-include nava_lang *.py *.nv
+recursive-include tests *.py *.json *.nv
+recursive-include examples *.nv
+recursive-include guides *.md *.json *.nv
+recursive-include eval *.py *.json *.md
+recursive-include bench *.py *.nv *.cpp *.md
+recursive-include experiment *.py *.nv *.c *.md
+recursive-include tools *.py
+
+exclude .gitignore
+exclude bench/results/*
+global-exclude *.py[cod] __pycache__/* .DS_Store

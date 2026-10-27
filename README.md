@@ -107,8 +107,11 @@ See [`LANGUAGE.md`](LANGUAGE.md) for the implemented semantics and limits.
 ## Installation
 
 Nava requires Python 3.10+ and a C11 compiler (`cc`, GCC or Clang). The
-compiler itself has no third-party Python dependencies. The commands below
-were tested on Linux; macOS with Clang should also work.
+compiler itself has no third-party Python dependencies, so `pip` installs one
+command and nothing else; the C compiler cannot be a Python dependency and is
+checked instead of assumed. The support matrix — which combinations CI actually
+runs and which are only expected to work — is in [`RELEASE.md`](RELEASE.md),
+together with the release checklist and the versioning policy.
 
 Either install the package, which provides the `nava` command:
 
@@ -312,8 +315,24 @@ is not, on which platforms, and how each claim is tested.
 | `bench/` | Reproducible comparison with C++, phase-by-phase compiler profile, record comparison and negative controls; JSON records in `bench/results/` |
 | `eval/` | Prompts, tasks, reference answers, saved-response evaluator and the paired study harness |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |
-| `.github/workflows/ci.yml` | Required, fail-closed, packaging and benchmark lanes |
+| `tools/` | Release verification (`verify_release.py`) |
+| `.github/workflows/ci.yml` | Required, fail-closed, release-artifact, harness and benchmark lanes |
 | [`pyproject.toml`](pyproject.toml) | Packaging metadata and the `nava` console script |
 | [`SECURITY.md`](SECURITY.md) | Threat model, platform support and how isolation is tested |
 | [`PLAN.md`](PLAN.md) | Dependency-ordered improvement phases and test gates |
 | [`CHANGELOG.md`](CHANGELOG.md) | Changelog |
+| [`RELEASE.md`](RELEASE.md) | Support matrix, versioning policy, release checklist, known gaps |
+| [`tools/verify_release.py`](tools/verify_release.py) | Release gate: version/metadata agreement, Python floor, artifact contents, credential scan |
+| [`tests/test_release.py`](tests/test_release.py) | Release gate tests, including deliberately broken artifacts |
+| [`LICENSE`](LICENSE), [`NOTICE`](NOTICE) | Apache License 2.0 and the attribution notice |
+
+---
+
+## License
+
+Nava is licensed under Apache-2.0 (the Apache License, Version 2.0). The full
+text is in
+[`LICENSE`](LICENSE) and the attribution notice is in [`NOTICE`](NOTICE). The
+compiler vendors no third-party code; the optional `tokens` and `hf` extras
+install `tiktoken` and `transformers` under their own licenses and are never
+required to compile or run a Nava program.

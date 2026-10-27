@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2 and N4–N8 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open; N9 planned
+## Status: N0–N2 and N4–N9 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -120,7 +120,7 @@ complete by skipping its gate.
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Delivered |
 | N7 | Model-facing grammar and constrained generation | N1, N3 | Model-specific A/B results include guidance overhead and correctness | **Delivered, measurement open** |
 | N8 | Native and compiler performance | N0, N4, N5 | Correctness is unchanged and every claimed gain has before/after samples | **Delivered** |
-| N9 | Packaging, CI and release readiness | N1, N2, N3 | Clean installation and non-skipping CI pass on each declared platform | Planned |
+| N9 | Packaging, CI and release readiness | N1, N2, N3 | Clean installation and non-skipping CI pass on each declared platform | **Delivered** |
 
 `N3` can deliver the measurement infrastructure before a provider is chosen,
 but its empirical comparison is not complete without real model results.
@@ -129,7 +129,10 @@ harness are built and tested, the guidance overhead is measured in tokens, and
 the accuracy comparison is not. `N8` started from measured native and compiler
 numbers rather than assumptions, and it is the first phase that reports a
 regression as well as improvements: the runtime symbol scan costs 0.5 ms on a
-10 KB program and that row is in `BENCHMARK.md` rather than edited out.
+10 KB program and that row is in `BENCHMARK.md` rather than edited out. `N9`
+closes the loop around installation and release: a wheel that is built,
+verified, installed into a fresh environment and used from outside the
+checkout, with a support matrix that only claims what CI runs.
 
 ---
 
@@ -893,17 +896,48 @@ without relying on this workspace.
 
 #### Tasks
 
-- [ ] Package the compiler and command-line entry point with explicit Python
-      and C-compiler requirements; verify installation in a clean environment.
-- [ ] Add CI for the declared Python versions and native compilers. Required
+- [x] Package the compiler and command-line entry point with explicit Python
+      and C-compiler requirements; verify installation in a clean environment. →
+      `pyproject.toml` declares `nava-lang` 0.1.0, `requires-python >= 3.10`,
+      no runtime dependencies, the `nava` console script and the Nava standard
+      library as package data (`nava_lang/stdlib/*.nv`); `RELEASE.md` states the
+      C11 compiler requirement that `pip` cannot resolve. The wheel was built,
+      installed into a fresh virtual environment and used **from a directory
+      outside the checkout**: `nava --version`, `nava check`, `nava build` and a
+      program that calls `math::abs`/`math::gcd` all work, which is what proves
+      the standard library ships.
+- [x] Add CI for the declared Python versions and native compilers. Required
       runtime/evaluation tests must execute, not silently skip, in at least one
-      lane; platform support is listed only after it is exercised.
-- [ ] Run documentation examples, compiler tests, the N0 registry guard and
-      N2 isolation gates in their appropriate CI lanes.
-- [ ] Define versioning and release-artifact checks. Choose a project license
-      with the owner's approval; do not assume one from another repository.
-- [ ] Keep `CHANGELOG.md` empty until an actual release/change entry is
-      intentionally added. Do not populate it merely to satisfy this plan.
+      lane; platform support is listed only after it is exercised. → the
+      `required` lane runs the full suite on Python 3.10, 3.11, 3.12 and 3.13
+      with both GCC and Clang; `guard-fails-without-compilers` keeps the
+      no-compiler path fail-closed; `RELEASE.md` marks Linux as **exercised**
+      and macOS/Windows as "expected, not exercised", and
+      `tools/verify_release.py` fails if the table and the CI matrix disagree.
+- [x] Run documentation examples, compiler tests, the N0 registry guard and
+      N2 isolation gates in their appropriate CI lanes. → the required lane runs
+      `python3 tests/registry.py`, `tests.test_spec` (every documented example),
+      the whole suite (which compiles and runs the guide's canonical programs
+      and every fixture) and `tests.test_sandbox` behind a host probe that
+      prints the isolation mode it exercised.
+- [x] Define versioning and release-artifact checks. Choose a project license
+      with the owner's approval; do not assume one from another repository. →
+      **Apache-2.0, chosen by the owner**; `LICENSE` and `NOTICE` are added,
+      `pyproject.toml` carries `license = "Apache-2.0"` and `license-files`, and
+      the wheel ships the license text inside `*.dist-info/licenses/`.
+      `tools/verify_release.py` checks version agreement across
+      `pyproject.toml`, `nava_lang/__init__.py` and `CHANGELOG.md`, that every
+      Python file parses with the declared 3.10 floor, that the wheel carries
+      the standard library, the console script and `License-Expression`, that
+      the sdist carries `LICENSE`, `NOTICE`, `tools/verify_release.py` and
+      `tests/registry.py`, that neither archive contains tests (a wheel),
+      benchmark records, `__pycache__` or credentials, and it prints the
+      SHA-256 of every artifact.
+- [x] Keep `CHANGELOG.md` empty until an actual release/change entry is
+      intentionally added. Do not populate it merely to satisfy this plan. → the
+      file keeps one `## Unreleased` section; the N9 entry records the packaging
+      and release-gate changes because they are real changes, and no version
+      number was invented for them.
 
 #### Test gate
 
@@ -919,6 +953,32 @@ without relying on this workspace.
 
 Installation metadata, declared support matrix, non-skipping CI and a
 reproducible release checklist. No release date is committed by this plan.
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Metadata is installable and complete | `python3 -m build` | `nava_lang-0.1.0-py3-none-any.whl` 70404 B, `nava_lang-0.1.0.tar.gz` 317363 B; the wheel carries `nava_lang/stdlib/{math,sort,text}.nv`, `entry_points.txt` with `nava = nava_lang.cli:main`, `License-Expression: Apache-2.0` and the license text; no unconditional `Requires-Dist` |
+| A clean environment really works | venv + `pip install dist/*.whl`, then `cd /tmp/outside` | `Nava 0.1.0`; `check demo.nv` → `OK`; `run demo.nv` → `7`, `6` (the program imports `math`); `build demo.nv` → binary prints `7`, `6` |
+| Version and metadata agree | `python3 tools/verify_release.py` | `metadata OK, syntax OK, secrets OK`; 57 Python files parse with `ast.parse(..., feature_version=(3, 10))` |
+| The support matrix is not a wish | `tools/verify_release.py` reading `RELEASE.md` + `ci.yml` | exercised row: Linux x86_64, `ubuntu-24.04`, Python 3.10–3.13, gcc + clang — identical to the CI matrix (3.11 was added to CI for this reason); macOS and Windows are labelled "expected, not exercised"; an unknown status, a missing classifier or a platform promoted without a lane fails the check |
+| Artifacts are complete and clean | `python3 tools/verify_release.py --artifacts dist` | `artifacts OK`; SHA-256 printed for both files (`f4decdb1…` wheel, `983b5b22…` sdist); a wheel with the stdlib stripped and an sdist carrying a credential are both rejected (CI runs the strip step, `tests/test_release.py` covers both) |
+| No credentials in the tree or the archives | `tools/verify_release.py` (secrets) | clean; `tests/test_release.py` feeds it seven credential shapes (OpenAI-style key, GitHub token, AWS key id, Slack token, Google API key, Hugging Face token, private-key block, `.env`/`.pem` names) and requires each to be caught, plus a control that prose about passwords is not flagged |
+| License chosen with the owner | owner decision, then `LICENSE`/`NOTICE` | **Apache-2.0**; `LICENSE` (11357 B, Apache 2.0 text), `NOTICE`, `pyproject.toml` `license = "Apache-2.0"` + `license-files`; README and RELEASE.md state it; the copyright line says "the Nava project contributors" because the repository names no legal entity |
+| Non-skipping CI | `.github/workflows/ci.yml` | lanes: `required` (4 Python versions × gcc/clang, registry guard, spec, suite, isolation, diagnostic contract, release gate), `guard-fails-without-compilers`, `release`, `study-harness`, `constrained-harness`, `benchmark` |
+| Release checklist is reproducible | `RELEASE.md` | seven numbered steps from version bump to tagging, each naming the command that produces the evidence; a "What a release does not claim" section keeps the model results, performance and security claims out of the release notes |
+| Changelog discipline | `CHANGELOG.md` | one `## Unreleased` section with per-phase entries, no invented version number |
+| No skipped tests | `python3 tests/registry.py` + `python3 -m unittest discover -s tests -q` | registry `OK: 286 registered tests, 11 tasks, 112 fixtures, 92 diagnostic codes`; suite **381 tests OK** (was 356; `tests/test_release.py` adds 25) |
+
+Negative controls: the release gate is exercised against a wheel without the
+standard library, an sdist without `LICENSE`, a wheel carrying `tests/`, an
+sdist carrying a benchmark record, an artifact carrying a credential, a
+changelog section for a different version, a CI matrix entry that the support
+matrix does not list, and an unknown status — each makes
+`tools/verify_release.py` or `tests/test_release.py` fail.
+
+Left open on purpose: no release date, no tag, no publication. This phase makes
+a release *possible* and checkable; cutting one is the owner's decision.
 
 ---
 

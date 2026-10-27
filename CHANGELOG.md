@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+Phase N9 of `PLAN.md` (packaging, CI and release readiness).
+
+- The project is now licensed under **Apache-2.0** (`LICENSE`, `NOTICE`,
+  `license = "Apache-2.0"` plus `license-files` in `pyproject.toml`); the wheel
+  ships the license text. The copyright line names "the Nava project
+  contributors" because the repository records no legal entity.
+- `pyproject.toml` declares the `nava` console script, no runtime dependencies
+  and the Nava standard library as package data, so `pip install` yields a
+  compiler that can `import math` from any directory.
+- `tools/verify_release.py`: version agreement across `pyproject.toml`,
+  `nava_lang/__init__.py` and `CHANGELOG.md`, the declared Python 3.10 syntax
+  floor, wheel and sdist contents (standard library, console script,
+  `License-Expression`, license file, no tests or benchmark records in the
+  wheel), a credential scan of the tree and of both archives, and the SHA-256 of
+  every artifact.
+- `RELEASE.md`: versioning policy, requirements, a support matrix that
+  distinguishes *exercised* (Linux x86_64, Python 3.10–3.13, gcc and clang)
+  from *expected, not exercised* (macOS, Windows), a seven-step release
+  checklist and an explicit list of what a release does not claim.
+- CI: the required lane now covers Python 3.11 as well, runs the release gate
+  and its tests, and a new `release` lane builds the artifacts, rejects a wheel
+  whose standard library was stripped, then installs the wheel into a fresh
+  environment and uses it from outside the checkout.
+- Tests: `tests/test_release.py` (25). Suite 356 → 381 tests.
+
 Phase N8 of `PLAN.md` (native and compiler performance). Nothing here weakens a
 checked operation, and the costs are published next to the gains.
 

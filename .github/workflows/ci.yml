@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.12", "3.13"]
+        python: ["3.10", "3.11", "3.12", "3.13"]
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +40,12 @@ jobs:
 
       - name: Registry and fixture guard
         run: python3 tests/registry.py
+
+      - name: Release metadata, Python floor and credential scan
+        run: python3 tools/verify_release.py
+
+      - name: Release gate tests
+        run: python3 -m unittest tests.test_release -v
 
       - name: Executable specification (grammar, fixtures, limits, fuzzing)
         run: python3 -m unittest tests.test_spec -v
@@ -100,24 +106,63 @@ jobs:
           fi
           echo "guard correctly failed without compilers"
 
-  # Packaging lane: a clean install must provide the `nava` console script.
-  package:
-    name: packaging
+  # Release lane: build the artifacts, prove they are complete and clean,
+  # install the wheel into a fresh environment, and use it from a directory
+  # that is not the checkout. That last part is what catches a missing
+  # `package-data` entry: a stdlib that only resolves in the source tree.
+  release:
+    name: release artifacts
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc
       - run: python3 -m pip install --upgrade pip build
-      - run: python3 -m build
-      - name: Install the wheel in a clean environment
+
+      - name: Build the wheel and the sdist
+        run: python3 -m build
+
+      - name: Artifacts are complete, clean and licensed
+        run: python3 tools/verify_release.py --artifacts dist --json "$RUNNER_TEMP/release.json"
+
+      - name: An incomplete wheel must be rejected
+        run: |
+          mkdir -p "$RUNNER_TEMP/broken"
+          cp dist/*.whl dist/*.tar.gz "$RUNNER_TEMP/broken/"
+          python3 - "$RUNNER_TEMP/broken" <<'PY'
+          import pathlib, sys, zipfile
+          directory = pathlib.Path(sys.argv[1])
+          wheel = next(directory.glob("*.whl"))
+          rebuilt = wheel.with_suffix(".broken")
+          with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(rebuilt, "w") as target:
+              for name in source.namelist():
+                  if "/stdlib/" in name:
+                      continue          # the standard library silently missing
+                  target.writestr(name, source.read(name))
+          rebuilt.replace(wheel)
+          PY
+          if python3 tools/verify_release.py --quiet --artifacts "$RUNNER_TEMP/broken"; then
+            echo "::error::a wheel without the standard library was accepted"
+            exit 1
+          fi
+          echo "the artifact gate rejected a wheel without nava_lang/stdlib"
+
+      - name: Install the wheel outside the checkout and use it
         run: |
           python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/pip" install dist/*.whl
+          mkdir -p "$RUNNER_TEMP/work"
+          printf 'import math\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n' \
+            > "$RUNNER_TEMP/work/demo.nv"
+          cd "$RUNNER_TEMP/work"
           "$RUNNER_TEMP/venv/bin/nava" --version
-          printf 'fn main() { print("ok") }\n' > "$RUNNER_TEMP/hello.nv"
-          "$RUNNER_TEMP/venv/bin/nava" run "$RUNNER_TEMP/hello.nv"
+          "$RUNNER_TEMP/venv/bin/nava" check demo.nv
+          "$RUNNER_TEMP/venv/bin/nava" build demo.nv -o demo
+          test "$(./demo)" = "$(printf '7\n6')"
+          "$RUNNER_TEMP/venv/bin/nava" run demo.nv
+          echo "the installed package compiles and runs a program that imports the stdlib"
 
   # Study lane: the paired-study harness must run end to end without a model,
   # and must refuse to present a model-less run as a measurement.

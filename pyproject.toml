@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68"]
+# 77 is the first setuptools that understands a PEP 639 license expression and
+# `license-files`; the compiler itself needs no third-party runtime package.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,13 +9,27 @@ name = "nava-lang"
 version = "0.1.0"
 description = "Nava: an experimental, statically checked language that compiles to C11"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []
+keywords = ["compiler", "language", "c11", "code generation"]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Programming Language :: C",
     "Topic :: Software Development :: Compilers",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AlexanderNyr/Nava"
+Source = "https://github.com/AlexanderNyr/Nava"
 
 [project.optional-dependencies]
 tokens = ["tiktoken"]
@@ -24,7 +40,8 @@ nava = "nava_lang.cli:main"
 
 # The compiler is a plain Python package with no third-party dependencies.
 # A C11 compiler (cc, gcc or clang) is required at run time for `build`/`run`;
-# it is not a Python dependency and is therefore declared only in prose.
+# it is not a Python dependency and is therefore declared in RELEASE.md and
+# checked by `tools/verify_release.py`, not resolved by pip.
 [tool.setuptools]
 packages = ["nava_lang"]
 
