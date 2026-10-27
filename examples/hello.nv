@@ -1,0 +1,6 @@
+# Nava 0.1: print accepts a string, i64 or bool.
+fn main() {
+    print("Hello, world!")
+    print(2 + 3 * 4)
+    print(true)
+}

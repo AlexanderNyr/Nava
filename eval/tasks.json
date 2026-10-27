@@ -1,0 +1,126 @@
+[
+  {
+    "id": "gcd",
+    "description": "Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.",
+    "tests": [
+      {
+        "stdin": "0 0\n",
+        "stdout": "0\n"
+      },
+      {
+        "stdin": "48 18\n",
+        "stdout": "6\n"
+      },
+      {
+        "stdin": "1 0\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "0 31\n",
+        "stdout": "31\n"
+      },
+      {
+        "stdin": "270 192\n",
+        "stdout": "6\n"
+      },
+      {
+        "stdin": "999999937 1\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "999999937 999999937\n",
+        "stdout": "999999937\n"
+      }
+    ]
+  },
+  {
+    "id": "sum_to_n",
+    "description": "Read an integer n from 0 to 1000000. Print 1 + 2 + ... + n. For n=0 print 0.",
+    "tests": [
+      {
+        "stdin": "0\n",
+        "stdout": "0\n"
+      },
+      {
+        "stdin": "1\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "2\n",
+        "stdout": "3\n"
+      },
+      {
+        "stdin": "10\n",
+        "stdout": "55\n"
+      },
+      {
+        "stdin": "100\n",
+        "stdout": "5050\n"
+      },
+      {
+        "stdin": "1000000\n",
+        "stdout": "500000500000\n"
+      }
+    ]
+  },
+  {
+    "id": "factorial",
+    "description": "Read an integer n from 0 to 20. Print n! as a decimal integer. Define 0! as 1.",
+    "tests": [
+      {
+        "stdin": "0\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "1\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "2\n",
+        "stdout": "2\n"
+      },
+      {
+        "stdin": "5\n",
+        "stdout": "120\n"
+      },
+      {
+        "stdin": "10\n",
+        "stdout": "3628800\n"
+      },
+      {
+        "stdin": "20\n",
+        "stdout": "2432902008176640000\n"
+      }
+    ]
+  },
+  {
+    "id": "fibonacci",
+    "description": "Read an integer n from 0 to 92. Print the n-th Fibonacci number, where F(0)=0 and F(1)=1. Every intermediate value must fit signed 64-bit.",
+    "tests": [
+      {
+        "stdin": "0\n",
+        "stdout": "0\n"
+      },
+      {
+        "stdin": "1\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "2\n",
+        "stdout": "1\n"
+      },
+      {
+        "stdin": "10\n",
+        "stdout": "55\n"
+      },
+      {
+        "stdin": "50\n",
+        "stdout": "12586269025\n"
+      },
+      {
+        "stdin": "92\n",
+        "stdout": "7540113804746346429\n"
+      }
+    ]
+  }
+]

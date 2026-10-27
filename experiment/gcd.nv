@@ -1,0 +1,10 @@
+fn main() {
+    let a = read_i64()
+    let b = read_i64()
+    while b != 0 {
+        let r = a % b
+        a = b
+        b = r
+    }
+    print(a)
+}

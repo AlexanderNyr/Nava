@@ -1,0 +1,9 @@
+fn probe() -> bool {
+    print("this text will not be printed")
+    return true
+}
+
+fn main() {
+    print(false && probe())
+    print(true || probe())
+}
