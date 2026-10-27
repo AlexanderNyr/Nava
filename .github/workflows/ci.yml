@@ -47,6 +47,19 @@ jobs:
       - name: Test suite (no skipped tests allowed)
         run: python3 -m unittest discover -s tests -v
 
+      - name: Isolation gate (host-dependent backend)
+        run: |
+          python3 - <<'PY'
+          import sys
+          sys.path.insert(0, ".")
+          from nava_lang import sandbox
+          host = sandbox.describe_host()
+          print("host:", host)
+          mode = "required" if host["namespaces_available"] else "auto"
+          print("testing with mode:", mode)
+          PY
+          python3 -m unittest tests.test_sandbox -v
+
       - name: Diagnostic contract smoke test
         run: |
           printf 'fn main() { let x: bool = 1 }\n' > "$RUNNER_TEMP/bad.nv"

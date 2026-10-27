@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0 and N1 DELIVERED — N2–N9 planned
+## Status: N0, N1 and N2 DELIVERED — N3–N9 planned
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -13,11 +13,11 @@ This document answers one question:
 > correctness and end-to-end latency measured rather than inferred from short
 > source files?
 
-Phases N0 (measurement rig and test integrity) and N1 (language specification
-and diagnostics) are delivered: see the delivery records in
-[§4.1](#phase-n0--measurement-rig-and-test-integrity) and
-[§4.2](#phase-n1--language-specification-and-diagnostics) for the evidence, the
-commands that produce it and the items that are deliberately left open.
+Phases N0 (measurement rig and test integrity), N1 (language specification and
+diagnostics) and N2 (isolated build and execution) are delivered: see the
+delivery records in the relevant subsections for the evidence, the commands that
+produce it and the items that are deliberately left open. N3 is the next
+dependency; its infrastructure exists, its empirical results do not.
 
 The phases are dependency-ordered. Each has an objective, concrete tasks, a
 test gate and a deliverable. A phase is **done** only when its gate has run
@@ -40,7 +40,7 @@ identify the baseline, not a claim about a published release.
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
 | Native performance | `bench/run.py` compares Nava with checked and unchecked C++ on one loop and writes a `nava-bench/1` JSON record with environment, flags, warm-up, raw samples per phase and `null` model fields | One workload; checked C++ has similar arithmetic checks, not identical input/error behaviour |
 | Model evaluation | `eval/prompt.py`, `eval/evaluate.py` for Nava, C and C++, eight public tasks with 49 cases, independent answers in `eval/reference.py`, optional tokenizer counts | No model API calls, held-out suite, measured model response time or measured pass rate |
-| Execution safety | Optional `run --timeout`; evaluator has a per-test timeout | Neither is a sandbox; filesystem, network, memory, output and child processes are not isolated |
+| Execution safety | `nava_lang/sandbox.py`: Linux namespaces (user, mount, PID, network, IPC, UTS) with a read-only minimal root and one writable directory, or a labelled rlimits-only fallback; `--isolation {auto,required,off}`; bounded output; process-group kill with survivor detection | Confinement against a misbehaving program, not against a kernel exploit; no seccomp, no cgroup quota; `rlimits` mode isolates nothing but resource use |
 
 The separate Nava-versus-C authoring experiment in `experiment/README.md`
 measured tool-mediated file writes once. It did **not** measure pure model
@@ -101,7 +101,7 @@ complete by skipping its gate.
 |---|---|---|---|---|
 | N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | **Delivered** |
 | N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | **Delivered** |
-| N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | Planned |
+| N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | **Delivered** |
 | N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | Planned |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | Planned |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | Planned |
@@ -276,18 +276,34 @@ isolated; the existing timeout is not misrepresented as a sandbox.
 
 #### Tasks
 
-- [ ] Choose and document a supported isolation mechanism. Isolate **both**
+- [x] Choose and document a supported isolation mechanism. Isolate **both**
       compilation and execution of untrusted C/C++ and generated Nava
-      binaries, using an unprivileged worker and a minimal filesystem view.
-- [ ] Restrict CPU time, wall time, memory, output size and process count;
+      binaries, using an unprivileged worker and a minimal filesystem view. →
+      `nava_lang/sandbox.py` uses `unshare` (user, mount, PID, network, IPC,
+      UTS) with a read-only minimal root built inside the namespaces;
+      `eval/evaluate.py` compiles and runs every candidate through it.
+      Documented in [`SECURITY.md`](SECURITY.md).
+- [x] Restrict CPU time, wall time, memory, output size and process count;
       terminate the complete process group or container on failure or timeout.
-- [ ] Deny network by default and limit readable/writable paths. Keep model
-      credentials and unrelated host files outside the worker.
-- [ ] Fail closed when the requested isolation backend is unavailable. If an
+      → `RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_NPROC`, `RLIMIT_FSIZE`,
+      `RLIMIT_NOFILE`, `RLIMIT_CORE`, a wall-clock deadline, per-stream byte
+      caps, `killpg` followed by a survivor re-check and `E0602` if anything
+      outlives it.
+- [x] Deny network by default and limit readable/writable paths. Keep model
+      credentials and unrelated host files outside the worker. → a private
+      network namespace; the jail has no `/home`; the program sees `/work` as
+      its only writable path and a minimal environment without the parent's
+      variables.
+- [x] Fail closed when the requested isolation backend is unavailable. If an
       explicitly unsafe local mode is retained, label it clearly and require
-      an explicit opt-in. Document unsupported operating systems.
-- [ ] Replace unbounded `capture_output` use for untrusted candidates with
-      bounded output collection and clear failure diagnostics.
+      an explicit opt-in. Document unsupported operating systems. →
+      `--isolation required` raises `SandboxUnavailable`/`E0601` and refuses;
+      `auto` warns; `off` is the explicit opt-in; `SECURITY.md` carries the
+      per-platform table; detection is a real `unshare` probe.
+- [x] Replace unbounded `capture_output` use for untrusted candidates with
+      bounded output collection and clear failure diagnostics. →
+      `_BoundedReader` caps each stream, kills on overflow, records
+      `output_limit_exceeded` and truncation per test case.
 
 #### Test gate
 
@@ -304,8 +320,28 @@ isolated; the existing timeout is not misrepresented as a sandbox.
 #### Deliverable
 
 An isolated evaluator/build runner, bounded-output handling, platform and
-threat-model documentation, and adversarial integration tests. This is not
-implemented by the current `--timeout` option.
+threat-model documentation, and adversarial integration tests. **Delivered.**
+
+#### Delivery record (2026-10-27)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Allowed program completes | `test_allowed_program_completes` | exit 0, expected stdout, under both backends |
+| Infinite loop | `test_infinite_loop_is_stopped` | stopped by CPU rlimit or the wall clock, < 5 s |
+| Idle program (no CPU) | `test_wall_clock_limit_stops_an_idle_program` | wall-clock kill only; `cpu_limit_hit` false |
+| Excess output | `test_excess_output_is_stopped` | killed, `output_limit_exceeded`, buffer capped |
+| Excess memory | `test_memory_ceiling_stops_allocation` | allocation fails inside the program at `RLIMIT_AS` |
+| Surviving child | `test_child_processes_do_not_survive` | no host process matches the probe afterwards |
+| Write outside the allowed directory | `test_filesystem_boundary` | `namespaces`: `denied=3`, host file absent; `rlimits`: gap asserted |
+| Connection to a local listener | `test_network_boundary` | `namespaces`: `DENIED`; `rlimits`: `CONNECTED`, gap asserted |
+| Fail closed | `test_required_mode_refuses_without_namespaces`, `test_evaluator_refuses_required_without_namespaces` | exit 2, `E0601`, `"available": false` |
+| Whole suite | `python3 -m unittest discover -s tests` | 77 tests OK |
+
+Five negative controls were run by hand, each making the gate fail: removing
+`--net`, removing the timeout kill, letting `required` fall back silently,
+bind-mounting the whole host root instead of the minimal one, and disabling the
+output cap. `SECURITY.md` records the probe-to-expectation map and the gaps the
+tests assert rather than hide.
 
 ---
 

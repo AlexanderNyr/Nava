@@ -116,6 +116,23 @@ REGISTERED_TESTS = {
         "test_random_token_soup_only_produces_diagnostics",
         "test_mutated_valid_programs_only_produce_diagnostics",
     },
+    "SandboxTests": {
+        "test_allowed_program_completes",
+        "test_infinite_loop_is_stopped",
+        "test_wall_clock_limit_stops_an_idle_program",
+        "test_excess_output_is_stopped",
+        "test_memory_ceiling_stops_allocation",
+        "test_child_processes_do_not_survive",
+        "test_filesystem_boundary",
+        "test_network_boundary",
+        "test_required_mode_refuses_without_namespaces",
+        "test_evaluator_refuses_required_without_namespaces",
+        "test_backend_labels_state_what_is_missing",
+        "test_report_records_limits_and_truncation",
+        "test_surviving_child_is_reported_by_the_cli",
+        "test_cli_run_reports_isolation_and_timeout",
+        "test_cli_runtime_error_keeps_its_status",
+    },
     "RegistryTests": {
         "test_registered_tests_are_present_and_not_skipped",
         "test_required_tools_are_present",
@@ -160,6 +177,8 @@ CODES_TESTED_ELSEWHERE = {
     "E0503": "tests/test_spec.py: test_cli_diagnostics_are_registered",
     "E0504": "tests/test_spec.py: test_cli_diagnostics_are_registered",
     "E0505": "tests/test_spec.py: test_cli_diagnostics_are_registered",
+    "E0601": "tests/test_sandbox.py: test_required_mode_refuses_without_namespaces",
+    "E0602": "tests/test_sandbox.py: test_surviving_child_is_reported_by_the_cli",
 }
 
 
@@ -185,10 +204,11 @@ def discovered_tests() -> dict[str, set[str]]:
         sys.path.insert(0, str(ROOT / "tests"))
     import test_nava  # noqa: PLC0415  (import after sys.path setup)
     import test_registry  # noqa: PLC0415
+    import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_nava, test_registry, test_spec):
+    for module in (test_nava, test_registry, test_sandbox, test_spec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

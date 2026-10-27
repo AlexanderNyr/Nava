@@ -344,6 +344,13 @@ never changes meaning; a new condition gets a new code.
 | `E0504` | error | output path equals the source path | — |
 | `E0505` | error | output directory does not exist | — |
 
+**Sandbox and isolation**
+
+| Code | Severity | Meaning | Triggered by |
+|---|---|---|---|
+| `E0601` | error | requested isolation is unavailable | `--isolation required` on a host without Linux namespaces |
+| `E0602` | error | sandboxed program was stopped | a child process survived termination of the program |
+
 **Warnings**
 
 | Code | Severity | Meaning | Triggered by |

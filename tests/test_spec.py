@@ -56,6 +56,8 @@ CODES_TESTED_ELSEWHERE = {
     "E0503": "DiagnosticFormatTests.test_cli_diagnostics_are_registered (E0501-E0505)",
     "E0504": "DiagnosticFormatTests.test_cli_diagnostics_are_registered (E0501-E0505)",
     "E0505": "DiagnosticFormatTests.test_cli_diagnostics_are_registered (E0501-E0505)",
+    "E0601": "tests/test_sandbox.py: test_required_mode_refuses_without_namespaces",
+    "E0602": "tests/test_sandbox.py: test_surviving_child_is_reported_by_the_cli",
 }
 
 

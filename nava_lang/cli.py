@@ -12,6 +12,7 @@ from pathlib import Path
 from . import __version__
 from .cgen import generate
 from .checker import check
+from . import sandbox
 from .diagnostics import format_human, make, report_json
 from .model import Diagnostic, NavaError
 from .parser import parse
@@ -71,11 +72,21 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("-o", "--output", required=True, help="executable path")
     build.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     build.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
-    run = sub.add_parser("run", help="compile and execute a program")
+    run = sub.add_parser(
+        "run", help="compile and execute a program",
+        description="Compile and run a program. By default the program runs under the best "
+                    "available isolation: Linux namespaces when `unshare` works, otherwise "
+                    "rlimits only with a warning. `--isolation required` refuses to run "
+                    "instead of falling back.",
+    )
     run.add_argument("source")
     run.add_argument("--timeout", type=positive_float, help="terminate the program after this many seconds")
     run.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     run.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
+    run.add_argument("--isolation", choices=sandbox.MODES, default="auto",
+                     help="isolation policy: auto (default), required, or off (explicitly unsafe)")
+    run.add_argument("--memory", type=int, default=256,
+                     help="address-space limit for the program in MiB (default: 256)")
     return parser
 
 
@@ -171,12 +182,24 @@ def main(argv: list[str] | None = None) -> int:
                 binary = Path(temp) / "program"
                 if not compile_c(code, binary, args.cc, args.opt):
                     return 2
+                limits = sandbox.Limits(
+                    wall_seconds=args.timeout,
+                    cpu_seconds=max(1, int(args.timeout) if args.timeout else 3600),
+                    memory_bytes=max(1, args.memory) * 1024 * 1024,
+                )
                 try:
-                    result = subprocess.run([str(binary)], timeout=args.timeout, check=False)
-                except subprocess.TimeoutExpired:
+                    outcome = sandbox.run([str(binary)], limits=limits, mode=args.isolation,
+                                          workdir=Path(temp), capture=False)
+                except sandbox.SandboxUnavailable as exc:
+                    raise make("E0601", str(exc)) from exc
+                for note in outcome.notes:
+                    print(f"nava: {note}", file=sys.stderr)
+                if outcome.timed_out:
                     print(f"nava: execution exceeded {args.timeout:g} seconds", file=sys.stderr)
                     return 124
-                return result.returncode
+                if outcome.survivors:
+                    raise make("E0602", "child processes survived termination of the program")
+                return outcome.exit_code if outcome.exit_code is not None else 2
         raise AssertionError("unknown command")
     except NavaError as exc:
         if machine:

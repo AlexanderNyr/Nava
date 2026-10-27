@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+Phase N2 of `PLAN.md` (isolated build and execution).
+
+- `nava_lang/sandbox.py`: two backends and three policies. `namespaces` uses
+  `unshare` for user, mount, PID, network, IPC and UTS namespaces with a
+  read-only minimal root (read-only `/usr`, a few `/etc` files, four `/dev`
+  nodes, a private 16 MiB `/tmp`, one writable directory at `/work`) and a
+  fresh `/proc`. `rlimits` provides process-group cleanup, `RLIMIT_CPU`,
+  `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_NOFILE`, `RLIMIT_NPROC`, `RLIMIT_CORE`,
+  a wall-clock deadline and bounded output capture, and states in every report
+  that the filesystem, the network and the process tree are **not** isolated.
+- Fail-closed policy: `--isolation {auto,required,off}` on `nava run` and
+  `eval/evaluate.py`. `required` refuses to run when namespaces are unavailable
+  (exit 2, new diagnostic `E0601`); `auto` warns and labels the gap; `off` is an
+  explicit opt-in to the unsafe mode. Backend detection is a real `unshare`
+  probe, not a version check.
+- Bounded output collection replaces unbounded `capture_output` for untrusted
+  candidates: each stream is capped, a program that exceeds the cap is killed,
+  and truncation is recorded per test case.
+- No surviving children: the whole process group is killed on timeout or
+  overflow, then re-checked; a survivor is reported and `nava run` fails with
+  `E0602`.
+- `nava run` gained `--isolation` and `--memory`; its default is `auto`, so the
+  best available isolation is used, with the program's own exit status, `124`
+  on timeout and 1 for runtime errors preserved.
+- `eval/evaluate.py`: compilation and execution both go through the sandbox,
+  compiler paths are resolved to real absolute paths (inside the jail
+  `PATH`/`/etc/alternatives` chains do not resolve), and each report records
+  `isolation.backend`, `network_denied`, `host_files_hidden`, `gaps` and the
+  limits in force.
+- `SECURITY.md`: threat model, per-platform support table, what is deliberately
+  not protected, and the probe-to-expectation map used by the gate.
+- `tests/test_sandbox.py` (15 tests): busy loop, sleeping program, output flood,
+  memory exhaustion, `fork`+`sleep` child, writes outside the working directory,
+  connection to a local listener, fail-closed `required` in the library and in
+  the evaluator, honest labels and CLI integration. Tests: 62 -> 77.
+- `tests/registry.py` tracks the new test class; `E0601`/`E0602` are registered
+  and documented with the tests that cover them.
+
+## N1 (phase N1)
+
 Phase N1 of `PLAN.md` (language specification and diagnostics).
 
 - Stable diagnostic codes: 51 registered codes (`E01xx` lexer, `E02xx` parser,

@@ -5,10 +5,26 @@ save its answer yourself. The scripts compile saved answers and check them
 against tests. They provide measurement infrastructure, but **contain no
 measured neural-model results yet**.
 
-**Safety:** executing C++ and native binaries is unsafe. The evaluator is not
-a sandbox; `--timeout` does not restrict files, network, memory or child
-processes. Run untrusted answers only in an isolated environment with
-operating-system resource limits.
+**Safety:** the evaluator runs untrusted code through
+[`nava_lang/sandbox.py`](../SECURITY.md). On Linux that means user, mount, PID
+and network namespaces, a read-only minimal root, one writable directory, and
+limits on CPU, memory, output size and process count. Every report contains an
+`isolation` block naming the backend and listing what it did **not** isolate.
+
+```json
+"isolation": {
+  "mode": "auto", "backend": "namespaces", "available": true,
+  "network_denied": true, "host_files_hidden": true,
+  "gaps": ["protects against a misbehaving program, not against a kernel exploit",
+           "the read-only /usr is shared with the host"]
+}
+```
+
+Use `--isolation required` for a result you can defend: it refuses to run
+instead of falling back to rlimits (exit status 2, `"available": false`).
+`--isolation off` is an explicit opt-in to the unsafe local mode, where the
+filesystem and the network are **not** isolated. Output is always collected
+with a byte limit, never with unbounded `capture_output`.
 
 ## Example
 
@@ -39,9 +55,13 @@ behaviour (`unchecked-signed`). Results across languages must be compared with
 that difference in mind; the evaluator never hides it.
 
 The evaluator emits JSON containing compilation status, the result of each
-test, compile time, individual execution times and source size. Execution
-includes process startup; it is not generation time. A compilation or test
-failure produces exit status 1.
+test, compile time, individual execution times, source size and the isolation
+block. Every test entry also records `timed_out`, `exit_code`, `signal`,
+`output_limit_exceeded` and truncation flags, so a killed program is
+distinguishable from a wrong answer. Execution includes sandbox setup and
+process startup; it is not generation time. A compilation or test failure
+produces exit status 1; being unable to run at all (including unavailable
+isolation) produces exit status 2.
 
 Two **hand-written** solutions are included to check the evaluator itself,
 not a neural model:

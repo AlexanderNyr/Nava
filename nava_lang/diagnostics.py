@@ -15,6 +15,7 @@ E02xx   Parser
 E03xx   Type checking and semantic analysis
 E04xx   Resource limits (nesting, compiler recursion)
 E05xx   Command line and host environment
+E06xx   Sandbox and isolation
 W00xx   Warnings; never fatal
 ======  ====================================================================
 
@@ -88,6 +89,9 @@ CODES: dict[str, tuple[str, str]] = {
     "E0503": (Severity.ERROR, "C compiler not found"),
     "E0504": (Severity.ERROR, "output path equals the source path"),
     "E0505": (Severity.ERROR, "output directory does not exist"),
+    # --- isolation ----------------------------------------------------------
+    "E0601": (Severity.ERROR, "requested isolation is unavailable"),
+    "E0602": (Severity.ERROR, "sandboxed program was stopped"),
 }
 
 
