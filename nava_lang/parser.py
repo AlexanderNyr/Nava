@@ -45,8 +45,17 @@ class Parser:
         #: Enum names, for the same reason: `Shape` is a type, and `Shape::Circle`
         #: is a value rather than a module call.
         self.enum_names: set[str] = set()
+        #: Names declared with type parameters, `struct Pair<T>` or `fn id<T>`.
+        #: A parser cannot resolve types, so this set only decides where a
+        #: `<`-bracketed list may appear; the checker validates it.
+        self.template_names: set[str] = set()
         #: The instance the last `instantiation()` lookahead consumed.
         self.last_instantiation: str | None = None
+        #: The type arguments of that instance, `["i64", "str"]`.
+        self.last_type_args: list[str] = []
+        #: Type parameters of the declaration being parsed, so that `T` is a
+        #: type inside `struct Pair<T> { first: T }` and nowhere else.
+        self.type_params_in_scope: set[str] = set()
 
     def enter(self, loc) -> None:
         self.depth += 1
@@ -138,6 +147,8 @@ class Parser:
             self.expect("]", "']'")
             return f"[{element.value}]"
         token = self.expect("IDENT", "a type (i64, bool, str, void, or f64)")
+        if str(token.value) in self.type_params_in_scope:
+            return str(token.value)
         if self.at("(") and self.edition >= STRUCT_EDITION:
             return self.generic_type(token)
         if self.edition >= STRUCT_EDITION and (token.value in self.struct_names
@@ -153,15 +164,15 @@ class Parser:
         return str(token.value)
 
     def generic_type(self, name: Token) -> str:
-        """`Option(i64)` or `Result(i64, str)`: a prelude enum with arguments."""
+        """`Option(i64)`, `Result(i64, str)` or a declared template `Pair(i64)`."""
         expected = GENERIC_PRELUDE.get(str(name.value))
-        if expected is None:
+        if expected is None and str(name.value) not in self.template_names:
             raise make(
                 "E0414",
-                f"{name.value!r} cannot take type arguments yet",
+                f"{name.value!r} cannot take type arguments",
                 name.loc, name.loc.advance(str(name.value)),
-                hint="edition 2 parameterises only Option and Result; generic "
-                     "declarations are a later increment",
+                hint=f"declare it with type parameters, as in `struct "
+                     f"{name.value}(T) {{ x: T }}`",
             )
         self.expect("(", "'(' after a type name")
         arguments: list[str] = []
@@ -170,6 +181,9 @@ class Parser:
             if not self.take(","):
                 break
         self.expect(")", "')'")
+        if expected is None:
+            # A declared template: the checker owns arity and substitution.
+            return f"{name.value}({', '.join(arguments)})"
         if len(arguments) != expected:
             plural = "s" if expected != 1 else ""
             raise make(
@@ -187,10 +201,12 @@ class Parser:
 
         Used where a type argument list could be confused with a call: `f(x)` is
         a call, `Option(i64)` is a type. The lookahead is bounded — the tokens
-        must be IDENT '(', types, ')', '::' — so no backtracking is needed.
+        must be IDENT '(', types, ')', then '::' or '(' — so no backtracking is
+        needed.
         """
+        name_now = str(self.current.value) if self.at("IDENT") else ""
         if not (self.at("IDENT") and self.tokens[self.i + 1].kind == "("
-                and self.current.value in GENERIC_PRELUDE):
+                and (name_now in GENERIC_PRELUDE or name_now in self.template_names)):
             return None
         saved = self.i
         name = self.current
@@ -204,20 +220,32 @@ class Parser:
                 arguments.append(self.parse_type())
                 if not self.take(","):
                     break
-            if not self.at(")") or self.tokens[self.i + 1].kind != "::":
+            # `... ::` is a variant, `... (` is a construction or a call:
+            # `Option(i64)::Some(1)`, `Pair(i64)(first: 1, second: 2)`,
+            # `identity(i64)(7)`.
+            if not self.at(")") or self.tokens[self.i + 1].kind not in ("::", "("):
                 self.i = saved
                 return None
             self.i += 1
         except NavaError as error:
             # A missing token means "this was not a type argument list" — a value
-            # where a type belongs. A *named* error (an unknown type, a forbidden
-            # element type) is real and must reach the author.
-            if error.code != "E0201":
+            # where a type belongs. The same holds for an unknown type name when
+            # what follows the parentheses is `(`: `identity(x)` is a call whose
+            # argument happens to be a value. `::` is unambiguous — only a type
+            # is ever followed by `::` — so there an unknown name is the real
+            # error and must reach the author.
+            # E0414 ("this name cannot take type arguments") is the same kind of
+            # evidence: `f(Point(x: 1))` is a call whose argument is a struct
+            # construction, and `Point(x: 1)` is exactly the shape of a type
+            # argument list. The construction path reports it properly.
+            if error.code not in ("E0201", "E0203", "E0414"):
+                raise
+            if error.code == "E0203" and self.follows_with_variants(saved):
                 raise
             self.i = saved
             return None
-        expected = GENERIC_PRELUDE[str(name.value)]
-        if len(arguments) != expected:
+        expected = GENERIC_PRELUDE.get(str(name.value))
+        if expected is not None and len(arguments) != expected:
             raise make(
                 "E0412",
                 f"{name.value} takes {expected} type argument"
@@ -225,6 +253,7 @@ class Parser:
                 name.loc, name.loc.advance(str(name.value)),
             )
         self.last_instantiation = f"{name.value}({', '.join(arguments)})"
+        self.last_type_args = arguments
         return self.last_instantiation
 
     def edition_declaration(self) -> None:
@@ -255,11 +284,83 @@ class Parser:
                 for index, token in enumerate(self.tokens[:-1])
                 if token.kind == "ENUM" and self.tokens[index + 1].kind == "IDENT"
             }
+            # `fn id<T>`, `struct Pair<T>`, `enum Box<T>`: the name is followed
+            # by `<`, which no other declaration form uses.
+            self.template_names = {
+                str(self.tokens[index + 1].value)
+                for index, token in enumerate(self.tokens[:-2])
+                if token.kind in ("FN", "STRUCT", "ENUM")
+                and self.tokens[index + 1].kind == "IDENT"
+                and self.tokens[index + 2].kind == "<"
+            }
+
+    def follows_with_variants(self, start: int) -> bool:
+        """Is the `(` at `start + 1` closed by `::`? A lookahead, no consuming."""
+        depth = 0
+        index = start + 1
+        while index < len(self.tokens):
+            kind = self.tokens[index].kind
+            if kind == "(":
+                depth += 1
+            elif kind == ")":
+                depth -= 1
+                if depth == 0:
+                    return index + 1 < len(self.tokens) \
+                        and self.tokens[index + 1].kind == "::"
+            elif kind == "EOF":
+                return False
+            index += 1
+        return False
+
+    def type_parameters(self) -> list[str]:
+        """`(T, U)` right after a declared name, or `[]` when there is none.
+
+        A type parameter list sits where a value list of a *call* never does —
+        between a declared name and the body — so `<T>` and `>` can stay closed
+        in the token stream without a second meaning.
+        """
+        if not self.at("<"):
+            return []
+        self.require_edition(self.current.loc, "a type parameter")
+        self.i += 1
+        names: list[str] = []
+        while True:
+            parameter = self.expect("IDENT", "a type parameter name")
+            if parameter.value in TYPES:
+                raise make("E0203", f"{parameter.value!r} is a built-in type name",
+                           parameter.loc, parameter.loc.advance(str(parameter.value)),
+                           "a type parameter needs a name of its own, such as T")
+            if str(parameter.value) in names:
+                raise make("E0435", f"duplicate type parameter {parameter.value!r}",
+                           parameter.loc, parameter.loc.advance(str(parameter.value)),
+                           "each type parameter needs its own name")
+            names.append(str(parameter.value))
+            if self.take(","):
+                continue
+            break
+        self.expect(">", "'>' after the type parameters")
+        return names
+
+    def value_parameters(self) -> list[Param]:
+        """`(a: T, b: i64)` after the name and the type parameters."""
+        self.expect("(")
+        params: list[Param] = []
+        while not self.at(")"):
+            p = self.expect("IDENT", "parameter name")
+            self.expect(":")
+            mutable = self.take("MUT") is not None
+            typ = self.parse_type()
+            params.append(Param(str(p.value), typ, p.loc, mutable))
+            if not self.take(","):
+                break
+        self.expect(")")
+        return params
 
     def struct_declaration(self) -> Struct:
         start = self.expect("STRUCT")
         self.require_edition(start.loc, "a struct declaration")
         name = self.expect("IDENT", "a struct name")
+        type_params = self.type_parameters()
         if name.value in TYPES:
             raise make("E0203", f"{name.value!r} is a built-in type name",
                        name.loc, name.loc.advance(str(name.value)),
@@ -267,58 +368,73 @@ class Parser:
         self.separators()
         self.expect("{", "'{'")
         fields: list[Field] = []
-        self.separators()
-        while not self.at("}"):
-            if self.at("EOF"):
-                raise make("E0204", "expected '}' before end of file", self.current.loc,
-                           hint=f"the struct opened at line {start.loc.line} is not closed")
-            field_name = self.expect("IDENT", "a field name")
-            self.expect(":", "':' after a field name")
-            typ = self.parse_type()
-            fields.append(Field(str(field_name.value), typ, field_name.loc))
-            if not self.take(","):
-                self.separators()
-                if not self.at("}"):
-                    raise make("E0202", "expected ',' or '}' after a struct field",
-                               self.current.loc,
-                               hint="separate fields with ',' or a newline")
+        saved_params = self.type_params_in_scope
+        self.type_params_in_scope = set(type_params)
+        try:
             self.separators()
+            while not self.at("}"):
+                if self.at("EOF"):
+                    raise make("E0204", "expected '}' before end of file", self.current.loc,
+                               hint=f"the struct opened at line {start.loc.line} is not closed")
+                field_name = self.expect("IDENT", "a field name")
+                self.expect(":", "':' after a field name")
+                typ = self.parse_type()
+                fields.append(Field(str(field_name.value), typ, field_name.loc))
+                if not self.take(","):
+                    self.separators()
+                    if not self.at("}"):
+                        raise make("E0202", "expected ',' or '}' after a struct field",
+                                   self.current.loc,
+                                   hint="separate fields with ',' or a newline")
+                self.separators()
+        finally:
+            self.type_params_in_scope = saved_params
         self.expect("}")
-        return Struct(str(name.value), fields, start.loc)
+        declaration = Struct(str(name.value), fields, start.loc)
+        declaration.type_params = type_params
+        return declaration
 
     def enum_declaration(self) -> EnumDecl:
         start = self.expect("ENUM")
         self.require_edition(start.loc, "an enum declaration")
         name = self.expect("IDENT", "an enum name")
+        type_params = self.type_parameters()
         if name.value in TYPES:
             raise make("E0203", f"{name.value!r} is a built-in type name",
                        name.loc, name.loc.advance(str(name.value)))
         self.separators()
         self.expect("{", "'{'")
         variants: list[Variant] = []
-        self.separators()
-        while not self.at("}"):
-            if self.at("EOF"):
-                raise make("E0204", "expected '}' before end of file", self.current.loc,
-                           hint=f"the enum opened at line {start.loc.line} is not closed")
-            variant = self.expect("IDENT", "a variant name")
-            types: list[str] = []
-            if self.take("("):
-                while not self.at(")"):
-                    types.append(self.parse_type())
-                    if not self.take(","):
-                        break
-                self.expect(")")
-            variants.append(Variant(str(variant.value), types, variant.loc))
-            if not self.take(","):
-                self.separators()
-                if not self.at("}"):
-                    raise make("E0202", "expected ',' or '}' after an enum variant",
-                               self.current.loc,
-                               hint="separate variants with ',' or a newline")
+        saved_params = self.type_params_in_scope
+        self.type_params_in_scope = set(type_params)
+        try:
             self.separators()
+            while not self.at("}"):
+                if self.at("EOF"):
+                    raise make("E0204", "expected '}' before end of file", self.current.loc,
+                               hint=f"the enum opened at line {start.loc.line} is not closed")
+                variant = self.expect("IDENT", "a variant name")
+                types: list[str] = []
+                if self.take("("):
+                    while not self.at(")"):
+                        types.append(self.parse_type())
+                        if not self.take(","):
+                            break
+                    self.expect(")")
+                variants.append(Variant(str(variant.value), types, variant.loc))
+                if not self.take(","):
+                    self.separators()
+                    if not self.at("}"):
+                        raise make("E0202", "expected ',' or '}' after an enum variant",
+                                   self.current.loc,
+                                   hint="separate variants with ',' or a newline")
+                self.separators()
+        finally:
+            self.type_params_in_scope = saved_params
         self.expect("}")
-        return EnumDecl(str(name.value), variants, start.loc)
+        declaration = EnumDecl(str(name.value), variants, start.loc)
+        declaration.type_params = type_params
+        return declaration
 
     def parse(self) -> Program:
         functions: list[Function] = []
@@ -393,22 +509,22 @@ class Parser:
         if public:
             self.require_edition(start.loc, "a public function")
         name = self.expect("IDENT", "function name")
-        self.expect("(")
-        params: list[Param] = []
-        while not self.at(")"):
-            p = self.expect("IDENT", "parameter name")
-            self.expect(":")
-            mutable = self.take("MUT") is not None
-            typ = self.parse_type()
-            params.append(Param(str(p.value), typ, p.loc, mutable))
-            if not self.take(","):
-                break
-        self.expect(")")
-        returns = "void"
-        if self.take("->"):
-            returns = self.parse_type()
-        body = self.block()
-        return Function(str(name.value), params, returns, body, start.loc, public=public)
+        saved_params = self.type_params_in_scope
+        try:
+            type_params = self.type_parameters()
+            # A type parameter is a type in the signature *and* in the body, where
+            # it may be written again: `return Pair(T)(first: ..., second: ...)`.
+            self.type_params_in_scope = set(type_params)
+            params = self.value_parameters()
+            returns = "void"
+            if self.take("->"):
+                returns = self.parse_type()
+            body = self.block()
+        finally:
+            self.type_params_in_scope = saved_params
+        function = Function(str(name.value), params, returns, body, start.loc,
+                            public=public, type_params=type_params)
+        return function
 
     def block(self) -> list:
         self.separators()
@@ -747,6 +863,17 @@ class Parser:
             return ArrayLiteral(token.loc, items)
         if self.at("IDENT") and self.edition >= STRUCT_EDITION:
             instance = self.instantiation()
+            if instance is not None and self.at("("):
+                # `Pair(i64)(first: 1, second: 2)` builds an instantiated struct
+                # and `identity(i64)(7)` calls an instantiated function; which
+                # one it is depends on the arguments, exactly as for a plain name.
+                base = instance.split("(", 1)[0]
+                arguments = list(self.last_type_args)
+                self.expect("(")
+                fields, args = self.arguments()
+                if fields is not None:
+                    return StructLiteral(token.loc, base, fields, instance=instance)
+                return Call(token.loc, base, args, type_args=arguments)
             if instance is not None:
                 base = instance.split("(", 1)[0]
                 self.expect("::")
@@ -823,6 +950,17 @@ class Parser:
                         f"{name!r} cannot take type arguments",
                         token.loc, token.loc.advance(name),
                         hint="edition 2 parameterises only Option and Result",
+                    )
+                if self.at("("):
+                    # `double(i64)(21)`: a second argument list. Nava has no
+                    # first-class calls, so the first list was meant as type
+                    # arguments — which only a generic function accepts.
+                    raise make(
+                        "E0438",
+                        f"type arguments come before the arguments of a call",
+                        token.loc, token.loc.advance(name),
+                        hint=f"write {name}(21), or declare it as "
+                             f"`fn {name}<T>(x: T) -> T`",
                     )
                 if fields is not None:
                     return StructLiteral(token.loc, name, fields)

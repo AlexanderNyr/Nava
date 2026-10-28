@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import copy
+
 from .diagnostics import make, severity_of
 from .limits import MAX_NESTING
 from .model import (
     Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer,
-    Diagnostic, EnumDecl, Expr, ExprStmt, Float, For, Function, If, Import,
-    Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Program, Range,
-    Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary, Variable,
-    Variant, VariantValue, While,
+    Diagnostic, EnumDecl, Expr, ExprStmt, Field, Float, For, Function, If, Import,
+    Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Param, Program,
+    Range, Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary,
+    Variable, Variant, VariantValue, While,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -35,6 +37,44 @@ FAILURE_VARIANT = {"Option": "None", "Result": "Err"}
 def mangle(typ: str) -> str:
     """`Result(i64, str)` -> `Result_i64_str`: a C identifier for one instance."""
     return "".join(character if character.isalnum() else "_" for character in typ).replace("__", "_").strip("_")
+
+
+#: The attributes of an AST node that hold a *type* rather than a value. A
+#: template instantiation rewrites exactly these, and nothing else, so a string
+#: literal in a body is never mistaken for a type.
+TYPE_ATTRIBUTES = ("typ", "annotation", "instance", "returns")
+TYPE_LISTS = ("type_args",)
+
+
+def substitute_type(typ: str, substitution: dict[str, str]) -> str:
+    """`Pair(T)` with `{T: i64}` -> `Pair(i64)`; an unknown name is unchanged."""
+    if typ in substitution:
+        return substitution[typ]
+    split = split_instance(typ)
+    if split is None:
+        return typ
+    name, arguments = split
+    return f"{name}({', '.join(substitute_type(item, substitution) for item in arguments)})"
+
+
+def substitute_types(node, substitution: dict[str, str]) -> None:
+    """Rewrite every type written in a (already copied) subtree, in place."""
+    if isinstance(node, str) or node is None or isinstance(node, (int, float, bool)):
+        return
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            substitute_types(item, substitution)
+        return
+    fields = getattr(node, "__dict__", None)
+    if fields is None:
+        return
+    for key, value in list(fields.items()):
+        if key in TYPE_ATTRIBUTES and isinstance(value, str):
+            setattr(node, key, substitute_type(value, substitution))
+        elif key in TYPE_LISTS and isinstance(value, list):
+            setattr(node, key, [substitute_type(item, substitution) for item in value])
+        else:
+            substitute_types(value, substitution)
 
 
 def split_instance(typ: str | None) -> tuple[str, list[str]] | None:
@@ -106,11 +146,22 @@ class Checker:
         #: How many `defer` blocks enclose the statement being checked. Inside
         #: one, no jump may leave it.
         self.defer_depth = 0
+        #: Concrete structs built from a template, keyed by their written type.
+        self.struct_instances: dict[str, Struct] = {}
+        #: Concrete functions built from a template, keyed by their written
+        #: instance type, `identity(i64)`.
+        self.fn_instances: dict[str, Function] = {}
+        #: Instances currently being built, so a recursive template is caught
+        #: instead of exhausting the stack.
+        self.instantiating: set[str] = set()
 
     def check(self) -> Program:
         # Every type an instantiation mentions must exist before an instance of
         # it is built, so the instances are created lazily, on demand.
         self.instances: dict[str, EnumDecl] = {}
+        self.struct_instances = {}
+        self.fn_instances = {}
+        self.instantiating = set()
         # Names first, types second: a struct may hold an enum and an enum may
         # carry a struct, so neither table can be validated before both exist.
         self.collect_structs()
@@ -134,7 +185,19 @@ class Checker:
             raise make("E0304", "main must have no parameters and return void or i64", main.loc,
                        main.loc.advance("fn " + main.name))
 
-        for function in self.program.functions:
+        # The worklist grows as calls instantiate templates: an instantiated
+        # function is appended to `program.functions` and checked in turn, so the
+        # code generator only ever sees concrete declarations.
+        index = 0
+        while index < len(self.program.functions):
+            function = self.program.functions[index]
+            index += 1
+            if function.type_params:
+                # A template is a recipe, not a function: its body is checked
+                # once per instantiation, when its type parameters have a meaning.
+                # Only the written signature is checked here.
+                self.check_template_signature(function)
+                continue
             self.current_function = function
             self.current_module = function.module
             self.scopes = [{}]
@@ -147,6 +210,13 @@ class Checker:
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
             for param in function.params:
+                if self.is_template(param.typ):
+                    raise make(
+                        "E0437",
+                        f"{param.typ!r} is a generic declaration, not a type",
+                        param.loc, param.loc.advance(param.name),
+                        hint=f"write `{param.typ}(i64)` with the type arguments",
+                    )
                 if param.typ not in VALUE_TYPES and not is_array(param.typ) \
                         and not self.is_struct(param.typ) and not self.is_enum(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
@@ -175,7 +245,9 @@ class Checker:
                     "the analysis is conservative: even `while true` does not count as a return",
                 )
         self.program.instances = self.instances
+        self.program.struct_instances = self.struct_instances
         self.unused_imports()
+        self.uninstantiated_templates()
         self.program.warnings = self.warnings
         return self.program
 
@@ -184,33 +256,56 @@ class Checker:
     def validate_declaration_types(self) -> None:
         """Field and payload types, now that every declared name is known."""
         for struct in self.program.structs:
-            for item in struct.fields:
-                if item.typ in ("str",) or is_array(item.typ):
-                    raise make(
-                        "E0378",
-                        f"a field of {struct.name} cannot have type {item.typ} yet",
-                        item.loc, item.loc.advance(item.name),
-                        "edition 2 struct fields are i64, bool, f64, a struct or an enum; "
-                        "owning types such as str and arrays arrive with the memory work (N11)",
-                    )
-                if item.typ not in VALUE_TYPES and not self.is_struct(item.typ) \
-                        and not self.is_enum(item.typ):
-                    raise make(
-                        "E0203",
-                        f"unknown type {item.typ!r}; use i64, bool, f64, or a declared "
-                        f"struct or enum",
-                        item.loc, item.loc.advance(item.name),
-                    )
+            if struct.type_params:
+                continue
+            self.check_field_types(struct)
+
+    def check_field_types(self, struct: Struct) -> None:
+        """One struct's fields: a scalar, a struct or an enum, nothing owning."""
+        for item in struct.fields:
+            if item.typ in ("str",) or is_array(item.typ):
+                raise make(
+                    "E0378",
+                    f"a field of {struct.name} cannot have type {item.typ} yet",
+                    item.loc, item.loc.advance(item.name),
+                    "edition 2 struct fields are i64, bool, f64, a struct or an enum; "
+                    "owning types such as str and arrays arrive with the memory work (N11)",
+                )
+            if self.is_template(item.typ):
+                raise make(
+                    "E0437",
+                    f"{item.typ!r} is a generic struct, not a type",
+                    item.loc, item.loc.advance(item.name),
+                    hint=f"write `{item.typ}(i64)` with the type arguments",
+                )
+            if item.typ not in VALUE_TYPES and not self.is_struct(item.typ) \
+                    and not self.is_enum(item.typ):
+                raise make(
+                    "E0203",
+                    f"unknown type {item.typ!r}; use i64, bool, f64, or a declared "
+                    f"struct or enum",
+                    item.loc, item.loc.advance(item.name),
+                )
+
+    def is_template(self, typ: str | None) -> bool:
+        if not typ:
+            return False
+        declared = self.structs.get(typ) or self.enums.get(typ)
+        return bool(declared is not None and declared.type_params)
 
     def is_enum(self, typ: str | None) -> bool:
         if typ is None:
             return False
-        if typ in self.enums or typ in self.instances:
+        if typ in self.instances:
             return True
+        declared = self.enums.get(typ)
+        if declared is not None:
+            # A template is a recipe: `Box` alone is not a type, `Box(i64)` is.
+            return not declared.type_params
         return split_instance(typ) is not None
 
     def instantiate(self, typ: str) -> EnumDecl:
-        """The declaration of `Result(i64, str)`, created once per type."""
+        """The declaration of `Result(i64, str)` or `Box(i64)`, once per type."""
         if typ in self.instances:
             return self.instances[typ]
         split = split_instance(typ)
@@ -219,8 +314,36 @@ class Checker:
         name, arguments = split
         template = PRELUDE.get(name)
         if template is None:
-            raise make("E0414", f"{name!r} cannot take type arguments",
-                       hint="edition 2 parameterises only Option and Result")
+            # A user enum template: its parameters and variants are declared in
+            # the source, so the same substitution applies to both spellings.
+            declared = self.enums.get(name)
+            if declared is None or not declared.type_params:
+                raise make(
+                    "E0414",
+                    f"{name!r} cannot take type arguments",
+                    hint=f"declare it as `enum {name}(T) {{ ... }}` to parameterise it",
+                )
+            parameters = list(declared.type_params)
+            variants = [(variant.name, list(variant.types)) for variant in declared.variants]
+            for argument in arguments:
+                self.require_known_type(argument, f"in {typ}")
+            if len(arguments) != len(parameters):
+                raise make(
+                    "E0412",
+                    f"{name} takes {len(parameters)} type argument"
+                    f"{'s' if len(parameters) != 1 else ''}, got {len(arguments)}",
+                )
+            substitution = dict(zip(parameters, arguments))
+            declared_variants = []
+            for tag, (variant_name, types) in enumerate(variants):
+                resolved = [substitute_type(item, substitution) for item in types]
+                choice = Variant(variant_name, resolved, None, tag)
+                declared_variants.append(choice)
+                self.check_variant_types(name, choice)
+            decl = EnumDecl(name, declared_variants, None)
+            decl.cname = "nv_enum_" + mangle(typ)
+            self.instances[typ] = decl
+            return decl
         parameters, variants = template
         if len(arguments) != len(parameters):
             raise make(
@@ -233,7 +356,6 @@ class Checker:
                     or self.is_enum(argument)):
                 raise make("E0203", f"unknown type {argument!r} in {typ}")
         substitution = dict(zip(parameters, arguments))
-        variants_out: list[Variant] = []
         declared_variants = []
         for tag, (variant_name, types) in enumerate(variants):
             resolved = [substitution.get(item, item) for item in types]
@@ -291,22 +413,39 @@ class Checker:
                         hint="variant names are unique inside their enum",
                     )
                 seen.add(variant.name)
-                for item in variant.types:
-                    if item in ("str",) or is_array(item):
-                        raise make(
-                            "E0399",
-                            f"a variant field of {decl.name}::{variant.name} cannot be {item} yet",
-                            variant.loc, variant.loc.advance(variant.name),
-                            "edition 2 variant fields are i64, bool, f64, a struct or an enum; "
-                            "owning types arrive with the memory work (N11)",
-                        )
-                    if item not in VALUE_TYPES and not self.is_struct(item) \
-                            and not self.is_enum(item):
-                        raise make(
-                            "E0203",
-                            f"unknown type {item!r} in variant {decl.name}::{variant.name}",
-                            variant.loc, variant.loc.advance(variant.name),
-                        )
+                if not decl.type_params:
+                    self.check_variant_types(decl.name, variant)
+
+    def check_variant_types(self, enum_name: str, variant: Variant) -> None:
+        """One variant's payload: a scalar, a struct or an enum, nothing owning.
+
+        An instantiated variant has no location of its own — the type it came
+        from was written at the instantiation — so the diagnostic carries none.
+        """
+        span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
+        for item in variant.types:
+            if item in ("str",) or is_array(item):
+                raise make(
+                    "E0399",
+                    f"a variant field of {enum_name}::{variant.name} cannot be {item} yet",
+                    *span,
+                    hint="edition 2 variant fields are i64, bool, f64, a struct or an enum; "
+                         "owning types arrive with the memory work (N11)",
+                )
+            if self.is_template(item):
+                raise make(
+                    "E0437",
+                    f"{item!r} is a generic declaration, not a type",
+                    *span,
+                    hint=f"write `{item}(i64)` with the type arguments",
+                )
+            if item not in VALUE_TYPES and not self.is_struct(item) \
+                    and not self.is_enum(item):
+                raise make(
+                    "E0203",
+                    f"unknown type {item!r} in variant {enum_name}::{variant.name}",
+                    *span,
+                )
 
     def enum_of(self, typ: str | None) -> EnumDecl | None:
         if not typ:
@@ -433,7 +572,34 @@ class Checker:
     # --- structs (edition 2) ------------------------------------------------
 
     def is_struct(self, typ: str | None) -> bool:
-        return typ is not None and typ in self.structs
+        return self.struct_of(typ) is not None
+
+    def struct_of(self, typ: str | None) -> Struct | None:
+        """The declared struct behind a type, instantiating a template if needed.
+
+        Unknown names and type-parameter names return None: this answers "is this
+        a struct", not "is this legal here", so the caller keeps its own message.
+        """
+        if not typ:
+            return None
+        declared = self.structs.get(typ)
+        if declared is not None:
+            return None if declared.type_params else declared
+        split = split_instance(typ)
+        if split is None:
+            return None
+        name, arguments = split
+        template = self.structs.get(name)
+        if template is None or not template.type_params:
+            return None
+        if len(arguments) != len(template.type_params):
+            return None
+        try:
+            return self.instantiate_struct(typ)
+        except NavaError:
+            # A probe, not a validation: `struct_of` answers "is this a struct".
+            # A bad argument type is reported where the type is written.
+            return None
 
     def collect_structs(self) -> None:
         """Build the struct table and reject the declarations that cannot work.
@@ -468,6 +634,61 @@ class Checker:
         for struct in self.program.structs:
             self.check_struct_cycle(struct)
 
+    def require_known_type(self, typ: str, where: str) -> None:
+        """Refuse a written type that names nothing: `Box(Nope)` names nothing."""
+        if typ in VALUE_TYPES or self.is_struct(typ) or self.is_enum(typ):
+            return
+        split = split_instance(typ)
+        if split is not None:
+            # A missing template is reported by the instantiation that asked.
+            return
+        raise make("E0203", f"unknown type {typ!r} {where}")
+
+    def instantiate_struct(self, typ: str) -> Struct:
+        """The declaration of `Pair(i64)`, created once per type.
+
+        A struct is stored inline and copied by value, so an instance is an
+        ordinary struct whose fields have concrete types. Nothing downstream —
+        the checker's later passes or the code generator — needs to know that it
+        came from a template.
+        """
+        if typ in self.struct_instances:
+            return self.struct_instances[typ]
+        split = split_instance(typ)
+        name, arguments = split
+        template = self.structs.get(name)
+        if template is None or not template.type_params:
+            raise make("E0414", f"{name!r} cannot take type arguments",
+                       hint=f"declare it as `struct {name}(T) {{ ... }}` to parameterise it")
+        parameters = list(template.type_params)
+        if len(arguments) != len(parameters):
+            raise make(
+                "E0412",
+                f"{name} takes {len(parameters)} type argument"
+                f"{'s' if len(parameters) != 1 else ''}, got {len(arguments)}",
+            )
+        for argument in arguments:
+            self.require_known_type(argument, f"in {typ}")
+        if typ in self.instantiating:
+            raise make(
+                "E0377",
+                f"struct {typ} would contain itself: instantiating it needs itself",
+                template.loc, template.loc.advance("struct " + template.name),
+                hint="a struct is stored inline; edition 2 has no indirection to break the cycle",
+            )
+        substitution = dict(zip(parameters, arguments))
+        fields = [Field(item.name, substitute_type(item.typ, substitution), item.loc)
+                  for item in template.fields]
+        decl = Struct(typ, fields, template.loc)
+        decl.cname = "nv_struct_" + mangle(typ)
+        self.struct_instances[typ] = decl
+        self.instantiating.add(typ)
+        try:
+            self.check_field_types(decl)
+        finally:
+            self.instantiating.discard(typ)
+        return decl
+
     def check_struct_cycle(self, struct: Struct) -> None:
         """A struct may not contain itself, directly or through another struct."""
         def walk(current: Struct, path: list[str]) -> None:
@@ -491,8 +712,21 @@ class Checker:
         return set(BUILTINS)
 
     def struct_literal(self, expr: StructLiteral) -> str:
-        """`Point(x: 1, y: 2)`: every field once, in any order."""
-        struct = self.structs.get(expr.name)
+        """`Point(x: 1, y: 2)` or `Pair(i64)(first: 1, second: 2)`: every field once."""
+        if expr.instance is not None:
+            if expr.name not in self.structs:
+                raise make("E0373", f"unknown struct {expr.name!r}", expr.loc,
+                           expr.loc.advance(expr.name))
+            struct = self.instantiate_struct(expr.instance)
+        else:
+            struct = self.struct_of(expr.name)
+        if struct is None and expr.instance is None and self.is_template(expr.name):
+            raise make(
+                "E0437",
+                f"{expr.name!r} is a generic struct: a construction names its type",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"write {expr.name}(i64)(field: value, ...)",
+            )
         if struct is None:
             if expr.name in BUILTINS or any(
                     function.name == expr.name for function in self.program.functions):
@@ -556,7 +790,7 @@ class Checker:
                 expr.loc, expr.loc.advance("."),
                 hint="a field access needs a value of a declared struct type",
             )
-        struct = self.structs[base]
+        struct = self.struct_of(base)
         for item in struct.fields:
             if item.name == expr.field:
                 expr.owner = item
@@ -640,6 +874,26 @@ class Checker:
                 )
         return base
 
+    def uninstantiated_templates(self) -> None:
+        """W0003: a template nobody uses has never been type-checked.
+
+        Its body mentions type parameters, so it cannot be checked before a call
+        fixes them. Warning about it is the honest alternative to pretending that
+        dead generic code was verified.
+        """
+        templates = {id(function) for function in self.program.functions
+                     if function.type_params}
+        for function in self.program.functions:
+            if id(function) not in templates:
+                continue
+            used = any(clone.name == function.name and clone.module == function.module
+                       for clone in self.fn_instances.values())
+            if used:
+                continue
+            self.warn(function.loc, "W0003",
+                      f"generic function {function.name!r} is never instantiated, "
+                      f"so its body is not type-checked")
+
     def unused_imports(self) -> None:
         """W0002: an import that no qualified call in its module uses."""
         for module, imports in self.imports.items():
@@ -648,6 +902,147 @@ class Checker:
                     continue
                 self.warn(item.name_loc, "W0002",
                           f"unused import {item.name!r}: no function of this module is called")
+
+    # --- generics (edition 2) ----------------------------------------------
+
+    def check_template_signature(self, function: Function) -> None:
+        """The written signature of a template, before any instantiation.
+
+        The body is not checked here: it mentions type parameters, which have no
+        meaning until a call fixes them. Every instantiation is checked in full,
+        so an error inside a body is reported at each use, not once.
+        """
+        allowed = set(function.type_params)
+        for param in function.params:
+            if not self.type_is_known(param.typ, allowed):
+                raise make(
+                    "E0203",
+                    f"unknown type {param.typ!r} in the parameters of {function.name}",
+                    param.loc, param.loc.advance(param.name),
+                    hint="a type parameter must be listed in the declaration, as in "
+                         f"`fn {function.name}(T)`",
+                )
+        if not self.type_is_known(function.returns, allowed):
+            raise make(
+                "E0203",
+                f"unknown type {function.returns!r} in the result of {function.name}",
+                function.loc, function.loc.advance("fn " + function.name),
+            )
+
+    def type_is_known(self, typ: str, allowed: set[str]) -> bool:
+        """Is `typ` a type once `allowed` (the declaration's parameters) is fixed?
+
+        It answers for the *written* signature, where `T` has no value yet, so an
+        instantiation is resolved by looking at its template rather than by
+        building the instance: `Pair(T)` is known exactly when `Pair` is a
+        template and `T` is a parameter.
+        """
+        if typ in allowed or typ in VALUE_TYPES or typ == "void":
+            return True
+        split = split_instance(typ)
+        if split is not None:
+            name, arguments = split
+            if name in allowed:
+                # `T(i64)` is not a type: a type parameter takes no arguments.
+                return False
+            template = self.structs.get(name) or self.enums.get(name)
+            if name in PRELUDE:
+                expected = PRELUDE[name][0]
+                return len(arguments) == len(expected) and all(
+                    self.type_is_known(item, allowed) for item in arguments)
+            if template is None or not template.type_params:
+                return False
+            if len(arguments) != len(template.type_params):
+                return False
+            return all(self.type_is_known(item, allowed) for item in arguments)
+        if self.is_template(typ):
+            return False
+        return self.is_struct(typ) or self.is_enum(typ)
+
+    def function_instance_name(self, template: Function, substitution: dict[str, str]) -> str:
+        arguments = ", ".join(substitution[name] for name in template.type_params)
+        return f"{template.name}({arguments})"
+
+    def instantiate_function(self, template: Function,
+                             substitution: dict[str, str]) -> Function:
+        """A concrete copy of a template, appended to the program's functions.
+
+        Monomorphisation is an AST copy with the type parameters replaced: the
+        copy is an ordinary function, so the rest of the checker and the whole
+        code generator need no knowledge of generics.
+        """
+        typ = self.function_instance_name(template, substitution)
+        if typ in self.fn_instances:
+            return self.fn_instances[typ]
+        clone = Function(
+            template.name,
+            [Param(param.name, substitute_type(param.typ, substitution), param.loc,
+                   param.mutable) for param in template.params],
+            substitute_type(template.returns, substitution),
+            copy.deepcopy(template.body),
+            template.loc,
+            module=template.module,
+            public=template.public,
+        )
+        substitute_types(clone.body, substitution)
+        clone.cname = f"nv_fn_{len(self.program.functions)}"
+        self.fn_instances[typ] = clone
+        # The worklist in `check()` will type-check this copy, and the code
+        # generator emits it because it is now one of the program's functions.
+        self.program.functions.append(clone)
+        return clone
+
+    def type_argument_binding(self, expr: Call, template: Function) -> dict[str, str]:
+        """`identity(i64)(7)`: the written type arguments of a call."""
+        written = list(expr.type_args or [])
+        parameters = list(template.type_params)
+        if len(written) != len(parameters):
+            raise make(
+                "E0412",
+                f"{expr.name} takes {len(parameters)} type argument"
+                f"{'s' if len(parameters) != 1 else ''}, got {len(written)}",
+                expr.loc, expr.loc.advance(expr.name),
+            )
+        for typ in written:
+            self.require_known_type(typ, f"in the type arguments of {expr.name}")
+        return dict(zip(parameters, written))
+
+    def infer_binding(self, expr: Call, template: Function,
+                      actual: list[str]) -> dict[str, str]:
+        """Bind the type parameters from the argument types, or refuse (E0436)."""
+        substitution: dict[str, str] = {}
+
+        def unify(written: str, real: str) -> None:
+            if written in template.type_params:
+                # The first binding wins; a second, different one is a genuine
+                # argument mismatch, reported below as E0327.
+                substitution.setdefault(written, real)
+                return
+            split = split_instance(written)
+            if split is None:
+                return
+            name, arguments = split
+            real_split = split_instance(real)
+            if real_split is None or real_split[0] != name or len(real_split[1]) != len(arguments):
+                return
+            for inner, other in zip(arguments, real_split[1]):
+                unify(inner, other)
+
+        for param, real in zip(template.params, actual):
+            unify(param.typ, real)
+        missing = [name for name in template.type_params if name not in substitution]
+        if missing:
+            listed = ", ".join(missing)
+            raise make(
+                "E0436",
+                f"cannot infer the type argument{'s' if len(missing) != 1 else ''} "
+                f"{listed} of {expr.name}",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"write the call as {expr.name}("
+                     + ", ".join(substitution.get(name, "i64") for name in template.type_params)
+                     + ")(...)",
+            )
+        return substitution
 
     def resolve(self, expr: Call) -> Function:
         """Resolve a call to a function of the current or an imported module."""
@@ -858,6 +1253,13 @@ class Checker:
                 raise make("E0309", "a variable cannot contain a void value", name_loc,
                            name_loc.advance(statement.name))
             if statement.annotation is not None:
+                if self.is_template(statement.annotation):
+                    raise make(
+                        "E0437",
+                        f"{statement.annotation!r} is a generic declaration, not a type",
+                        name_loc, name_loc.advance(statement.name),
+                        hint=f"write `{statement.annotation}(i64)` with the type arguments",
+                    )
                 if statement.annotation == "void":
                     raise make("E0310", "a variable cannot have type void", name_loc,
                                name_loc.advance(statement.name))
@@ -1245,6 +1647,14 @@ class Checker:
         return result
 
     def call(self, expr: Call, expected: str | None = None) -> str:
+        if expr.module is None and self.is_template(expr.name) \
+                and expr.name not in self.by_module.get(self.current_module, {}):
+            raise make(
+                "E0437",
+                f"{expr.name!r} is a generic declaration, not a value",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"write {expr.name}(i64)(...) with the type arguments",
+            )
         if expr.module is None and self.is_struct(expr.name):
             raise make(
                 "E0381",
@@ -1343,16 +1753,65 @@ class Checker:
                 f"{expr.name} expects {len(function.params)} argument{plural}, got {len(expr.args)}",
                 expr.loc, expr.loc.advance(expr.name),
             )
+        if function.type_params:
+            return self.generic_call(expr, function)
+        if expr.type_args is not None:
+            raise make(
+                "E0438",
+                f"{expr.name} is not generic, so it takes no type arguments",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"call it as {expr.name}(...)",
+            )
+        self.check_arguments(expr, function.params)
+        expr.target = function
+        return function.returns
+
+    def generic_call(self, expr: Call, template: Function) -> str:
+        """A call of a template: one type per instantiation, checked once."""
+        if expr.type_args is not None:
+            substitution = self.type_argument_binding(expr, template)
+            concrete = self.instantiate_function(template, substitution)
+            self.check_arguments(expr, concrete.params)
+            expr.target = concrete
+            return concrete.returns
+        actual: list[str] = []
+        for arg, param in zip(expr.args, template.params):
+            # A parameter whose type is fully written can already be the context
+            # of an empty array literal; one that mentions `T` cannot.
+            expected = self.argument_context(arg, param.typ) \
+                if not self.mentions_type_parameter(param.typ, template.type_params) else None
+            actual.append(self.expression(arg, expected=expected))
+        substitution = self.infer_binding(expr, template, actual)
+        concrete = self.instantiate_function(template, substitution)
+        self.check_arguments(expr, concrete.params, actual)
+        expr.target = concrete
+        return concrete.returns
+
+    @staticmethod
+    def mentions_type_parameter(typ: str, parameters: list[str]) -> bool:
+        if typ in parameters:
+            return True
+        split = split_instance(typ)
+        if split is None:
+            return False
+        return any(Checker.mentions_type_parameter(item, parameters) for item in split[1])
+
+    @staticmethod
+    def argument_context(arg, typ: str) -> str | None:
+        """An empty array literal takes its element type from the parameter."""
+        return typ if isinstance(arg, ArrayLiteral) and not arg.items else None
+
+    def check_arguments(self, expr: Call, params, actual: list[str] | None = None) -> None:
+        """Argument types, and the exclusivity of every mutable borrow."""
         borrowed: dict[str, int] = {}
-        for index, (arg, param) in enumerate(zip(expr.args, function.params), start=1):
-            # An empty literal cannot be typed on its own; the parameter type is
-            # the context. A non-empty literal still has to match on its own, so
-            # a mismatch is reported as an argument error (E0327), not E0311.
-            expected = param.typ if isinstance(arg, ArrayLiteral) and not arg.items else None
-            actual = self.expression(arg, expected=expected)
-            if actual != param.typ:
+        for index, (arg, param) in enumerate(zip(expr.args, params), start=1):
+            if actual is None:
+                real = self.expression(arg, expected=self.argument_context(arg, param.typ))
+            else:
+                real = actual[index - 1]
+            if real != param.typ:
                 raise make("E0327",
-                           f"argument {index} of {expr.name} expects {param.typ}, got {actual}",
+                           f"argument {index} of {expr.name} expects {param.typ}, got {real}",
                            arg.loc)
             if not is_array(param.typ) or not param.mutable:
                 continue
@@ -1383,8 +1842,6 @@ class Checker:
                     hint="a mutable borrow must be exclusive: copy into a second array first",
                 )
             borrowed[arg.name] = index
-        expr.target = function
-        return function.returns
 
 
 def check(program: Program) -> Program:

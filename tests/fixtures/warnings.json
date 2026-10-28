@@ -16,6 +16,14 @@
       "message": "unreachable statement",
       "stdout": "done\n",
       "exit_code": 0
+    },
+    {
+      "file": "unused_template.nv",
+      "code": "W0003",
+      "line": 3,
+      "message": "never instantiated",
+      "stdout": "1\n",
+      "exit_code": 0
     }
   ]
 }

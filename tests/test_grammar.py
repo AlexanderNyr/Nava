@@ -79,7 +79,12 @@ GRAMMAR_ACCEPTS = frozenset(
      # ownership rules are not, so the checker is the authority.
      | {f"E042{index}" for index in range(0, 5)}
      # A jump that names no enclosing loop, and a jump out of a deferred block.
-     | {"E0430", "E0431", "E0433"})
+     | {"E0430", "E0431", "E0433"}
+     # Generics: a duplicate parameter, a template used as a type, an argument
+     # that cannot be inferred and a second argument list are names and arities.
+     # A grammar with no symbol table cannot tell `identity(i64)(7)` from
+     # `double(i64)(21)`, so it accepts both and the compiler says which is which.
+     | {"E0435", "E0436", "E0437", "E0438"})
     - GRAMMAR_REJECTS
 )
 

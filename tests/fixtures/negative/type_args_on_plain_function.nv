@@ -1,0 +1,9 @@
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() {
+    print(double(i64)(21))
+}

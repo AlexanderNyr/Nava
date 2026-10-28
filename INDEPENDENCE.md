@@ -5,9 +5,9 @@ language in its own right, and that its toolchain stands on its own — no Pytho
 no C compiler, no libc.
 
 **Status: N10 in progress — N10a (editions and structs), N10b (enums and
-`match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices)
-and N10e (`defer`, labelled loops, `pub`) delivered; N10f and N11–N18
-specified, not started.** The
+`match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices),
+N10e (`defer`, labelled loops, `pub`) and N10f (monomorphised generics)
+delivered; N10g (function pointers) and N11–N18 specified, not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -43,28 +43,28 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 6 335 lines,
-13 modules and 198 functions under `nava_lang/`, which is the program Nava must be able to
-express. Counts are of AST nodes in the current tree, re-measured at the last delivery
-(N10e); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
-`tests/test_plan.py` recomputes the size and function count so this paragraph
-cannot drift from the code.
+The requirement list below is not a wish list: it is an audit of the 6 968 lines,
+13 modules and 221 functions under `nava_lang/`, which is the program Nava must be
+able to express. Counts are of AST nodes in the current tree, re-measured at the
+last delivery (N10f) with `python3 tools/audit_compiler_needs.py`, which prints
+this table and states its own definitions; `tests/test_plan.py` recomputes the
+size and the function count so this paragraph cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
 | `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 235 / 49 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 62 / 38 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort` | 104 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add` | 12 / 7 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 354 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 94 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 19 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
-| `sorted(..., key=...)` | 3 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 40 / 24 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
-| `lambda` | 1 | function pointers | N10 |
+| `raise` / `try` | 256 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 68 / 53 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 108 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add`, `.discard`, `.update` | 12 / 12 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 395 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 89 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 20 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
+| `sorted(...)`, of which `key=` | 3 / 0 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
+| generator expressions, list/set comprehensions | 47 / 32 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| `lambda` | 1 | function pointers (the last N10 increment, N10g) | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
-| generators, `await`, threads, metaclasses, dynamic attribute lookup | 0 | nothing; Nava is not asked to acquire them | — |
+| generators, `await`, async functions | 0 | nothing; Nava is not asked to acquire them | — |
 
 Two consequences follow, and both are recorded as decisions below: Nava does
 **not** need closures, laziness, exceptions or a garbage collector to express its
@@ -122,7 +122,7 @@ the guard, and the two implementations must agree on every entry.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a–N10e delivered, N10f open |
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a–N10f delivered, N10g open |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
@@ -191,7 +191,8 @@ when the whole gate has run.
 | N10c | `Option(T)`, `Result(T, E)`, `?` | **Delivered** (record below) |
 | N10d | Slices `[T]` and range slicing, arrays of structs | **Delivered** (record below) |
 | N10e | `defer`, labelled loops, `pub` | **Delivered** (record below) |
-| N10f | Monomorphised generics and function pointers | Open (next) |
+| N10f | Monomorphised generics: type parameters on `struct`, `enum` and `fn`, instantiation, inference | **Delivered** (record below) |
+| N10g | Function pointers: `fn(T) -> U` as a type, a function as a value, a call through a variable | Open (next) |
 
 #### Delivery record N10a (2026-10-28)
 
@@ -282,6 +283,50 @@ prints nothing. The one that carries the language claim is
 `slice_mut_argument.nv`: a view can be read through and passed on, but it can
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
+
+#### Delivery record N10f (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Generics are monomorphisation, not a runtime representation | `tests/test_generics.py`: `test_the_generated_c_has_one_function_per_instance`, `test_the_same_instance_is_generated_once` | The emitted C contains one definition per distinct instantiation and none for the template: two `identity(i64)` calls and one `identity(bool)` call produce three definitions, and `nv_fn_4` — the next index the template would have taken — is absent |
+| An instantiation is an ordinary declaration | `GenericRuntimeTests.test_an_instantiated_struct_copies_like_a_struct`, `test_instances_nest`, `test_a_generic_enum_matches_per_instantiation` | `swap(p)` returns a copy, and writing `q.first = 99` leaves `p.first` at `1`; `Pair(Pair(i64))` prints `2` then `3`; a `Box(T)` matched per instantiation prints `5`, `0`, then `true` |
+| Two instantiations are two types | `GenericFrontendTests.test_two_instantiations_are_different_types` | Assigning `Pair(i64)` to `Pair(bool)` is `E0311` with the instance names in the message: `expected Pair(bool), got Pair(i64)` |
+| A template body is checked per instantiation | `test_a_template_instantiates_per_argument_type_at_run_time`, `test_a_template_may_call_another_template` | `same<T>` compiles twice and compares `i64`, `bool` and `str` with the operators of each; a template calling another template instantiates both, printing `2` and `false` |
+| A bare template is refused everywhere it can be written | `test_a_bare_template_is_not_a_type`, `test_a_generic_enum_template_is_not_a_type_either` | An annotation, a parameter, a field, a construction without arguments and a call without arguments are all `E0437` with the instantiated spelling in the hint |
+| Inference, and its limit | `test_an_argument_that_cannot_be_inferred`, `test_inference_does_not_guess_from_a_conflict`, `test_wrong_number_of_type_arguments` | `zero()` with no parameter that mentions `T` is `E0436` and the hint shows `zero(i64)(...)`; `both(1, true)` binds `T = i64` from the first argument and reports `E0327` on the second; `Pair(i64, i64)` is `E0412` |
+| A generic body that is never instantiated is not silently verified | `test_an_uninstantiated_template_is_reported_as_unchecked`, `tests/fixtures/warnings/unused_template.nv` | Compilation succeeds with `W0003` and a message that says the body is not type-checked; the fixture is registered in `tests/fixtures/warnings.json` and still builds and runs |
+| The restrictions are the existing rules, not new ones | `test_a_struct_instance_cannot_own_a_string`, `test_an_instantiation_cannot_be_an_array_element` | `Pair(str)` is `E0378` — a struct field cannot own a string — and `[Pair(i64)]` is `E0206` from the parser, exactly as `[f64]` is |
+| The grammar artefact agrees | `eval/grammar.py`, `tests/test_grammar.py` | `type_parameters` after a declared name, and a value-position instantiation (`generic_type` followed by `(`) are in both back ends; `E0435`–`E0438` are classified as semantic, because a grammar without a symbol table cannot tell `identity(i64)(7)` from `double(i64)(21)` |
+| The specification moved with the code | `LANGUAGE.md`, section "Generic declarations" | Normative: the two bracket kinds, instantiation as a type, inference and its limit, per-instantiation checking, and six stated restrictions; four new diagnostic rows (`E0435`–`E0438`) and the `W0003` warning |
+| The guide and its measurements moved | `guides/nava-1.md` (digest `2c782cc1…`, 13 519 bytes, 411 lines), `guides/examples/generics.nv`, `eval/measurements/overhead-*.json` | New canonical example compiled and run (`2`, `1`, `9`, `2.5`); overhead re-measured: `cl100k_base` 4 085 and `o200k_base` 4 101 guide tokens per task, 45 582 and 45 758 prompt tokens over the eleven tasks; `guides/examples.json` gained the `generics` case; rule 14 added |
+| A template crosses a module boundary | `tests/fixtures/modules/generic_module` (case in `modules.json`) | `pub fn pick<T>` and `pub fn through<T>` are called as `pair::pick(3, 4)` from another module, and print `3`, `42`, `true`; a `pub` template that calls a private one of its own module keeps working. A generic *struct* cannot cross the boundary, because no struct name crosses it — an existing rule, now stated in `LANGUAGE.md` |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m unittest discover -s tests -q` | registry `OK: 474 registered tests, 11 tasks with 76 cases, 170 spec fixtures, 136 diagnostic codes`; suite **544 tests OK**; 21 new tests in `tests/test_generics.py`, four new negative fixtures, one warning fixture and one module fixture |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 6 968 lines, 13 modules, 221 functions; `tests/test_plan.py` recomputes the size and function count and fails when they drift. The tool is new in this increment because the row counts had been ad-hoc: the table now names its own method |
+
+Negative controls: four new single-file fixtures — `duplicate_type_param.nv`
+(`E0435`), `cannot_infer_type_argument.nv` (`E0436`), `generic_used_as_type.nv`
+(`E0437`) and `type_args_on_plain_function.nv` (`E0438`) — plus the warning
+fixture `unused_template.nv` (`W0003`). The control that carries the claim is the
+emitted-C count: a compiler that had implemented generics as a runtime
+polymorphism, or that emitted the template itself, would define a different
+number of functions, and the test reads the C rather than the intent.
+
+The increment is narrower than the plan's description of N10f, which bundled
+monomorphised generics with function pointers. Generics change the parser, the
+checker, the code generator, the grammar artefact and the guide; function
+pointers are a separate type and a separate call path, so they moved to **N10g**
+and the split is in the table above rather than smoothed over.
+
+Deliberately not done in N10f: function pointers (`fn(T) -> U` as a type, a
+function as a value), bounds on a type parameter, generic arrays, an instantiation
+as an array element type, generic containers (they are N11's, and they need the
+ownership work first), `match` as an expression, and template-level checking of a
+body that no call instantiates — that last one is reported, not hidden, as `W0003`.
+
+Deliberately not done in N10e: `defer` on a bare statement, a deferred block that
+can fail (nothing inside one may leave it), `defer` interacting with `?` by
+design, generic parameters of any kind, function pointers, and `pub` on structs
+or enums. Those are N10f and later.
 
 #### Delivery record N10e (2026-10-28)
 
@@ -648,7 +693,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 4 394 Python lines and 141 functions; the port is an estimate, not a measurement, and will grow. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 6 968 Python lines and 221 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

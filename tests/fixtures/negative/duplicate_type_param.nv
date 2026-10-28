@@ -1,0 +1,9 @@
+edition 2;
+
+fn first<T, T>(a: T, b: T) -> T {
+    return a
+}
+
+fn main() {
+    print(first(1, 2))
+}

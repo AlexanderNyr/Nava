@@ -1,0 +1,11 @@
+edition 2;
+
+struct Pair<T> {
+    first: T,
+    second: T
+}
+
+fn main() {
+    let p: Pair = Pair(i64)(first: 1, second: 2)
+    print(p.first)
+}

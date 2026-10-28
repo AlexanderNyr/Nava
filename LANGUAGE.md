@@ -1110,6 +1110,98 @@ exporting every function, which is the edition-1 contract and does not change.
 A public function may call the private functions of its own module. Only a
 function can be `pub` (`E0434`).
 
+### Generic declarations
+
+A `struct`, an `enum` and a `fn` may take **type parameters**, and every use
+instantiates them with concrete types. There is no runtime representation of a
+type parameter: an instantiation is an ordinary struct, enum or function with
+its parameters replaced, made once per combination of arguments
+(*monomorphisation*).
+
+```text
+type_parameters = "<" IDENT { "," IDENT } ">" ;
+struct_decl     = "struct" IDENT [ type_parameters ] "{" { field } "}" ;
+enum_decl       = "enum" IDENT [ type_parameters ] "{" { variant } "}" ;
+fn_decl         = [ "pub" ] "fn" IDENT [ type_parameters ] "(" [ parameters ] ")"
+                  [ "->" type ] block ;
+instance        = IDENT "(" type { "," type } ")" ;        (* Pair(i64), Box(str) *)
+```
+
+The **type** of an instantiation is written `Name(types)`, the same spelling
+`Option` and `Result` already use, and it may appear wherever a type may:
+
+```nava
+edition 2;
+
+struct Pair<T> {
+    first: T,
+    second: T
+}
+
+fn swap<T>(p: Pair(T)) -> Pair(T) {
+    return Pair(T)(first: p.second, second: p.first)
+}
+
+fn main() {
+    let p: Pair(i64) = Pair(i64)(first: 1, second: 2)
+    let q = swap(p)
+    print(q.first)
+    print(q.second)
+}
+```
+
+Note the two kinds of bracket: `fn swap<T>` declares a type parameter with
+angle brackets, `swap(p)` calls it, and `Pair(T)(first: ...)` names an
+instantiation and then builds one — two parentheses, one type. Angle brackets
+are a *declaration* and round brackets an *instantiation*, so a type is always
+written the same way wherever it appears: `Option(i64)` and `Pair(i64)` are
+spelled alike. A **declaration with type parameters is not a type**: `let p: Pair` is `E0437`, and so is `Pair(first: 1, second: 2)`; write the
+arguments.
+
+**Call sites may infer the type arguments.** `identity(7)` binds `T` to `i64`
+from the argument; `identity(i64)(7)` says it explicitly. A call writes its type
+arguments *before* its arguments, so `identity(i64)(7)` and `identity(7)` are the
+same call, while `double(i64)(21)` — a second argument list on a function that is
+not generic — is `E0438`. Inference is a unification of the parameter types with
+the argument types and nothing more: a type parameter that no parameter mentions
+cannot be inferred, and that call is `E0436` until the arguments are written out.
+A template struct or enum is always written with its arguments: there is nothing
+at a construction site to infer from without guessing which field decides.
+
+An instantiation **is an ordinary declaration**. `Pair(i64)` has the fields of
+the template with `T` replaced, it is copied and assigned exactly as a
+hand-written struct is, and its fields are reached with `.` in the same way. Two
+instantiations with different arguments are different, unrelated types:
+`Pair(i64)` and `Pair(f64)` cannot be assigned to each other (`E0311`). The same
+rule makes a duplicate instantiation free — `identity(1)` and `identity(x)` where
+`x: i64` share one generated function.
+
+The **body of a template is checked per instantiation**, because its type
+parameters have no meaning before then. A template that no call instantiates is
+therefore never type-checked, and the compiler says so with `W0003` rather than
+claiming to have verified it. An error inside a generic body is reported at the
+call that instantiates it, once per distinct instance.
+
+Restrictions, all edition 2 and all stated rather than implied:
+
+* a type parameter is a type inside its own declaration only — the body may write
+  `Pair(T)`, and nothing outside may write `T`;
+* an instance may not be an array element type (`[Pair(i64)]` is `E0206`), and a
+  struct instance may not have a `str` field or a payload of type `str`, for the
+  same reason a non-generic struct may not (`E0378`, `E0399`);
+* a template that would have to contain itself — `struct Node<T> { next:
+  Node(Node(T)) }` instantiated at `Node(i64)` — is `E0377`, because a struct is
+  stored inline and there is no indirection to break the cycle;
+* there are no bounds on a type parameter: `fn add<T>(a: T, b: T) -> T { return
+  a + b }` is rejected by the checker at every instantiation, because `+` is not
+  defined for every `T`. Generic code in Nava is written for the instantiations
+  it is called with;
+* generic arrays (`[T]` where `T` is a parameter) are not supported yet;
+* a struct or enum declared in one file is not visible by name in another, so
+  `Pair(i64)` cannot be written outside the module that declares `Pair`. A
+  generic **function** crosses the boundary normally: `pub fn pick<T>(...)` is
+  callable as `module::pick(3, 4)` from any module that imports it.
+
 ## Diagnostics
 
 Errors are reported with a stable code, a source range and an optional hint.
@@ -1214,6 +1306,10 @@ never changes meaning; a new condition gets a new code.
 | `E0432` | error | a label must name the loop it is written on | `tests/fixtures/negative/label_not_a_loop.nv` |
 | `E0433` | error | the function is not public | `tests/fixtures/modules/private_module` |
 | `E0434` | error | only a function can be `pub` yet | `tests/fixtures/negative/pub_not_a_function.nv` |
+| `E0435` | error | duplicate type parameter | `tests/fixtures/negative/duplicate_type_param.nv` |
+| `E0436` | error | cannot infer a type argument | `tests/fixtures/negative/cannot_infer_type_argument.nv` |
+| `E0437` | error | a generic declaration is not a type | `tests/fixtures/negative/generic_used_as_type.nv` |
+| `E0438` | error | type arguments come before the arguments of a call | `tests/fixtures/negative/type_args_on_plain_function.nv` |
 
 **Types and semantics**
 
@@ -1321,7 +1417,10 @@ written to `stderr`. A statement that cannot be reached because the preceding
 statement always returns, breaks or continues is reported as `W0001`; the
 statement is still present in the generated C, so remove it rather than relying
 on the warning. An import that no qualified call uses is `W0002`: the module is
-loaded anyway, so the warning costs nothing to act on.
+loaded anyway, so the warning costs nothing to act on. A generic function that
+no call instantiates is `W0003`: its body mentions type parameters, so it has
+never been type-checked, and the warning says so instead of letting dead generic
+code look verified.
 
 ```nava
 fn f() -> i64 {
@@ -1380,11 +1479,11 @@ module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
 Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs,
-slices, `defer`, labelled loops and `pub`; it does not add generic declarations
-of your own, `match` as an expression, generic containers, string or array
-fields, arrays of enums, struct or enum equality, printing a struct or an enum,
-or function pointers. Those are N10f and later in `INDEPENDENCE.md`, and nothing
-here is a promise that they exist today.
+slices, `defer`, labelled loops, `pub` and generic declarations of your own; it
+does not add `match` as an expression, generic arrays, type-parameter bounds,
+string or array fields, arrays of enums, struct or enum equality, printing a
+struct or an enum, or function pointers. Those are N10g and later in
+`INDEPENDENCE.md`, and nothing here is a promise that they exist today.
 
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated

@@ -669,10 +669,15 @@ class CGenerator:
         self.defers: list[list[list]] = []
         #: Counter for the C labels a labelled loop needs.
         self.label_index = 0
-        #: Declared structs by name; the C type of one is its `cname`.
-        self.structs: dict[str, object] = {struct.name: struct for struct in program.structs}
+        #: Declared structs by name; the C type of one is its `cname`. Struct
+        #: instances built from a template by the checker are structs here: the
+        #: generator never sees a type parameter.
+        self.structs: dict[str, object] = {struct.name: struct for struct in program.structs
+                                           if not struct.type_params}
+        self.structs.update(program.struct_instances)
         #: Declared enums by name; a variant value is a compound literal of one.
-        self.enums: dict[str, object] = {decl.name: decl for decl in program.enums}
+        self.enums: dict[str, object] = {decl.name: decl for decl in program.enums
+                                         if not decl.type_params}
         #: Prelude instantiations, keyed by their written type. They are enums
         #: too: the only difference is that their name contains arguments.
         self.enums.update(program.instances)
@@ -742,8 +747,10 @@ class CGenerator:
                 self.emit_struct(self.structs[name])
 
         for declaration in list(self.program.structs) + list(self.program.enums):
+            if declaration.type_params:
+                continue
             emit_type(declaration.name)
-        for name in self.program.instances:
+        for name in list(self.program.instances) + list(self.program.struct_instances):
             emit_type(name)
         if self.program.structs or self.program.enums or self.program.instances:
             self.line()
@@ -818,6 +825,9 @@ class CGenerator:
 
         for declaration in list(self.program.structs) + list(self.program.enums):
             note([field.typ for field in getattr(declaration, "fields", [])])
+        for name, decl in self.program.struct_instances.items():
+            note(name)
+            note([field.typ for field in decl.fields])
         for name, decl in self.program.instances.items():
             note(name)
             note([typ for choice in decl.variants for typ in choice.types])
@@ -895,10 +905,13 @@ class CGenerator:
     def generate(self) -> str:
         self.emit_structs()
         self.emit_arrays()
-        for function in self.program.functions:
+        # A template function has no C type until a call fixes its parameters, so
+        # only the instantiations the checker built are emitted.
+        concrete = [function for function in self.program.functions if not function.type_params]
+        for function in concrete:
             self.line(self.signature(function) + ";")
         self.line()
-        for function in self.program.functions:
+        for function in concrete:
             self.current_return_type = function.returns
             self.line(self.signature(function) + " {")
             self.indent += 1
@@ -911,7 +924,7 @@ class CGenerator:
             self.indent -= 1
             self.line("}")
             self.line()
-        main = next(f for f in self.program.functions if f.name == "main")
+        main = next(f for f in concrete if f.name == "main")
         self.line("int main(void) {")
         self.indent += 1
         if main.returns == "void":

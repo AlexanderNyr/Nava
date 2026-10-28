@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+N10f: monomorphised generics — type parameters on `struct`, `enum` and `fn`.
+
+- `struct Pair<T>`, `enum Box<T>` and `fn swap<T>(p: Pair(T)) -> Pair(T)` are
+  *templates*. A use instantiates one: `Pair(i64)`, `Box(bool)`, `swap(p)`. There
+  is no `T` at run time — each instantiation is an ordinary struct, enum or
+  function with the parameters replaced, generated once per combination of
+  arguments, so the code generator never sees a type variable.
+- A type is written `Name(types)` wherever a type may appear, the spelling
+  `Option(i64)` already had; a value is built with a second parenthesis
+  (`Pair(i64)(first: 1, second: 2)`, `identity(i64)(7)`). A call may omit the
+  type arguments when the parameter types determine them. A template name on its
+  own is not a type (`E0437`), a call that cannot be inferred is `E0436`, a
+  second argument list on a non-generic function is `E0438` and a repeated type
+  parameter is `E0435`.
+- A template body is checked once per instantiation. A template that no call
+  instantiates has never been checked, and the compiler says so (`W0003`) instead
+  of implying that dead generic code was verified.
+- Restrictions, all stated in `LANGUAGE.md`: no bounds on a type parameter, no
+  generic arrays, no instantiation as an array element type, and the existing
+  ownership rules still apply inside an instance (`Pair(str)` is `E0378`).
+- Guide, grammar artefact and measurements moved with the language: new guide
+  section and rule, canonical `generics.nv` example, re-pinned digest, overhead
+  re-measured rather than estimated.
+- The increment is narrower than the plan's N10f: function pointers move to
+  N10g. `INDEPENDENCE.md` records the split.
+- New `tools/audit_compiler_needs.py`: `INDEPENDENCE.md` §2 counts its own
+  method, so the audit table is regenerated rather than remembered.
+
 N10e: `defer`, labelled loops and `pub` — three statements about where control
 leaves a scope.
 

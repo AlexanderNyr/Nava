@@ -457,6 +457,32 @@ REGISTERED_TESTS = {
         "test_a_public_function_can_use_a_private_one",
         "test_an_edition_one_module_still_exports_everything",
     },
+    # --- N10f: monomorphised generics ----------------------------------------
+    "GenericFrontendTests": {
+        "test_a_bare_template_is_not_a_type",
+        "test_a_generic_enum_template_is_not_a_type_either",
+        "test_a_struct_instance_cannot_own_a_string",
+        "test_a_template_can_be_instantiated_with_a_struct_and_an_enum",
+        "test_a_type_argument_list_comes_first",
+        "test_a_type_parameter_is_declared_once",
+        "test_a_type_parameter_needs_edition_two",
+        "test_an_argument_that_cannot_be_inferred",
+        "test_an_instantiation_cannot_be_an_array_element",
+        "test_an_uninstantiated_template_is_reported_as_unchecked",
+        "test_inference_does_not_guess_from_a_conflict",
+        "test_the_generated_c_has_one_function_per_instance",
+        "test_two_instantiations_are_different_types",
+        "test_wrong_number_of_type_arguments",
+    },
+    "GenericRuntimeTests": {
+        "test_a_generic_enum_matches_per_instantiation",
+        "test_a_template_instantiates_per_argument_type_at_run_time",
+        "test_a_template_may_call_another_template",
+        "test_an_instantiated_struct_copies_like_a_struct",
+        "test_identity_works_for_every_scalar_type",
+        "test_instances_nest",
+        "test_the_same_instance_is_generated_once",
+    },
     # --- N10d: arrays of structs and slices ----------------------------------
     "SliceFrontendTests": {
         "test_a_slice_cannot_become_a_mutable_borrow",
@@ -683,14 +709,14 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 124,
+    "tests/fixtures/negative": 128,
     "tests/fixtures/positive": 28,
-    "tests/fixtures/warnings": 2,
+    "tests/fixtures/warnings": 3,
 }
 
 #: Multi-file module fixtures: one directory per case, listed in
 #: `tests/fixtures/modules.json`.
-REGISTERED_MODULE_CASES = 10
+REGISTERED_MODULE_CASES = 11
 
 #: Diagnostic codes that no source fixture can produce, with the test that
 #: covers them instead. Mirrors `tests/test_spec.py`.
@@ -747,6 +773,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_enums  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_generics  # noqa: PLC0415
     import test_grammar  # noqa: PLC0415
     import test_guides  # noqa: PLC0415
     import test_local_model_server  # noqa: PLC0415
@@ -765,7 +792,7 @@ def discovered_tests() -> dict[str, set[str]]:
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
-                   test_float, test_grammar, test_guides, test_local_model_server,
+                   test_float, test_generics, test_grammar, test_guides, test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
                    test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib, test_study):
         for name, value in vars(module).items():
@@ -819,6 +846,7 @@ def check_skip_state() -> list[str]:
     import test_control  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_generics  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
@@ -829,6 +857,7 @@ def check_skip_state() -> list[str]:
                                (test_stdlib, "MathTests"),
                                (test_stdlib, "SortTests"),
                                (test_stdlib, "TextTests"),
+                               (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),
                                (test_files, "IsolatedFileTests")):

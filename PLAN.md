@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N9 DELIVERED; N10 IN PROGRESS (N10a–N10e delivered); N11–N18 SPECIFIED, NOT STARTED
+## Status: N0–N9 DELIVERED; N10 IN PROGRESS (N10a–N10f delivered; N10g open); N11–N18 SPECIFIED, NOT STARTED
 
 N3 has exploratory model results from three runs (a local 135M model and two hosted ones); its empirical run is open. N10–N18 (§4A) are the independence plan: a language that needs neither Python nor a C toolchain to build and run its own programs.
 

@@ -324,6 +324,63 @@ fn main() {
 
 Output: `1`, `0`, `101`, `1`, `102`, `-1`.
 
+## Edition 2: generic declarations
+
+A `struct`, an `enum` or a `fn` may take **type parameters** in angle brackets,
+and every use instantiates them with concrete types in round brackets:
+
+* declare `struct Pair<T> { first: T, second: T }`, `enum Box<T> { Full(T),
+  Empty }`, `fn swap<T>(p: Pair(T)) -> Pair(T)`;
+* write a type as `Pair(i64)`, `Box(bool)`, `Result(i64, str)` — always
+  `Name(types)`, never `Name<types>`;
+* build one with a second parenthesis: `Pair(i64)(first: 1, second: 2)`,
+  `Box(i64)::Full(5)`;
+* a call may omit the type arguments when the parameter types determine them:
+  `swap(p)`. A call that writes them puts them first: `identity(i64)(7)`. A type
+  parameter that nothing in the signature mentions cannot be inferred (`E0436`).
+
+A declaration with type parameters is **not** a type: `let p: Pair` is `E0437`,
+and so is `Pair(first: 1, second: 2)`. Two instantiations with different
+arguments are different, unrelated types. There is no `T` at run time: the body
+of a template is compiled once per instantiation, so `fn same<T>(a: T, b: T) ->
+bool { return a == b }` compares `i64` in one copy and `bool` in another, and a
+template that no call instantiates is reported as unchecked (`W0003`).
+
+Not available yet: bounds on a type parameter (an operator used on `T` must
+exist for every instantiation you actually call), arrays of `T`, and an
+instantiation as an array element type (`[Pair(i64)]` is `E0206`).
+
+```nava
+edition 2;
+
+struct Pair<T> {
+    first: T,
+    second: T
+}
+
+fn swap<T>(p: Pair(T)) -> Pair(T) {
+    return Pair(T)(first: p.second, second: p.first)
+}
+
+fn largest<T>(a: T, b: T) -> T {
+    if b > a {
+        return b
+    }
+    return a
+}
+
+fn main() {
+    let p: Pair(i64) = Pair(i64)(first: 1, second: 2)
+    let q = swap(p)
+    print(q.first)
+    print(q.second)
+    print(largest(3, 9))
+    print(largest(2.5, 1.5))
+}
+```
+
+Output: `2`, `1`, `9`, `2.5`.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -349,3 +406,6 @@ Output: `1`, `0`, `101`, `1`, `102`, `-1`.
     `[T]` parameter, never write through it and never hand it to `mut [T]`.
 13. `defer` takes a block, never a bare statement, and nothing inside it may
     leave the block (`return`, `break`, `continue`, `?` are all `E0430`).
+14. Type parameters are declared with `<>` and instantiated with `()`:
+    `fn swap<T>(p: Pair(T)) -> Pair(T)`, `Pair(i64)(first: 1, second: 2)`. A
+    template name on its own is not a type (`E0437`).

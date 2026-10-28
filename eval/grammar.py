@@ -148,7 +148,8 @@ CORE: dict[str, list[list[tuple]]] = {
 
     "item": [[T("IMPORT"), T("IDENT")], [N("structure")], [N("enumeration")],
              [N("function")]],
-    "enumeration": [[T("ENUM"), T("IDENT"), T("LBRACE"), N("variants_opt"), T("RBRACE")]],
+    "enumeration": [[T("ENUM"), T("IDENT"), N("type_params"), T("LBRACE"),
+                     N("variants_opt"), T("RBRACE")]],
     "variants_opt": [[N("sep_star"), N("variants"), N("sep_star")], [N("sep_star")]],
     "variants": [[N("variant"), N("variants_tail")]],
     "variants_tail": [[T("COMMA"), N("sep_star"), N("variant"), N("variants_tail")],
@@ -156,9 +157,15 @@ CORE: dict[str, list[list[tuple]]] = {
     "variant": [[T("IDENT")], [T("IDENT"), T("LPAREN"), N("types_opt"), T("RPAREN")]],
     "types_opt": [[N("type"), N("types_tail")], []],
     "types_tail": [[T("COMMA"), N("type"), N("types_tail")], []],
-    "structure": [[T("STRUCT"), T("IDENT"), T("LBRACE"), N("fields_opt"), T("RBRACE")]],
-    "function": [[N("pub_opt"), T("FN"), T("IDENT"), T("LPAREN"), N("params_opt"), T("RPAREN"),
-                  N("returns"), N("block")]],
+    "structure": [[T("STRUCT"), T("IDENT"), N("type_params"), T("LBRACE"),
+                   N("fields_opt"), T("RBRACE")]],
+    "function": [[N("pub_opt"), T("FN"), T("IDENT"), N("type_params"), T("LPAREN"),
+                  N("params_opt"), T("RPAREN"), N("returns"), N("block")]],
+    #: `<T, U>` after a declared name. The grammar cannot tell a type parameter
+    #: from any other name, and does not have to.
+    "type_params": [[T("LT"), N("type_params_body"), T("GT")], []],
+    "type_params_body": [[T("IDENT"), N("type_params_tail")]],
+    "type_params_tail": [[T("COMMA"), T("IDENT"), N("type_params_tail")], []],
     "pub_opt": [[T("PUB")], []],
     "returns": [[T("ARROW"), N("type")], []],
     "params_opt": [[N("params")], []],
@@ -266,12 +273,16 @@ CORE: dict[str, list[list[tuple]]] = {
     #: a variant with no fields: `Shape::Dot`
     "qualified_value": [[T("IDENT"), T("COLONCOLON"), T("IDENT")],
                         [N("generic_type"), T("COLONCOLON"), T("IDENT")]],
-    "call": [[T("IDENT"), T("LPAREN"), N("args_opt"), T("RPAREN")]],
+    "call": [[T("IDENT"), T("LPAREN"), N("args_opt"), T("RPAREN")],
+             # `identity(i64)(7)`: a call whose type arguments come first.
+             [N("generic_type"), T("LPAREN"), N("args_opt"), T("RPAREN")]],
     "element": [[T("IDENT"), T("LBRACKET"), N("expr"), T("RBRACKET")],
                 [T("IDENT"), T("LBRACKET"), N("expr"), T("RANGE"), N("expr"),
                  T("RBRACKET")]],
     "array_literal": [[T("LBRACKET"), N("args_opt"), T("RBRACKET")]],
-    "construction": [[T("IDENT"), T("LPAREN"), N("named_args"), T("RPAREN")]],
+    "construction": [[T("IDENT"), T("LPAREN"), N("named_args"), T("RPAREN")],
+                     # `Pair(i64)(first: 1, second: 2)`.
+                     [N("generic_type"), T("LPAREN"), N("named_args"), T("RPAREN")]],
     "named_args": [[T("IDENT"), T("COLON"), N("expr"), N("named_args_tail")]],
     "named_args_tail": [[T("COMMA"), T("IDENT"), T("COLON"), N("expr"), N("named_args_tail")],
                         []],

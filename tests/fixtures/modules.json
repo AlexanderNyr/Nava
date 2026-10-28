@@ -104,6 +104,14 @@
       "stdout": "8\n22\n",
       "stdin": "",
       "exit_code": 0
+    },
+    {
+      "kind": "run",
+      "dir": "generic_module",
+      "entry": "main.nv",
+      "stdout": "3\n42\ntrue\n",
+      "stdin": "",
+      "exit_code": 0
     }
   ]
 }

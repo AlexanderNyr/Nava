@@ -1,0 +1,9 @@
+edition 2;
+
+import pair
+
+fn main() {
+    print(pair::pick(3, 4))
+    print(pair::twice(21))
+    print(pair::through(true))
+}

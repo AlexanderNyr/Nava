@@ -1,0 +1,9 @@
+edition 2;
+
+fn unused<T>(x: T) -> T {
+    return x
+}
+
+fn main() {
+    print(1)
+}

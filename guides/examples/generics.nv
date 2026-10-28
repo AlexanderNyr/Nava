@@ -1,0 +1,26 @@
+edition 2;
+
+struct Pair<T> {
+    first: T,
+    second: T
+}
+
+fn swap<T>(p: Pair(T)) -> Pair(T) {
+    return Pair(T)(first: p.second, second: p.first)
+}
+
+fn largest<T>(a: T, b: T) -> T {
+    if b > a {
+        return b
+    }
+    return a
+}
+
+fn main() {
+    let p: Pair(i64) = Pair(i64)(first: 1, second: 2)
+    let q = swap(p)
+    print(q.first)
+    print(q.second)
+    print(largest(3, 9))
+    print(largest(2.5, 1.5))
+}

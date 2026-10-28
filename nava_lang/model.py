@@ -166,6 +166,8 @@ class Call(Expr):
     #: The module named before `::` in `math::abs(x)`, or None for a call that
     #: is resolved in the calling module.
     module: str | None = None
+    #: The written type arguments of a generic function, `identity(i64)`, or None.
+    type_args: list[str] | None = None
     target: Function | None = field(default=None, init=False)
 
 
@@ -190,6 +192,8 @@ class StructLiteral(Expr):
 
     name: str
     fields: list[tuple[str, Expr]]
+    #: The written type of a generic construction, `Pair(i64)`; None otherwise.
+    instance: str | None = None
     #: The declared struct, filled in by the checker.
     struct: "Struct | None" = field(default=None, init=False)
 
@@ -348,6 +352,9 @@ class EnumDecl:
     loc: Location | None = None
     module: str = ""
     cname: str = field(default="", init=False)
+    #: Type parameters as written; empty for an ordinary enum and for every
+    #: instantiation. A declaration with them is a template, never a type.
+    type_params: list[str] = field(default_factory=list)
 
 
 @record()
@@ -423,7 +430,12 @@ class Field:
 
 @record()
 class Struct:
-    """`struct Point { x: i64, y: i64 }` — edition 2."""
+    """`struct Point { x: i64, y: i64 }` — edition 2.
+
+    A struct with type parameters (`struct Pair<T> { ... }`) is a *template*: it
+    is never a type on its own, and the checker builds one concrete declaration
+    per instantiation.
+    """
 
     name: str
     fields: list[Field]
@@ -431,6 +443,8 @@ class Struct:
     #: The module that declares it; "" is the entry file.
     module: str = ""
     cname: str = field(default="", init=False)
+    #: Type parameters as written; empty for an ordinary struct.
+    type_params: list[str] = field(default_factory=list)
 
 
 @record()
@@ -467,6 +481,9 @@ class Function:
     #: True when the declaration says `pub` (edition 2): only such a function is
     #: callable from another module.
     public: bool = False
+    #: Type parameters as written; empty for an ordinary function. A declaration
+    #: with them is a template, and every call instantiates it.
+    type_params: list[str] = field(default_factory=list)
 
     @property
     def qualified(self) -> str:
@@ -492,6 +509,9 @@ class Program:
     #: Prelude instantiations the program uses, keyed by their written type
     #: (`Result(i64, str)`); filled in by the checker.
     instances: dict[str, "EnumDecl"] = field(default_factory=dict)
+    #: Structs built from a template by the checker, keyed by their written type
+    #: (`Pair(i64)`). Like an enum instance, one is an ordinary declaration.
+    struct_instances: dict[str, "Struct"] = field(default_factory=dict)
     #: The language edition the entry file declares; 1 when it declares none.
     edition: int = 1
     #: Module name -> the edition its file declares. A module that does not

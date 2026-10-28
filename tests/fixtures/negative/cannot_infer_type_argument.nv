@@ -1,0 +1,9 @@
+edition 2;
+
+fn zero<T>() -> i64 {
+    return 0
+}
+
+fn main() {
+    print(zero())
+}

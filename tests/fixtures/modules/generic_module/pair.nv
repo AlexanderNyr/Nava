@@ -1,0 +1,17 @@
+edition 2;
+
+pub fn pick<T>(a: T, b: T) -> T {
+    return a
+}
+
+pub fn twice(n: i64) -> i64 {
+    return n * 2
+}
+
+fn hidden<T>(x: T) -> T {
+    return x
+}
+
+pub fn through<T>(x: T) -> T {
+    return hidden(x)
+}

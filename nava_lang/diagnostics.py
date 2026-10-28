@@ -156,12 +156,17 @@ CODES: dict[str, tuple[str, str]] = {
     "E0432": (Severity.ERROR, "a label must name the loop it is written on"),
     "E0433": (Severity.ERROR, "the function is not public"),
     "E0434": (Severity.ERROR, "only a function can be `pub` yet"),
+    "E0435": (Severity.ERROR, "duplicate type parameter"),
+    "E0436": (Severity.ERROR, "cannot infer a type argument"),
+    "E0437": (Severity.ERROR, "a generic declaration is not a type"),
+    "E0438": (Severity.ERROR, "type arguments in a call"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),
     # --- warnings -----------------------------------------------------------
     "W0001": (Severity.WARNING, "unreachable statement"),
     "W0002": (Severity.WARNING, "unused import"),
+    "W0003": (Severity.WARNING, "a generic function is never instantiated"),
     # --- command-line and host ---------------------------------------------
     "E0501": (Severity.ERROR, "invalid C compiler command"),
     "E0502": (Severity.ERROR, "empty C compiler command"),

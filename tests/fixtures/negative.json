@@ -1116,6 +1116,42 @@
       "end_column": 4,
       "message": "only a function can be `pub` yet",
       "hint": "a module exposes functions; struct and enum visibility is later"
+    },
+    {
+      "file": "duplicate_type_param.nv",
+      "code": "E0435",
+      "line": 3,
+      "column": 13,
+      "end_column": 14,
+      "message": "duplicate type parameter 'T'",
+      "hint": "each type parameter needs its own name"
+    },
+    {
+      "file": "cannot_infer_type_argument.nv",
+      "code": "E0436",
+      "line": 8,
+      "column": 11,
+      "end_column": 15,
+      "message": "cannot infer the type argument T of zero",
+      "hint": "write the call as zero(i64)(...)"
+    },
+    {
+      "file": "generic_used_as_type.nv",
+      "code": "E0437",
+      "line": 9,
+      "column": 9,
+      "end_column": 10,
+      "message": "'Pair' is a generic declaration, not a type",
+      "hint": "write `Pair(i64)` with the type arguments"
+    },
+    {
+      "file": "type_args_on_plain_function.nv",
+      "code": "E0438",
+      "line": 8,
+      "column": 11,
+      "end_column": 17,
+      "message": "type arguments come before the arguments of a call",
+      "hint": "write double(21), or declare it as `fn double<T>(x: T) -> T`"
     }
   ]
 }
