@@ -427,6 +427,21 @@ REGISTERED_TESTS = {
         "test_strict_mode_fails_when_namespaces_are_missing",
         "test_the_ok_line_names_the_isolation_backend",
     },
+    # --- N10–N18: the plan is itself guarded --------------------------------
+    "PhaseRecordTests": {
+        "test_a_phase_is_not_called_delivered_without_a_record",
+        "test_every_phase_has_an_objective_tasks_gate_and_deliverable",
+        "test_the_independence_phases_also_carry_a_negative_control",
+        "test_the_status_line_names_the_last_specified_phase",
+    },
+    "SpecificationCriteriaTests": {
+        "test_decisions_are_numbered_without_gaps",
+        "test_every_criterion_names_the_phase_that_proves_it",
+        "test_the_audit_numbers_match_the_current_compiler",
+        "test_the_feature_audit_names_a_phase_for_each_row",
+        "test_the_non_goals_point_at_the_reversal",
+        "test_the_six_criteria_exist_and_are_numbered",
+    },
     # --- N7: model-facing guide, grammar conformance, A/B and feedback ---------
     "GuideManifestTests": {
         "test_an_edited_guide_without_a_manifest_update_is_reported",
@@ -618,6 +633,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_local_model_server  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
+    import test_plan  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_release  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
@@ -628,7 +644,8 @@ def discovered_tests() -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_files, test_float,
                    test_grammar, test_guides, test_local_model_server, test_modules,
-                   test_nava, test_registry, test_release, test_sandbox, test_spec,
+                   test_nava, test_plan, test_registry, test_release, test_sandbox,
+                   test_spec,
                    test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":

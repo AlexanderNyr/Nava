@@ -1,6 +1,8 @@
 # Nava Development Plan
 
-## Status: N0–N9 DELIVERED; N3 has exploratory model results from three runs (a local 135M model and two hosted ones), its empirical run is open
+## Status: N0–N9 DELIVERED; N10–N18 SPECIFIED, NOT STARTED
+
+N3 has exploratory model results from three runs (a local 135M model and two hosted ones); its empirical run is open. N10–N18 (§4A) are the independence plan: a language that needs neither Python nor a C toolchain to build and run its own programs.
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -46,6 +48,7 @@ identify the baseline, not a claim about a published release.
 | Area | Present in the tree | Limit or missing evidence |
 |---|---|---|
 | Compiler | Lexer, parser, type checker and C11 generator in `nava_lang/`; module loader in `nava_lang/modules.py`; `check`, `emit-c`, `build` and `run` commands with `--root`, `--allow-read`, `--allow-write` and `--workdir`; stable diagnostic codes with ranges, hints and `--format json` | Python front end and external C compiler are required to build; the C runtime needs POSIX `realpath` (`_XOPEN_SOURCE 700`) |
+| Independence | `LANGUAGE.md` version 1 is a specification and the diagnostics are versioned; the sandbox, the evaluation rig and the release gate all run | **Not independent**: `nava` is a Python program that writes C for an external `cc`; there is no struct, no sum type, no generic container, no string type that grows, no package manifest and no backend of our own — so the language cannot express its own compiler, and the toolchain cannot be built without Python and a C compiler. §4A specifies N10–N18 to close this, with the audit that justifies each phase |
 | Language | `i64`, `bool`, `str` (a byte sequence), `f64` (IEEE-754 with explicit conversions), fixed-length arrays `[i64]`/`[bool]`/`[str]` with checked indexing and borrows, functions, conditions, `while`, `for` over ranges and arrays, `break`, `continue`, checked integer arithmetic, integer/float I/O, modules (`import name`, `name::function`) and a capability-limited file API; `LANGUAGE.md` is specification version 1 with EBNF, documented limits, float formatting, UTF-8 boundaries, module resolution and executable examples | No resizable collections, arrays of arrays, `f64` arrays, array copies or array results, labelled jumps, mathematical functions such as `sqrt`, string indexing or concatenation, module visibility keywords, networking, threads, a package manager or FFI |
 | Correctness | `python3 -m unittest discover -s tests -v`: 286 tests passed locally with `cc` and `c++`; `tests/registry.py` fails when a test, fixture, diagnostic code, required compiler or sanitizer runtime is missing; 83 negative, 19 positive and 8 multi-file module fixtures assert exact codes, locations, messages, hints and output | Hidden tests are not in this repository by design; no coverage measurement |
 | Cross-language check | `python3 experiment/verify.py`: Nava and C passed 107 identical GCD cases | One algorithm, not a general language benchmark |
@@ -133,6 +136,10 @@ regression as well as improvements: the runtime symbol scan costs 0.5 ms on a
 closes the loop around installation and release: a wheel that is built,
 verified, installed into a fresh environment and used from outside the
 checkout, with a support matrix that only claims what CI runs.
+
+The phases beyond N9 — N10 to N18 — are specified in §4A, together with the six
+criteria that define "a language" and "independent" here and the audit that
+decides which language features they add. They are not started.
 
 ---
 
@@ -1051,6 +1058,492 @@ a release *possible* and checkable; cutting one is the owner's decision.
 
 ---
 
+## 4A. Independence: what "a language" and "independent" mean, and phases N10–N18
+
+Phase N9 made Nava installable. It did not make it independent: `nava` is a
+Python program that writes C and hands it to `cc`. This section reverses two
+items that §5 of the previous plan put out of scope — self-hosting and a package
+manager — and it says exactly how "the language is really a language, and it
+stands on its own" will be measured instead of asserted.
+
+### 4A.1 Six criteria, each with a probe
+
+A claim of independence is only worth what its check is. These are the checks;
+every one of them is a CI lane by the end of N18.
+
+| # | Criterion | What "done" means — the probe | Phase |
+|---|---|---|---|
+| C1 | **A specification, not a description** | `LANGUAGE.md` is versioned, complete over the grammar it accepts (every EBNF production appears in the normative conformance set), and states the semantics that matter: evaluation order, overflow, bounds, aliasing, resource limits, and the absence of undefined behaviour. A language change without a spec change and a fixture in the same commit fails the guard. | N10, N17 |
+| C2 | **The bootstrap criterion** | A compiler written in Nava compiles itself: stage2 (built by stage1) and stage3 (built by stage2) are byte-identical. This is the operative definition of "the language is complete enough", and it replaces guessing about which features a language "should" have. | N15 |
+| C3 | **No external toolchain** | `nava` is one static x86-64 ELF that builds and runs a Nava program on a host with **no `python3`, no `cc`, no `ld`, no libc** — an empty container, kernel only. Checked by running, not by claiming. | N14, N16 |
+| C4 | **An ecosystem, not three files** | A standard library with written contracts and doc-tests that execute in CI; packages with a content-addressed lockfile; a formatter; a REPL; generated documentation. | N12, N13, N17 |
+| C5 | **Proof on real programs** | The compiler itself, plus at least three non-trivial programs (a JSON parser, a bytecode interpreter, a file-processing tool), built by the native toolchain and measured. Toy programs prove nothing. | N14, N18 |
+| C6 | **Evidence discipline survives** | Each gate carries negative controls; `not-measured` never decays into `0`; no CI lane can be green while it compiled nothing (the property the CI fix already enforces for the study and A/B lanes). | every phase, N10–N18 |
+
+C2 is the load-bearing one. "Enough language" stops being a matter of taste the
+moment the language has to express a compiler.
+
+### 4A.2 What the compiler needs from the language — a measured audit
+
+The requirement list below is not a wish list: it is an audit of the 4 394 lines,
+13 modules and 141 functions under `nava_lang/`, which is the program Nava must be able to
+express. Counts are of AST nodes in the current tree; the method reproduces with
+`ast.walk` over `nava_lang/*.py`.
+
+| Python construct in the compiler | Count | What Nava needs | Phase |
+|---|---|---|---|
+| `class` (AST nodes, diagnostics, module records, type descriptors) | 43 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
+| `raise` / `try` | 161 / 48 | `Result<T, E>` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 56 / 25 | `HashMap<K, V>` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort` | 71 / 97 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add` | 14 / 4 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 260 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | ~70 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 15 | slice values `[T]` with bounds checks | N10 |
+| `sorted(..., key=...)` | 9 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
+| generator expressions, list/set comprehensions | 27 / 19 / 3 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| `lambda` | 1 | function pointers | N10 |
+| file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
+| generators, `await`, threads, metaclasses, dynamic attribute lookup | 0 | nothing; Nava is not asked to acquire them | — |
+
+Two consequences follow, and both are recorded as decisions below: Nava does
+**not** need closures, laziness, exceptions or a garbage collector to express its
+own compiler, and it *does* need structs, sum types, generic containers, strings
+and slicing. The audit rows become the N10 checklist: a row is closed only when
+a fixture proves the construct is expressible and the corresponding compiler
+subsystem is later ported.
+
+### 4A.3 Decisions added by this section
+
+### D7. Editions, not breaks
+
+`LANGUAGE.md` is at version 1. N10 adds
+`edition 2`: additive, opt-in per module (`edition 2;` at the top of a file),
+with edition 1 frozen and every edition-1 program continuing to compile with
+identical diagnostics. A language that breaks its own corpus while claiming to
+mature is not independent, it is unreliable.
+
+### D8. The bootstrap criterion decides feature scope
+
+A feature is added to
+edition 2 when the compiler-under-construction needs it, and not before. The
+audit in §4A.2 is the ledger; "it would be nice" is not an entry.
+
+### D9. Arena first, GC only with evidence
+
+The compiler leaks at will inside
+one compilation and exits; the plan therefore uses an arena allocator with an
+explicit lifetime and **no** tracing collector. If porting shows a cycle that
+cannot be broken, that is a finding to record — and a separate decision — not a
+silent reason to build a GC.
+
+### D10. The C backend is a trampoline with a date
+
+`nava_lang/cgen.py` stays a
+supported backend until N16 passes, and no phase may regress it before then. From
+N15 it prints a deprecation notice; at N16 it is removed in the same patch that
+removes the `cc` dependency, with a `CHANGELOG.md` entry and an updated
+`RELEASE.md`. The alternative — keeping two backends forever — is how a project
+never becomes independent.
+
+### D11. Independence is demonstrated on a bare host
+
+Every C3-style claim is
+produced by running in a container without the dependency in question. A
+`which cc` check on a developer machine is not evidence.
+
+### D12. The conformance set is normative
+
+From N17, `conformance/` is the
+document of record: a row of the specification without a conformance entry fails
+the guard, and the two implementations must agree on every entry.
+
+### 4A.4 The phases
+
+| Phase | Subject | Dependencies | Gate criterion | State |
+|---|---|---|---|---|
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §4A.2 audit is closed row by row; the Python oracle and the C backend agree | **Specified** |
+| N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
+| N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
+| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
+| N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
+| N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
+| N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
+| N18 | Evidence for the claims | all of the above | Every number traces to a recorded run; anything unmeasured stays `not-measured` | **Specified** |
+
+Milestones, in the order a reader should check them: **M1** the language can
+express a compiler (N10–N12); **M2** projects and packages (N13); **M3** no C
+toolchain (N14); **M4** self-hosted (N15); **M5** no external dependency at all
+(N16); **M6** a contract with users and models (N17); **M7** the claims are
+measured (N18).
+
+---
+
+### Phase N10 — Structures, sum types, errors and generics
+
+**Objective:** give the language the data-modelling power its own compiler
+needs, as an additive edition, without touching edition 1.
+
+**Tasks**
+
+- `struct` with named fields, nesting, value and reference passing, and the
+  borrow rules N4 defined for arrays extended to struct fields.
+- `enum` with data-carrying variants; `match` with exhaustiveness checking and no
+  fallthrough; `Option<T>` and `Result<T, E>` as library types, not keywords.
+- `?` for error propagation, with a documented conversion rule.
+- Slices `[T]` and range slicing `a[i..j]` with bounds checks.
+- Monomorphised generics: `Vec<T>`, `HashMap<K, V>`, user-defined generic
+  structs and functions; explicitly **no** traits, and no type-class inference —
+  equality and hashing are built-in interfaces on the primitive types.
+- Function pointers, `defer`, labelled loops, per-item module visibility (`pub`).
+- `edition 2;` header, with edition 1 frozen.
+
+**Test gate**
+
+- `LANGUAGE.md` gains the edition-2 chapter: every construct with its grammar,
+  semantics and at least one executable example; the EBNF and `eval/grammar.py`
+  and the GBNF in `eval/gbnf.py` agree, as N7's conformance checker already
+  enforces.
+- At least 120 new fixtures (positive and negative) with exact diagnostics.
+- The §4A.2 audit table is closed row by row: each row names the fixture that
+  proves the construct is expressible.
+- Differential runs: the Python front end (oracle) and the C backend agree on
+  every fixture, byte for byte on stdout and stderr.
+
+**Negative controls:** a non-exhaustive `match` is rejected with a code and a
+location; taking a reference to a temporary is rejected; a recursive `struct`
+without indirection is rejected with a stated rule; an edition-1 file that uses
+an edition-2 construct is rejected with the edition named.
+
+**Deliverable:** the patch that lands edition 2, the spec chapter, the fixtures
+and the closed audit.
+
+---
+
+### Phase N11 — Memory, collections and strings
+
+**Objective:** make the containers and strings the compiler needs, with safety
+that is checked rather than assumed.
+
+**Tasks**
+
+- `Vec<T>` with amortised growth, `push`, `pop -> Option<T>`, `insert`,
+  `remove`, iteration; `HashMap<K, V>` with iteration and a total `get`;
+  `HashSet<T>`; a deterministic hash so that records and builds are
+  reproducible.
+- `String` as a growing UTF-8 sequence with documented boundary rules, and the
+  methods the audit lists: `split`, `join`, `strip`, `startswith`, `replace`,
+  byte and character views.
+- Arena allocator with an explicit lifetime (D9), allocation accounting, and a
+  defined out-of-memory behaviour that is the same in every backend.
+- Bounds, overflow, initialisation and aliasing checks; the documented statement
+  that a well-typed program has no undefined behaviour, and the test that shows
+  it.
+
+**Test gate**
+
+- Property and fuzz tests over at least 10^5 randomised operations per
+  collection, comparing against the Python oracle.
+- Leak detection over the whole fixture corpus, with the arena's accounting as
+  the second, independent witness.
+- AddressSanitizer and UndefinedBehaviorSanitizer clean on the C backend for the
+  full corpus (the N0 rig already builds with sanitizers).
+- Recorded allocation and time numbers for `HashMap` and `Vec` growth, with the
+  workload and uncertainty, in `BENCHMARK.md`.
+
+**Negative controls:** a double release, a use after release, an off-by-one
+write and a hash-map rehash-during-iteration each fail the check that is supposed
+to catch them — a safety feature whose negative control passes is not a feature.
+
+**Deliverable:** collections, strings, allocator, sanitizer-clean corpus and the
+recorded numbers.
+
+---
+
+### Phase N12 — A standard library with contracts
+
+**Objective:** replace "three files in `nava_lang/stdlib/`" with a library whose
+promises are written down and executed.
+
+**Tasks**
+
+- Modules: `fmt`, `io`, `fs`, `args`, `collections`, `text`, `math`, `sort`,
+  `test`, `time`, on top of the capability model N6 established.
+- For every public name: a contract (preconditions, postconditions, error
+  cases, complexity) in the module's documentation block.
+- `nava doc` generates reference documentation from those contracts; examples
+  inside them are compiled and executed by the suite.
+- `test` module: an assertion and test-runner facility inside the language, so
+  Nava programs can test themselves without the Python suite.
+
+**Test gate**
+
+- 100 % of public names carry a contract and at least one test; the guard fails
+  on an undocumented or untested public name (the same shape as the existing
+  diagnostic-code and fixture guards).
+- Every documentation example builds and runs in CI; an example that stops
+  compiling fails the lane.
+- Determinism: functions documented as pure produce identical results across
+  repeated runs and across backends.
+
+**Negative controls:** a public function with no contract fails the guard; a
+documentation example that does not compile fails the lane; a documented error
+case that cannot be triggered fails the guard.
+
+**Deliverable:** the library, its contracts, generated documentation and the
+self-testing facility.
+
+---
+
+### Phase N13 — Projects, packages and reproducibility
+
+**Objective:** a Nava program can be a project with dependencies, offline by
+default, and rebuilt identically elsewhere.
+
+**Tasks**
+
+- `nava.toml`: name, edition, dependencies with semantic-version constraints,
+  build targets.
+- A content-addressed lockfile; vendoring; `--offline` as the default and
+  network access as an explicit, recorded opt-in.
+- Package identity by digest, not by name; a substituted or corrupted package
+  fails the build with a named error.
+- Deterministic builds: sorted iteration everywhere it reaches output, a fixed
+  timestamp source (`SOURCE_DATE_EPOCH`), recorded toolchain identity.
+
+**Test gate**
+
+- A project with two dependencies builds from its lockfile in a second
+  checkout, on a clean host, and the binary is byte-identical.
+- Tamper tests: one flipped byte in a vendored package, a wrong digest, a
+  version outside the constraint — each fails with its own diagnostic.
+- The dependency graph is printed and recorded; no transitive dependency can
+  appear that the lockfile does not name.
+
+**Negative controls:** a lockfile edited by hand without the digest fails; a
+build with a different toolchain records the difference rather than silently
+producing a second hash; a package that shadows a standard-library module is
+rejected.
+
+**Deliverable:** the manifest, the lockfile, the vendoring story and the
+reproducibility records.
+
+---
+
+### Phase N14 — Own backend: Nava to x86-64 ELF without `cc`
+
+**Objective:** remove the C compiler from the path. Two sub-milestones, because
+this is the largest single piece of engineering in the plan.
+
+**Tasks**
+
+*N14a — one translation unit*
+
+- A linear, SSA-shaped IR between the checker and the backends; `cgen.py`
+  becomes one lowering of it, the new backend the second (this keeps the
+  differential meaningful).
+- x86-64 code generation, an instruction encoder written in the project, an ELF
+  writer, and a syscall-only runtime: `_start`, `mmap`-backed arena, `write`,
+  `read`, `exit`, panic with a symbolised trace.
+- Linux x86-64 only, and stated as such: macOS and Windows leave the matrix for
+  the native backend and stay "expected, not exercised" for the C backend.
+
+**N14b — whole programs**
+
+- Symbols, relocations, sections, a static linker for multi-file programs, line
+  tables for diagnostics and traces, and a read-only `readelf`-equivalent of our
+  own used by the tests.
+
+**Test gate**
+
+- Behavioural differential against the C backend over the entire corpus: exit
+  code, stdout, stderr and diagnostic text identical.
+- Builds and runs on a host where `cc` and `ld` do not exist (D11).
+- `ldd` reports "not a dynamic executable"; a syscall whitelist is checked under
+  `strace`, including that nothing opens a socket.
+- Repeated builds are byte-identical.
+
+**Negative controls:** a program that overflows `i64` behaves identically on both
+backends; a deliberately truncated ELF is rejected by our own reader; an attempt
+to link a foreign object file is refused with a named error; a program whose
+panic message is checked still prints the same trace.
+
+**Deliverable:** the IR, the backend, the encoder, the linker, the runtime and
+the differential records.
+
+---
+
+### Phase N15 — Self-hosting and bootstrap
+
+**Objective:** Nava compiles Nava.
+
+**Tasks**
+
+- Port the compiler to Nava, subsystem by subsystem, in the order
+  lexer → parser → checker → modules → IR → backends, each subsystem landing
+  with its parity evidence against the Python implementation on the full fixture
+  corpus.
+- Bootstrap chain, each stage recorded with its SHA-256: stage0 (the Python
+  compiler) builds stage1 (the Nava compiler, via the C backend); stage1 builds
+  stage2 (the Nava compiler, via the native backend); stage2 builds stage3.
+- The Python compiler is frozen as the oracle at the point stage2 passes the
+  suite, and is shipped no longer.
+
+**Test gate**
+
+- stage2 and stage3 are byte-identical (C2).
+- The full suite and `tests/registry.py` pass with stage2 as the compiler, with
+  no skipped tests and the same negative controls.
+- Every fixture produces identical diagnostics — code, location, message, hint —
+  under stage2 and under the frozen Python oracle.
+- Compiler build time and binary size are recorded with the workload; the
+  comparison against `nava_lang/`'s Python numbers is a record, not a claim of
+  victory.
+
+**Negative controls:** a compiler built from a deliberately broken source is
+rejected by the fixpoint check; a divergence between stage2 and the oracle is
+reported as a failure rather than "an acceptable difference"; a stage that fails
+to build leaves the previous stage's hashes intact and the lane red.
+
+**Deliverable:** the Nava compiler, the bootstrap script, the recorded hashes and
+the fixpoint evidence.
+
+---
+
+### Phase N16 — Zero dependencies, reproducible delivery
+
+**Objective:** C3, demonstrated.
+
+**Tasks**
+
+- One static `nava` binary; installation is a copy.
+- `check`, `build` and `run` work in a kernel-only container (no shell, no
+  libc, no `cc`, no `python3`); the isolation logic of N2 is reimplemented on
+  syscalls and re-tested there.
+- A documented chain of trust: which binary is trusted, why, and the hashes of
+  every stage (the trusting-trust limit is stated, not hidden).
+- Reproducible builds: byte-identical rebuild from the same sources and
+  `SOURCE_DATE_EPOCH`; an SBOM; a security review of the syscall surface, the
+  sandbox and the linker.
+- The C backend is removed here (D10): `cgen.py`, its tests and its
+  documentation go with the `cc` dependency, and `CHANGELOG.md` says so.
+
+**Test gate**
+
+- A program is written, compiled, sandboxed and run inside an empty container,
+  and its output is recorded.
+- Rebuild from scratch is byte-identical; a one-byte change in the source changes
+  exactly the expected bytes.
+- `strace` shows no sockets; the sandbox's own negative controls from N2 still
+  fail as they should under the new runtime.
+- `RELEASE.md` and the support matrix describe the single binary and the single
+  supported platform honestly.
+
+**Negative controls:** a container that still has `cc` is *not* accepted as
+evidence of C3 — the check asserts the absence of the dependency before it runs
+the build; a build with a network syscall is rejected; a non-reproducible build
+fails the lane instead of being noted in prose.
+
+**Deliverable:** the static binary, the bare-host evidence, the chain of trust
+and the removal of the C backend.
+
+---
+
+### Phase N17 — The language as a contract
+
+**Objective:** C1, C4 and the part of "a language" that is about everyone who is
+not the author.
+
+**Tasks**
+
+- `conformance/`: the normative set, one entry per normative statement, keyed to
+  a specification anchor; the specification names its entries and the entries
+  name the specification.
+- Editions and deprecation: an edition is frozen when released; removal requires
+  a policy, a warning period and a migration note.
+- `nava fmt` (idempotent, with the idempotence as a test), `nava repl`, and a
+  minimal language server for diagnostics and completion — the tools a user
+  notices the absence of first.
+- Migration: edition 1 to edition 2 tooling that rewrites what can be rewritten
+  mechanically and refuses, with a reason, what cannot.
+
+**Test gate**
+
+- Both implementations (the frozen Python oracle and the self-hosted compiler)
+  pass the conformance set; a divergence is a release blocker.
+- Every normative statement in `LANGUAGE.md` links to a conformance entry, and
+  the guard fails on a statement without one.
+- `fmt` is idempotent over the whole corpus, and a format that changes meaning is
+  rejected by the parser afterwards.
+- A REPL session referencing only standard-library modules replays identically.
+
+**Negative controls:** deleting a conformance entry fails the guard; a
+specification edit without an entry fails the guard; a formatter that changes
+semantics fails the corpus differential.
+
+**Deliverable:** the conformance set, the edition and deprecation policy, the
+formatter, the REPL, the language server and the migration tool.
+
+---
+
+### Phase N18 — Evidence for the claims
+
+**Objective:** the project's own thesis — that a model writes Nava quickly and
+correctly — re-measured on the independent toolchain rather than on the Python
+prototype.
+
+**Tasks**
+
+- Re-run the N3 study, the N7 A/B and the N8 benchmarks against the native
+  toolchain: compiler latency, binary run time, time to a correct answer.
+- Update `guides/nava-1.md` for edition 2 and re-pin its digest; regenerate the
+  GBNF and the conformance checker so constrained generation still matches the
+  grammar it claims to constrain.
+- Keep the `not-measured` discipline: a lane without a provider records that, and
+  no number is inferred from a neighbouring one.
+
+**Test gate**
+
+- Every number in `BENCHMARK.md`, `eval/measurements/` and the phase records
+  traces to a run with a hash, a command and an environment; a number that cannot
+  be reproduced is removed, not annotated.
+- Each CI lane asserts that it compiled and tested what it claims (the property
+  the CI fix already enforces).
+- Nothing in the release notes states a comparison the records do not contain.
+
+**Negative controls:** a record whose attempt count is zero fails its lane; a
+record claiming `measured` without model call records fails the checker.
+
+**Deliverable:** the re-measured records, the regenerated guide artefacts and an
+honest summary that separates measured from unmeasured.
+
+---
+
+### 4A.5 Risks, and what this plan refuses to promise
+
+| Risk | Why it is real | Mitigation written into the plan |
+|---|---|---|
+| **R1. N14 and N15 are simply large** | The current compiler is 4 394 Python lines and 141 functions; the port is an estimate, not a measurement, and will grow. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
+| **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
+| **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |
+| **R5. The syscall runtime is the security surface** | N2's isolation guarantee now depends on code that did not exist before. | N2's negative controls are re-run under the new runtime; the security review is a gate item in N16, not a paragraph in `SECURITY.md`. |
+| **R6. New features can make generation worse** | Edition 2 adds syntax a model must learn; the project's whole point is that a model writes the language. | Every phase that changes the language regenerates the guide, the digest, the grammar and the GBNF, and the study harness measures on the current edition. |
+
+Still out of scope, stated so that it is not smuggled in later: macOS and
+Windows for the native backend; GPU execution; a networked package registry as a
+default; threads and concurrency; FFI to C or any other language; a tracing
+garbage collector; training a model. Each would be a new plan with its own gates,
+not an appendix to this one.
+
+"Independent" will be reported in exactly the terms of §4A.1: which criteria
+passed, on which host, in which run. Until N16's container evidence exists, Nava
+is a language with an independent *specification* and a dependent *toolchain*,
+and the plan says so.
+
+---
+
 ## 5. Definition of done and non-goals
 
 A phase is complete only when its implementation, documentation and test
@@ -1060,9 +1553,19 @@ include the workload and uncertainty; model claims include the model, prompts,
 tokens, failures and correctness. Planned files and commands are not current
 features until they land.
 
-Out of scope for this first plan: GPU code generation/execution for Nava
-programs, self-hosting the compiler, training a new neural model, a default
-networked package manager and any blanket promise that Nava will outperform
-C/C++ on every workload or model. Model-inference benchmarks may still use a
-GPU. These items may be evaluated later against measured needs rather than
-treated as prerequisites for a useful 0.1 successor.
+Out of scope for this plan: GPU code generation/execution for Nava programs,
+training a new neural model, a default networked package registry, threads and
+concurrency, FFI to C or any other language, a tracing garbage collector, and any
+blanket promise that Nava will outperform C/C++ on every workload or model.
+Model-inference benchmarks may still use a GPU. These items may be evaluated
+later against measured needs rather than treated as prerequisites for a useful
+successor.
+
+Two items that the first version of this section excluded are now **in** scope,
+in §4A: self-hosting the compiler (N15) and a package manager (N13, offline and
+content-addressed by default — a networked registry stays out). Reversing a
+non-goal is a decision, not a detail: it is recorded here, it is justified by the
+audit in §4A.2, and it carries the criteria in §4A.1 so that "the language is
+independent" is a checkable statement with a host, a command and a run behind it
+rather than a slogan. Until N16's bare-container evidence exists, the honest
+description is: an independent specification with a dependent toolchain.

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+The independence plan: `PLAN.md` §4A specifies phases N10–N18 for making Nava a
+language in its own right and a toolchain that needs neither Python nor a C
+compiler, and reverses the two non-goals that excluded self-hosting and a
+package manager.
+
+- Six criteria (C1–C6) define what "a language" and "independent" mean here, each
+  with a probe: a normative specification, the bootstrap criterion, a static
+  binary on a host without `python3`/`cc`/`ld`/libc, an ecosystem, proof on real
+  programs, and the existing evidence discipline.
+- The language feature list is an audit of the current compiler rather than a
+  wish list: 4 394 lines, 13 modules and 141 functions in `nava_lang/`, with each
+  Python construct it relies on mapped to the Nava feature and the phase that
+  adds it. It shows Nava needs structs, sum types, generic containers, strings
+  and slicing — and needs no closures, laziness, exceptions or garbage
+  collector — to express its own compiler.
+- Decisions D7–D12: editions instead of breaking changes, the bootstrap criterion
+  decides feature scope, arena memory before any collector, the C backend as a
+  trampoline that is removed at N16, independence demonstrated on a bare host,
+  and the conformance set as the document of record.
+- `tests/test_plan.py` guards the plan itself: every phase keeps its objective,
+  tasks, gate and deliverable, the independence phases keep a negative control,
+  a phase cannot be called delivered without a delivery record, the audit numbers
+  match the tree, and the non-goal reversal stays stated.
+
+No phase of N10–N18 is started; the plan says so in its own status line.
+
 CI follow-up: the eight `required` jobs are red on GitHub-hosted runners, and the
 study lane was green while measuring nothing.
 
