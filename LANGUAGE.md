@@ -934,6 +934,54 @@ Semantics, stated because they are observable:
 `?`, no guards, no literal or range patterns and no matching on `i64` values:
 those are N10c and later, and nothing above claims otherwise.
 
+### `Option`, `Result` and `?`
+
+Two enums are part of edition 2 without being declared: `Option(T)` with
+variants `Some(T)` and `None`, and `Result(T, E)` with `Ok(T)` and `Err(E)`. They
+are the only types that take type arguments, and the arguments are written in
+parentheses — `Option(i64)`, `Result(i64, str)` — never in angle brackets,
+because `<` is a comparison operator and `Option<i64>` would make the two
+meanings depend on lookahead.
+
+```
+edition 2;
+
+fn parse_positive(n: i64) -> Result(i64, str) {
+    if n > 0 { return Result(i64, str)::Ok(n) }
+    return Result(i64, str)::Err("not positive")
+}
+
+fn doubled(n: i64) -> Result(i64, str) {
+    let value = parse_positive(n)?      # on Err: return it now
+    return Result(i64, str)::Ok(value * 2)
+}
+```
+
+`?` is available in one place: the initializer of a `let`. Three rules, and
+nothing else:
+
+1. the expression must produce an `Option(T)` or a `Result(T, E)` (`E0410`);
+2. the enclosing function must return the **same** enum (`E0411`), instantiated
+   with the **same failure type** — `Option` has no failure type, so any
+   `Option` propagates into any `Option`; `Result` propagates only where the `E`
+   is identical, because a failure is forwarded, never converted;
+3. the success type may differ, and it is what the new local holds:
+   `Result(bool, str)` inside a function returning `Result(i64, str)` is
+   `let flag = check()?` with `flag: bool`.
+
+Anything else is refused: `print(f()?)` is `E0413` (the early return has to be
+a statement), `let x = 1?` is `E0410`, a `?` in `fn main()` is `E0411` because
+`main` does not return a `Result`.
+
+Values of these enums are built and matched like any other enum, with the
+arguments written out: `Result(i64, str)::Ok(3)`, and in a pattern
+`Result(i64, str)::Ok(v)`. A pattern must name the same instantiation as the
+value (`E0395` otherwise).
+
+`?` is not an expression, there is no `try`/`catch`, and a failing `Option` is
+not an error: it propagates `None` like a `Result` propagates `Err`. Nothing is
+converted; nothing is swallowed.
+
 ## Diagnostics
 
 Errors are reported with a stable code, a source range and an optional hint.
@@ -1022,6 +1070,12 @@ never changes meaning; a new condition gets a new code.
 | `E0397` | error | duplicate match arm | `tests/fixtures/negative/match_duplicate_arm.nv` |
 | `E0398` | error | unreachable match arm after `_` | `tests/fixtures/negative/match_arm_after_wildcard.nv` |
 | `E0399` | error | unsupported enum variant field type | `tests/fixtures/negative/enum_variant_str.nv` |
+| `E0410` | error | `?` expects an Option or a Result | `tests/fixtures/negative/propagate_not_option.nv` |
+| `E0411` | error | `?` cannot propagate into this function's return type | `tests/fixtures/negative/propagate_in_void.nv`, `propagate_failure_mismatch.nv` |
+| `E0412` | error | wrong number of type arguments | `tests/fixtures/negative/result_wrong_arity.nv` |
+| `E0413` | error | `?` outside a `let` initializer | `tests/fixtures/negative/propagate_outside_let.nv` |
+| `E0414` | error | a user type cannot take type arguments yet | `tests/fixtures/negative/generic_user_type.nv` |
+| `E0415` | error | a type argument is not a type | `tests/fixtures/negative/result_not_a_type_arg.nv` |
 
 **Types and semantics**
 
@@ -1187,10 +1241,11 @@ indexing, string concatenation, string input, mathematical functions such as
 module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
-Edition 2 adds structs, enums and `match`; it does not add `Option`/`Result`,
-`?`, generics, generic containers, string fields, arrays of structs, struct or
+Edition 2 adds structs, enums, `match`, `Option`/`Result` and `?`; it does not
+add generic declarations of your own, `match` as an expression, generic
+containers, string fields, arrays of structs, struct or
 enum equality, printing a struct or an enum, or module visibility keywords.
-Those are N10c and later in `INDEPENDENCE.md`, and nothing here is a promise
+Those are N10d and later in `INDEPENDENCE.md`, and nothing here is a promise
 that they exist today.
 
 Array length is fixed at creation and the element types are exactly `i64`,

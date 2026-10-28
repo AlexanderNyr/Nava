@@ -1,0 +1,9 @@
+edition 2;
+
+fn main() {
+    let r = Result(i64, str)::Ok(1)
+    match r {
+        Result(bool, str)::Ok(v) => { print(v) }
+        _ => { print(0) }
+    }
+}

@@ -6,8 +6,8 @@ from .model import (
     Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue,
     Diagnostic, EnumDecl, Expr, ExprStmt, Float, For, Function, If, Import,
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Program, Range,
-    Return, String, Struct, StructLiteral, Symbol, Unary, Variable, VariantValue,
-    While,
+    Return, String, Struct, StructLiteral, Symbol, Try, Unary, Variable,
+    Variant, VariantValue, While,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -22,6 +22,41 @@ VALUE_TYPES = {"i64", "bool", "str", "f64"}
 PRINTABLE_TYPES = VALUE_TYPES
 #: Types that support the checked-or-IEEE arithmetic operators.
 ARITHMETIC_TYPES = ("i64", "f64")
+#: Prelude enum templates: name -> (parameters, variants). They are the only
+#: generic types in edition 2, and `?` is defined in terms of them.
+PRELUDE = {
+    "Option": (["T"], [("Some", ["T"]), ("None", [])]),
+    "Result": (["T", "E"], [("Ok", ["T"]), ("Err", ["E"])]),
+}
+#: The failure variant of each prelude enum, by position.
+FAILURE_VARIANT = {"Option": "None", "Result": "Err"}
+
+
+def mangle(typ: str) -> str:
+    """`Result(i64, str)` -> `Result_i64_str`: a C identifier for one instance."""
+    return "".join(character if character.isalnum() else "_" for character in typ).replace("__", "_").strip("_")
+
+
+def split_instance(typ: str | None) -> tuple[str, list[str]] | None:
+    """`Result(i64, str)` -> ("Result", ["i64", "str"]); None for other types."""
+    if not typ or "(" not in typ or not typ.endswith(")"):
+        return None
+    name, _, rest = typ.partition("(")
+    arguments: list[str] = []
+    depth = 0
+    current = ""
+    for character in rest[:-1]:
+        if character == "," and depth == 0:
+            arguments.append(current.strip())
+            current = ""
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        current += character
+    arguments.append(current.strip())
+    return name, arguments
 
 
 def is_array(typ: str | None) -> bool:
@@ -61,6 +96,9 @@ class Checker:
         self.loop_depth = 0
 
     def check(self) -> Program:
+        # Every type an instantiation mentions must exist before an instance of
+        # it is built, so the instances are created lazily, on demand.
+        self.instances: dict[str, EnumDecl] = {}
         # Names first, types second: a struct may hold an enum and an enum may
         # carry a struct, so neither table can be validated before both exist.
         self.collect_structs()
@@ -123,6 +161,7 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "the analysis is conservative: even `while true` does not count as a return",
                 )
+        self.program.instances = self.instances
         self.unused_imports()
         self.program.warnings = self.warnings
         return self.program
@@ -151,7 +190,48 @@ class Checker:
                     )
 
     def is_enum(self, typ: str | None) -> bool:
-        return typ is not None and typ in self.enums
+        if typ is None:
+            return False
+        if typ in self.enums or typ in self.instances:
+            return True
+        return split_instance(typ) is not None
+
+    def instantiate(self, typ: str) -> EnumDecl:
+        """The declaration of `Result(i64, str)`, created once per type."""
+        if typ in self.instances:
+            return self.instances[typ]
+        split = split_instance(typ)
+        if split is None:
+            return self.enums[typ]
+        name, arguments = split
+        template = PRELUDE.get(name)
+        if template is None:
+            raise make("E0414", f"{name!r} cannot take type arguments",
+                       hint="edition 2 parameterises only Option and Result")
+        parameters, variants = template
+        if len(arguments) != len(parameters):
+            raise make(
+                "E0412",
+                f"{name} takes {len(parameters)} type argument"
+                f"{'s' if len(parameters) != 1 else ''}, got {len(arguments)}",
+            )
+        for argument in arguments:
+            if not (argument in VALUE_TYPES or self.is_struct(argument)
+                    or self.is_enum(argument)):
+                raise make("E0203", f"unknown type {argument!r} in {typ}")
+        substitution = dict(zip(parameters, arguments))
+        variants_out: list[Variant] = []
+        declared_variants = []
+        for tag, (variant_name, types) in enumerate(variants):
+            resolved = [substitution.get(item, item) for item in types]
+            declared_variants.append(Variant(variant_name, resolved, None, tag))
+        decl = EnumDecl(name, declared_variants, None)
+        decl.cname = "nv_enum_" + mangle(typ)
+        self.instances[typ] = decl
+        return decl
+
+    def enum_decl_of(self, typ: str) -> EnumDecl:
+        return self.instantiate(typ) if split_instance(typ) else self.enums[typ]
 
     def collect_enums(self) -> None:
         """Build the enum table and reject the declarations that cannot work.
@@ -216,11 +296,22 @@ class Checker:
                         )
 
     def enum_of(self, typ: str | None) -> EnumDecl | None:
-        return self.enums.get(typ) if typ else None
+        if not typ:
+            return None
+        if typ in self.enums:
+            return self.enums[typ]
+        if split_instance(typ) is not None:
+            return self.instantiate(typ)
+        return None
 
     def variant_value(self, expr: VariantValue) -> str:
         """`Shape::Circle(3)`: a declared variant, with exactly its fields."""
-        decl = self.enums[expr.enum]  # the parser only builds this for a declared enum
+        if expr.instance is not None:
+            decl = self.instantiate(expr.instance)
+            typ = expr.instance
+        else:
+            decl = self.enums[expr.enum]  # the parser only builds this for a declared enum
+            typ = expr.enum
         expr.declared = decl
         choice = next((item for item in decl.variants if item.name == expr.variant), None)
         if choice is None:
@@ -249,7 +340,7 @@ class Checker:
                     argument.loc,
                     hint="there are no implicit conversions between i64, bool, f64 and str",
                 )
-        return decl.name
+        return typ
 
     def match_statement(self, statement: Match) -> None:
         """One arm per variant, or a wildcard; bindings are copies of the fields."""
@@ -275,6 +366,14 @@ class Checker:
                 wildcard = True
                 self.check_statements(arm.body, new_scope=True)
                 continue
+            if arm.instance is not None and arm.instance != subject:
+                raise make(
+                    "E0395",
+                    f"this arm matches {arm.instance}, but the value is {subject}",
+                    arm.loc, arm.loc.advance(arm.instance.split("(", 1)[0]),
+                    hint="instantiate the pattern with the same type arguments "
+                         "as the value",
+                )
             choice = next((item for item in decl.variants if item.name == arm.variant), None)
             if choice is None:
                 known = ", ".join(item.name for item in decl.variants)
@@ -312,8 +411,8 @@ class Checker:
         if missing and not wildcard:
             raise make(
                 "E0396",
-                f"match on {decl.name} does not cover "
-                + ", ".join(f"{decl.name}::{name}" for name in missing),
+                f"match on {subject} does not cover "
+                + ", ".join(f"{subject}::{name}" for name in missing),
                 statement.loc, statement.loc.advance("match"),
                 hint="cover every variant, or add `_ => { ... }` as the last arm",
             )
@@ -607,11 +706,75 @@ class Checker:
                 Checker.always_returns(arm.body) for arm in statement.arms)
         return False
 
+    def propagate(self, statement) -> str:
+        """`let value = call()?`: check the operator and return the bound type.
+
+        The rule, in full, because it is the whole semantics of `?`:
+
+        * the call must produce an `Option(T)` or a `Result(T, E)`;
+        * the enclosing function must return the same enum, instantiated so that
+          its *failure* type is identical — a failure is forwarded, never
+          converted;
+        * the success type may differ (`Result(bool, str)` inside a function
+          returning `Result(i64, str)` is fine), and it is what the new local is
+          bound to;
+        * anything else is an error, because a silent alternative would be a
+          silent failure.
+        """
+        inner_type = self.expression(statement.value.inner)
+        decl = self.enum_of(inner_type)
+        if decl is None or split_instance(inner_type) is None:
+            raise make(
+                "E0410",
+                f"`?` expects an Option or a Result, got {inner_type}",
+                statement.value.loc, statement.value.loc.advance("?"),
+                hint="`?` forwards the failure variant of Option(T) or Result(T, E)",
+            )
+        success, failure = self.instance_parts(inner_type)
+        function = self.current_function
+        returns = function.returns if function is not None else "void"
+        outer = self.enum_of(returns)
+        outer_split = split_instance(returns)
+        inner_split = split_instance(inner_type)
+        assert inner_split is not None
+        if outer is None or outer_split is None or outer_split[0] != inner_split[0]:
+            raise make(
+                "E0411",
+                f"`?` cannot propagate into this function, which returns {returns}",
+                statement.value.loc, statement.value.loc.advance("?"),
+                hint="the enclosing function must return "
+                     f"{inner_type.split('(', 1)[0]} with the same failure type",
+            )
+        outer_success, outer_failure = self.instance_parts(returns)
+        if outer_failure != failure:
+            raise make(
+                "E0411",
+                f"`?` forwards {failure}, but this function fails with {outer_failure}",
+                statement.value.loc, statement.value.loc.advance("?"),
+                hint="a failure is forwarded unchanged; convert it before forwarding",
+            )
+        return success
+
+    @staticmethod
+    def instance_parts(typ: str) -> tuple[str, str]:
+        """The success and failure types of `Option(T)` or `Result(T, E)`."""
+        split = split_instance(typ)
+        assert split is not None
+        name, arguments = split
+        if name == "Option":
+            return arguments[0], "none"
+        return arguments[0], arguments[1]
+
     def check_statement(self, statement) -> None:
         if isinstance(statement, Let):
             name_loc = statement.name_loc or statement.loc
-            expected = statement.annotation if is_array(statement.annotation) else None
-            typ = self.expression(statement.value, expected=expected)
+            if isinstance(statement.value, Try):
+                # `?` decides the type of the binding from the callee, so the
+                # annotation is checked against that type and never drives it.
+                typ = self.propagate(statement)
+            else:
+                expected = statement.annotation if is_array(statement.annotation) else None
+                typ = self.expression(statement.value, expected=expected)
             if typ == "void":
                 raise make("E0309", "a variable cannot contain a void value", name_loc,
                            name_loc.advance(statement.name))
@@ -835,6 +998,13 @@ class Checker:
         elif isinstance(expr, Variable):
             expr.symbol = self.lookup(expr.name, expr.loc)
             typ = expr.symbol.typ
+        elif isinstance(expr, Try):
+            raise make(
+                "E0413",
+                "`?` is only allowed in a `let` initializer",
+                expr.loc, expr.loc.advance("?"),
+                hint="write `let value = call()?`; the early return has to be a statement",
+            )
         elif isinstance(expr, VariantValue):
             typ = self.variant_value(expr)
         elif isinstance(expr, StructLiteral):

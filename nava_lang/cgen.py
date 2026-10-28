@@ -6,7 +6,7 @@ from . import limits, runtime
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
-    Number, Program, Range, Return, String, StructLiteral, Unary, Variable,
+    Number, Program, Range, Return, String, StructLiteral, Try, Unary, Variable,
     VariantValue, While,
 )
 
@@ -618,6 +618,8 @@ class CGenerator:
         #: `array_zeros` in argument position). They live until the end of that
         #: statement, which is the shortest lifetime that keeps evaluation order.
         self.temporaries: list[tuple[str, str]] = []
+        #: Return type of the function being generated, for `?` propagation.
+        self.current_return_type = "void"
         #: Owned-frame index of each open loop body, innermost last. `break` and
         #: `continue` jump out of that frame, so its arrays must be released
         #: explicitly before the jump.
@@ -626,6 +628,9 @@ class CGenerator:
         self.structs: dict[str, object] = {struct.name: struct for struct in program.structs}
         #: Declared enums by name; a variant value is a compound literal of one.
         self.enums: dict[str, object] = {decl.name: decl for decl in program.enums}
+        #: Prelude instantiations, keyed by their written type. They are enums
+        #: too: the only difference is that their name contains arguments.
+        self.enums.update(program.instances)
 
     def ctype(self, typ: str) -> str:
         """The C type of a Nava type: a scalar, an array handle or a struct."""
@@ -662,6 +667,11 @@ class CGenerator:
             names = [typ for choice in self.enums[name].variants for typ in choice.types]
         return [item for item in names if item in self.structs or item in self.enums]
 
+    @staticmethod
+    def instance_name(typ: str) -> str:
+        return "nv_enum_" + "".join(
+            character if character.isalnum() else "_" for character in typ).replace("__", "_").strip("_")
+
     def emit_structs(self) -> None:
         """Every declaration, dependencies first.
 
@@ -674,7 +684,7 @@ class CGenerator:
         emitted: set[str] = set()
 
         def emit_type(name: str) -> None:
-            if name in emitted:
+            if name in emitted or name not in self.structs and name not in self.enums:
                 return
             for dependency in self.dependencies(name):
                 emit_type(dependency)
@@ -686,7 +696,9 @@ class CGenerator:
 
         for declaration in list(self.program.structs) + list(self.program.enums):
             emit_type(declaration.name)
-        if self.program.structs or self.program.enums:
+        for name in self.program.instances:
+            emit_type(name)
+        if self.program.structs or self.program.enums or self.program.instances:
             self.line()
 
     def emit_struct(self, struct) -> None:
@@ -736,6 +748,7 @@ class CGenerator:
             self.line(self.signature(function) + ";")
         self.line()
         for function in self.program.functions:
+            self.current_return_type = function.returns
             self.line(self.signature(function) + " {")
             self.indent += 1
             self.owned = [[]]
@@ -840,7 +853,9 @@ class CGenerator:
             self.temporaries = active
 
     def statement(self, statement) -> None:
-            if isinstance(statement, Let):
+            if isinstance(statement, Let) and isinstance(statement.value, Try):
+                self.propagate_let(statement)
+            elif isinstance(statement, Let):
                 value = (self.new_array(statement.value)
                          if statement.symbol.typ in ARRAY_TAG else self.expression(statement.value))
                 self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = {value};")
@@ -960,6 +975,37 @@ class CGenerator:
             # Arrays that the iterable expression created stay alive for the
             # whole loop and are released with the statement.
             self.temporaries = saved + self.temporaries
+
+    def propagate_let(self, statement: Let) -> None:
+        """`let x = call()?`: test the failure tag, return it, bind the payload.
+
+        The failure value is rebuilt with the enclosing function's return type,
+        because the callee's instance may carry a different success type:
+        `Result(bool, str)` forwards its `Err` into a `Result(i64, str)`. The
+        failure type is identical by the checker's rule, so the payload is a
+        straight copy. Nothing is released here: edition 2 enums own no storage.
+        """
+        call = self.expression(statement.value.inner)
+        inner_type = statement.value.inner.typ
+        decl = self.program.instances[inner_type]
+        tag = decl.variants[-1].tag
+        temporary = self.temp(inner_type, call)
+        outer_type = self.current_return_type
+        outer = self.program.instances[outer_type]
+        failure = decl.variants[-1]
+        if failure.types:
+            payload = (f" ._payload = {{ ._v_{failure.name} = {{ ._f0 = "
+                       f"{temporary}._payload._v_{failure.name}._f0 }} }},")
+        else:
+            payload = ""
+        self.line(f"if ({temporary}._tag == {tag}) {{")
+        self.indent += 1
+        self.line(f"return ({outer.cname}){{ ._tag = {outer.variants[-1].tag},{payload} }};")
+        self.indent -= 1
+        self.line("}")
+        success = decl.variants[0]
+        self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = "
+                  f"{temporary}._payload._v_{success.name}._f0;")
 
     def match_statement(self, statement: Match) -> None:
         """A chain of `if` tests on the tag, one branch per arm.

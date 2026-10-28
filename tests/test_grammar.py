@@ -50,7 +50,7 @@ GRAMMAR_REJECTS = frozenset(
     # The array shapes keep a syntactic code, E0206, and the grammar models the
     # same fixed element set.
     | {"E0201", "E0202", "E0204", "E0205", "E0206"}
-    | {"E0346", "E0350"}
+    | {"E0346", "E0350", "E0415"}
     # `edition` is a prefix of the file in the grammar and in the compiler.
     | {"E0370"}
 )
@@ -67,7 +67,12 @@ GRAMMAR_ACCEPTS = frozenset(
      | {"E0203"} | {f"E03{index:02d}" for index in range(70, 82)}
      # Enum and match rules are all names, arities and coverage: syntax the
      # grammar accepts and the checker rejects.
-     | {f"E039{index}" for index in range(0, 10)})
+     | {f"E039{index}" for index in range(0, 10)}
+     # `?`, type arguments and instance arity are shapes the grammar accepts;
+     # the checker decides what they mean.
+     | {f"E041{index}" for index in range(0, 5)}
+     # A type argument that is a value, not a type, is a shape error.
+     | {"E0415"})
     - GRAMMAR_REJECTS
 )
 

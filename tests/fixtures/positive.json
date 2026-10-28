@@ -141,6 +141,18 @@
       "stdin": "",
       "stdout": "1\n2\n15\n-1\n",
       "exit_code": 0
+    },
+    {
+      "file": "results_basic.nv",
+      "stdin": "",
+      "stdout": "8\nnot positive\n10\n-1\n",
+      "exit_code": 0
+    },
+    {
+      "file": "results_chain.nv",
+      "stdin": "",
+      "stdout": "3\n-1\n-1\n3\n",
+      "exit_code": 0
     }
   ]
 }

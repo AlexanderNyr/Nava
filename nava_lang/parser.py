@@ -7,9 +7,10 @@ from .model import (
     Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl,
     Expr, ExprStmt, Field, Float, For, Function, If, Import, Index, IndexAssign,
     Let, Match, Member, MemberAssign, Number, Param, Program, Range, Return,
-    String, Struct, StructLiteral, Token, Unary, Variable, Variant, VariantValue,
-    While,
+    String, Struct, StructLiteral, Token, Try, Unary, Variable, Variant,
+    VariantValue, While,
 )
+from .model import NavaError
 
 PRECEDENCE = {
     "||": 1, "&&": 2, "==": 3, "!=": 3,
@@ -22,6 +23,11 @@ TYPES = {"i64", "bool", "str", "void", "f64"}
 EDITIONS = {1, 2}
 #: The edition that introduced structs, named construction and member access.
 STRUCT_EDITION = 2
+#: Types that take type arguments, and how many. They are prelude enums: written
+#: `Option(i64)` with parentheses, never `Option<i64>`, because `<` is already a
+#: comparison operator and a model writing code should not have to know where the
+#: parser switches personalities.
+GENERIC_PRELUDE = {"Option": 1, "Result": 2}
 #: Types an array may contain. There are no arrays of arrays and no arrays of
 #: `void`; both are rejected in the parser because they are syntax-level shapes.
 ELEMENT_TYPES = {"i64", "bool", "str"}
@@ -40,6 +46,8 @@ class Parser:
         #: Enum names, for the same reason: `Shape` is a type, and `Shape::Circle`
         #: is a value rather than a module call.
         self.enum_names: set[str] = set()
+        #: The instance the last `instantiation()` lookahead consumed.
+        self.last_instantiation: str | None = None
 
     def enter(self, loc) -> None:
         self.depth += 1
@@ -123,6 +131,8 @@ class Parser:
             self.expect("]", "']'")
             return f"[{element.value}]"
         token = self.expect("IDENT", "a type (i64, bool, str, void, or f64)")
+        if self.at("(") and self.edition >= STRUCT_EDITION:
+            return self.generic_type(token)
         if self.edition >= STRUCT_EDITION and (token.value in self.struct_names
                                                or token.value in self.enum_names):
             # A declared struct or enum is a type in edition 2. The checker
@@ -134,6 +144,81 @@ class Parser:
             raise make("E0203", f"unknown type {token.value!r}; use i64, bool, str, or void",
                        token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
+
+    def generic_type(self, name: Token) -> str:
+        """`Option(i64)` or `Result(i64, str)`: a prelude enum with arguments."""
+        expected = GENERIC_PRELUDE.get(str(name.value))
+        if expected is None:
+            raise make(
+                "E0414",
+                f"{name.value!r} cannot take type arguments yet",
+                name.loc, name.loc.advance(str(name.value)),
+                hint="edition 2 parameterises only Option and Result; generic "
+                     "declarations are a later increment",
+            )
+        self.expect("(", "'(' after a type name")
+        arguments: list[str] = []
+        while not self.at(")"):
+            arguments.append(self.parse_type())
+            if not self.take(","):
+                break
+        self.expect(")", "')'")
+        if len(arguments) != expected:
+            plural = "s" if expected != 1 else ""
+            raise make(
+                "E0412",
+                f"{name.value} takes {expected} type argument{plural}, "
+                f"got {len(arguments)}",
+                name.loc, name.loc.advance(str(name.value)),
+                hint="write " + ", ".join([f"Option(i64)", f"Result(i64, str)"][expected - 1:expected])
+                if expected in (1, 2) else None,
+            )
+        return f"{name.value}({', '.join(arguments)})"
+
+    def instantiation(self) -> str | None:
+        """Read `Name(T, ...)` if the tokens ahead are exactly that, else None.
+
+        Used where a type argument list could be confused with a call: `f(x)` is
+        a call, `Option(i64)` is a type. The lookahead is bounded — the tokens
+        must be IDENT '(', types, ')', '::' — so no backtracking is needed.
+        """
+        if not (self.at("IDENT") and self.tokens[self.i + 1].kind == "("
+                and self.current.value in GENERIC_PRELUDE):
+            return None
+        saved = self.i
+        name = self.current
+        self.i += 2
+        try:
+            arguments: list[str] = []
+            while not self.at(")"):
+                if self.at("EOF") or self.at("NL"):
+                    self.i = saved
+                    return None
+                arguments.append(self.parse_type())
+                if not self.take(","):
+                    break
+            if not self.at(")") or self.tokens[self.i + 1].kind != "::":
+                self.i = saved
+                return None
+            self.i += 1
+        except NavaError as error:
+            # A missing token means "this was not a type argument list" — a value
+            # where a type belongs. A *named* error (an unknown type, a forbidden
+            # element type) is real and must reach the author.
+            if error.code != "E0201":
+                raise
+            self.i = saved
+            return None
+        expected = GENERIC_PRELUDE[str(name.value)]
+        if len(arguments) != expected:
+            raise make(
+                "E0412",
+                f"{name.value} takes {expected} type argument"
+                f"{'s' if expected != 1 else ''}, got {len(arguments)}",
+                name.loc, name.loc.advance(str(name.value)),
+            )
+        self.last_instantiation = f"{name.value}({', '.join(arguments)})"
+        return self.last_instantiation
 
     def edition_declaration(self) -> None:
         """`edition 2;` — the first statement of the file, when it has one."""
@@ -418,8 +503,24 @@ class Parser:
         token = self.current
         bindings: list[str] = []
         variant: str | None = None
+        instance: str | None = None
         if self.at("IDENT") and token.value == "_":
             self.i += 1
+        elif self.at("IDENT") and self.edition >= STRUCT_EDITION \
+                and self.instantiation() is not None:
+            instance = self.last_instantiation
+            # `Result(i64, str)::Ok(v)`: the enum is the whole instantiated type,
+            # so an arm cannot be read against a different instantiation.
+            self.expect("::")
+            name = self.expect("IDENT", "a variant name after '::'")
+            variant = str(name.value)
+            if self.take("("):
+                while not self.at(")"):
+                    binding = self.expect("IDENT", "a binding name for a variant field")
+                    bindings.append(str(binding.value))
+                    if not self.take(","):
+                        break
+                self.expect(")")
         elif self.at("IDENT") and self.tokens[self.i + 1].kind == "::":
             self.i += 2
             name = self.expect("IDENT", "a variant name after '::'")
@@ -441,7 +542,7 @@ class Parser:
         else:
             raise make("E0205", "expected a pattern or `_`", token.loc)
         self.expect("=>", "'=>' after a pattern")
-        return Arm(token.loc, variant, bindings, self.block())
+        return Arm(token.loc, variant, bindings, self.block(), instance=instance)
 
     def if_statement(self) -> If:
         start = self.expect("IF")
@@ -486,7 +587,7 @@ class Parser:
         return self.postfix()
 
     def postfix(self) -> Expr:
-        """`primary` followed by any number of `.field` reads."""
+        """`primary`, then any number of `.field` reads, then an optional `?`."""
         expr = self.primary()
         while self.at("."):
             dot = self.current
@@ -494,6 +595,11 @@ class Parser:
             self.i += 1
             field = self.expect("IDENT", "a field name after '.'")
             expr = Member(dot.loc, expr, str(field.value), field.loc)
+        if self.at("?"):
+            mark = self.current
+            self.require_edition(mark.loc, "the `?` operator")
+            self.i += 1
+            expr = Try(mark.loc, expr)
         return expr
 
     def arguments(self) -> tuple[list[tuple[str, Expr]] | None, list[Expr]]:
@@ -567,6 +673,21 @@ class Parser:
             finally:
                 self.leave()
             return ArrayLiteral(token.loc, items)
+        if self.at("IDENT") and self.edition >= STRUCT_EDITION:
+            instance = self.instantiation()
+            if instance is not None:
+                base = instance.split("(", 1)[0]
+                self.expect("::")
+                variant = self.expect("IDENT", "a variant name after '::'")
+                args: list[Expr] = []
+                if self.take("("):
+                    while not self.at(")"):
+                        args.append(self.expression())
+                        if not self.take(","):
+                            break
+                    self.expect(")")
+                return VariantValue(token.loc, base, str(variant.value), args,
+                                    token.loc, variant.loc, instance=instance)
         if self.take("IDENT"):
             name = str(token.value)
             if self.take("::"):
@@ -605,6 +726,25 @@ class Parser:
                 return Index(token.loc, Variable(token.loc, name), index)
             if self.take("("):
                 fields, args = self.arguments()
+                if self.at("::"):
+                    # `Option(1, 2)::Some(1)` or `P(i64)::Some(1)`: the type
+                    # arguments were not types, so the lookahead declined and the
+                    # call was parsed as a call. Say what is actually wrong.
+                    if name in GENERIC_PRELUDE:
+                        count = GENERIC_PRELUDE[name]
+                        raise make(
+                            "E0415",
+                            f"{name} takes {count} type argument"
+                            f"{'s' if count != 1 else ''}, and they must be types",
+                            token.loc, token.loc.advance(name),
+                            hint=f"write {name}(i64" + (", str)" if count == 2 else ")"),
+                        )
+                    raise make(
+                        "E0414",
+                        f"{name!r} cannot take type arguments",
+                        token.loc, token.loc.advance(name),
+                        hint="edition 2 parameterises only Option and Result",
+                    )
                 if fields is not None:
                     return StructLiteral(token.loc, name, fields)
                 return Call(token.loc, name, args)

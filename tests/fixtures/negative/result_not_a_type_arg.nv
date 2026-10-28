@@ -1,0 +1,5 @@
+edition 2;
+
+fn main() {
+    let x = Option(1, 2)::Some(1)
+}

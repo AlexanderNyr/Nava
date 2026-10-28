@@ -427,6 +427,25 @@ REGISTERED_TESTS = {
         "test_strict_mode_fails_when_namespaces_are_missing",
         "test_the_ok_line_names_the_isolation_backend",
     },
+    # --- N10c: Option, Result and ? ------------------------------------------
+    "ResultFrontendTests": {
+        "test_a_pattern_must_name_the_same_instantiation",
+        "test_a_wrong_number_of_type_arguments_is_rejected",
+        "test_an_option_propagates_without_a_failure_type",
+        "test_an_unknown_type_argument_is_rejected",
+        "test_only_the_prelude_takes_type_arguments",
+        "test_propagation_rules",
+        "test_the_prelude_enum_takes_its_arguments_in_parentheses",
+        "test_the_prelude_enums_are_ordinary_enums",
+        "test_the_success_type_may_differ_from_the_callers",
+    },
+    "ResultRuntimeTests": {
+        "test_a_chain_stops_at_the_first_failure",
+        "test_a_failure_returns_early_and_reaches_the_caller",
+        "test_a_none_propagates_like_an_error",
+        "test_the_success_value_is_bound_with_its_own_type",
+        "test_two_instances_of_one_prelude_enum_coexist",
+    },
     # --- N10b: enums and match -----------------------------------------------
     "EnumFrontendTests": {
         "test_a_match_that_does_not_return_everywhere_still_needs_a_return",
@@ -610,8 +629,8 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 107,
-    "tests/fixtures/positive": 23,
+    "tests/fixtures/negative": 115,
+    "tests/fixtures/positive": 25,
     "tests/fixtures/warnings": 2,
 }
 
@@ -680,6 +699,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_plan  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_release  # noqa: PLC0415
+    import test_results  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
     import test_structs  # noqa: PLC0415
@@ -690,7 +710,7 @@ def discovered_tests() -> dict[str, set[str]]:
     for module in (test_ab, test_arrays, test_control, test_enums, test_files,
                    test_float, test_grammar, test_guides, test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
-                   test_sandbox, test_spec, test_structs, test_stdlib, test_study):
+                   test_results, test_sandbox, test_spec, test_structs, test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

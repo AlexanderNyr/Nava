@@ -18,7 +18,7 @@ KEYWORDS = {
     "struct": "STRUCT", "edition": "EDITION", "enum": "ENUM", "match": "MATCH",
 }
 TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", "..", "::", "=>"}
-ONE_CHAR = set("(){}[],:+-*/%=!<>;.")
+ONE_CHAR = set("(){}[],:+-*/%=!<>;.?")
 #: Decimal floating-point literal: the integer part may not use underscores, so
 #: `1_0.5` is a malformed token rather than a silently different number.
 FLOAT_RE = re.compile(r"[0-9][0-9]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")

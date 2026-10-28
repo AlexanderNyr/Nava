@@ -1,0 +1,9 @@
+edition 2;
+
+struct P {
+    x: i64
+}
+
+fn main() {
+    let p = P(i64)::Some(1)
+}

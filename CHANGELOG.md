@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+N10c: `Option`, `Result` and `?` — the first construct in the language whose
+meaning is a control-flow promise, so the promise is the thing that is tested.
+
+- `Option(T)` (`Some(T)`, `None`) and `Result(T, E)` (`Ok(T)`, `Err(E)`) exist in
+  edition 2 without a declaration. Type arguments are written in parentheses —
+  `Option(i64)`, `Result(i64, str)` — never in angle brackets, because `<` is a
+  comparison operator and `Option<i64>` would make the two readings depend on
+  lookahead. Wrong arity is `E0412`, a value where a type belongs is `E0415`, and
+  a user type with type arguments is `E0414`.
+- An instantiation is an ordinary enum: values are built as
+  `Result(i64, str)::Ok(3)`, patterns name the same instantiation, and
+  exhaustiveness, duplicate arms and `_` work as in N10b.
+- `?` is allowed in exactly one place: the initializer of a `let`, inside a
+  function that returns the same enum. A failure is forwarded unchanged — the
+  failure type must be identical (`E0411`), the success type may differ and is
+  what the binding holds. `?` on a non-`Option`/`Result` is `E0410`; `?` outside
+  a `let` initializer is `E0413`.
+- Not in this increment: `match` as an expression, guards, generic declarations
+  of the user's own, `Vec`/`HashMap`, owned payloads (`str` and array payloads
+  stay refused until N11), and any conversion between failure types.
+- Guide, grammar artefact and measurements moved with the language: new guide
+  section, canonical `results.nv` example, re-pinned digest, overhead re-measured
+  rather than estimated.
+
 N10b: enums and `match` — the part of edition 2 that makes a value's shape
 checkable instead of conventional.
 

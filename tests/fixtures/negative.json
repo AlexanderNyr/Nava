@@ -963,6 +963,78 @@
       "end_column": 20,
       "message": "Shape::Rect carries 2 fields, the pattern binds 1",
       "hint": "bind every field, positionally"
+    },
+    {
+      "file": "result_wrong_arity.nv",
+      "code": "E0412",
+      "line": 4,
+      "column": 13,
+      "end_column": 19,
+      "message": "Result takes 2 type arguments, got 1",
+      "hint": null
+    },
+    {
+      "file": "result_not_a_type_arg.nv",
+      "code": "E0415",
+      "line": 4,
+      "column": 13,
+      "end_column": 19,
+      "message": "Option takes 1 type argument, and they must be types",
+      "hint": "write Option(i64)"
+    },
+    {
+      "file": "generic_user_type.nv",
+      "code": "E0414",
+      "line": 8,
+      "column": 13,
+      "end_column": 14,
+      "message": "'P' cannot take type arguments",
+      "hint": "edition 2 parameterises only Option and Result"
+    },
+    {
+      "file": "propagate_not_option.nv",
+      "code": "E0410",
+      "line": 4,
+      "column": 14,
+      "end_column": 15,
+      "message": "`?` expects an Option or a Result, got i64",
+      "hint": "`?` forwards the failure variant of Option(T) or Result(T, E)"
+    },
+    {
+      "file": "propagate_in_void.nv",
+      "code": "E0411",
+      "line": 8,
+      "column": 16,
+      "end_column": 17,
+      "message": "`?` cannot propagate into this function, which returns void",
+      "hint": "the enclosing function must return Result with the same failure type"
+    },
+    {
+      "file": "propagate_failure_mismatch.nv",
+      "code": "E0411",
+      "line": 8,
+      "column": 16,
+      "end_column": 17,
+      "message": "`?` forwards i64, but this function fails with str",
+      "hint": "a failure is forwarded unchanged; convert it before forwarding"
+    },
+    {
+      "file": "propagate_outside_let.nv",
+      "code": "E0413",
+      "line": 8,
+      "column": 14,
+      "end_column": 15,
+      "message": "`?` is only allowed in a `let` initializer",
+      "hint": "write `let value = call()?`; the early return has to be a statement"
+    },
+    {
+      "file": "propagate_pattern_mismatch.nv",
+      "code": "E0395",
+      "line": 6,
+      "column": 9,
+      "end_column": 15,
+      "message": "this arm matches Result(bool, str), but the value is Result(i64, str)",
+      "hint": "instantiate the pattern with the same type arguments as the value"
     }
   ]
 }

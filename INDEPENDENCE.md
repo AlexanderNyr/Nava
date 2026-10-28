@@ -4,8 +4,9 @@ This is the plan for the two claims `PLAN.md` does not make: that Nava is a
 language in its own right, and that its toolchain stands on its own — no Python,
 no C compiler, no libc.
 
-**Status: N10 in progress — N10a (editions and structs) and N10b (enums and
-`match`) delivered; N10c–N10e and N11–N18 specified, not started.** The
+**Status: N10 in progress — N10a (editions and structs), N10b (enums and
+`match`) and N10c (`Option`/`Result` and `?`) delivered; N10d–N10e and N11–N18
+specified, not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -41,25 +42,25 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 5 395 lines,
-13 modules and 174 functions under `nava_lang/`, which is the program Nava must be able to
+The requirement list below is not a wish list: it is an audit of the 5 783 lines,
+13 modules and 184 functions under `nava_lang/`, which is the program Nava must be able to
 express. Counts are of AST nodes in the current tree, re-measured at the last delivery
-(N10b); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
+(N10c); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
 `tests/test_plan.py` recomputes the size and function count so this paragraph
 cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
-| `class` (AST nodes, diagnostics, module records, type descriptors) | 53 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 208 / 47 | `Result<T, E>` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 54 / 30 | `HashMap<K, V>` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort` | 84 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| `class` (AST nodes, diagnostics, module records, type descriptors) | 54 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
+| `raise` / `try` | 222 / 48 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 58 / 32 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort` | 91 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
 | set literal, `.add` | 11 / 7 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 292 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 70 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 17 | slice values `[T]` with bounds checks | N10 |
+| f-strings and `str.format` | 314 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 85 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 19 | slice values `[T]` with bounds checks | N10 |
 | `sorted(..., key=...)` | 3 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 36 / 20 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| generator expressions, list/set comprehensions | 38 / 21 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 1 | function pointers | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
 | generators, `await`, threads, metaclasses, dynamic attribute lookup | 0 | nothing; Nava is not asked to acquire them | — |
@@ -120,7 +121,7 @@ the guard, and the two implementations must agree on every entry.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a and N10b delivered, N10c–N10e open |
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a, N10b and N10c delivered, N10d–N10e open |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
@@ -186,8 +187,8 @@ when the whole gate has run.
 |---|---|---|
 | N10a | `edition 2;`, `struct`, named construction, field read and write, copy semantics | **Delivered** (record below) |
 | N10b | `enum` with data-carrying variants, `match`, exhaustiveness | **Delivered** (record below) |
-| N10c | `Option<T>`, `Result<T, E>`, `?` | Open |
-| N10d | Slices `[T]` and range slicing, arrays of structs | Open |
+| N10c | `Option(T)`, `Result(T, E)`, `?` | **Delivered** (record below) |
+| N10d | Slices `[T]` and range slicing, arrays of structs | Open (next) |
 | N10e | Monomorphised generics, function pointers, `defer`, labelled loops, `pub` | Open |
 
 #### Delivery record N10a (2026-10-28)
@@ -227,6 +228,38 @@ Negative controls: eleven new fixtures cover every new code, and each asserts th
 code, the location and the message. The one that matters for the language claim
 is `match_not_exhaustive.nv`: adding a variant to an enum breaks every `match`
 that does not cover it, at compile time, with the variant named.
+
+#### Delivery record N10c (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A failure is forwarded, never converted | `tests/test_results.py`: `test_propagation_rules` | `1?` is `E0410`; `?` in a `fn main()` is `E0411` and the message says the function returns void; `Result(bool, i64)` propagating into a function that fails with `str` is `E0411` `forwards i64, but this function fails with str` |
+| A failure really returns early | `ResultRuntimeTests.test_a_failure_returns_early_and_reaches_the_caller`, `test_a_chain_stops_at_the_first_failure` | A `print` after `?` does not run on the failure path (`8` and the forwarded message `not positive`, no `1000`); a two-step chain stops inside the second `?` — the program prints `1 2 3 3 1 2 too big`, so `3` never ran |
+| The success type may differ | `test_the_success_type_may_differ_from_the_callers`, `test_the_success_value_is_bound_with_its_own_type` | `Result(bool, str)` inside `Result(i64, str)`: compiles, `flag` is a `bool`, and the program prints `1` then `0` |
+| `None` is a failure like any other | `test_an_option_propagates_without_a_failure_type`, `test_a_none_propagates_like_an_error` | `Option(bool)` propagates into `Option(i64)` (there is no failure type to compare) and the run prints `10` then `-1` |
+| The prelude enums are ordinary enums | `test_the_prelude_enums_are_ordinary_enums` | Printing one is `E0323`; a missing arm is `E0396` `match on Result(i64, str) does not cover Result(i64, str)::Err` — the message names the instantiation, not the bare enum |
+| Instantiations are distinct types | `test_two_instances_of_one_prelude_enum_coexist`, `test_a_pattern_must_name_the_same_instantiation` | `Result(i64, str)` and `Result(str, str)` in one module compile and print `3` and `hi`; a pattern naming another instantiation is `E0395` `the value is Result(i64, str)` |
+| The shape rules are syntax, the type rules are semantics | `tests/test_grammar.py` `GRAMMAR_ACCEPTS` | `E0412` (arity) and `E0415` (a value as a type argument) accept at the grammar level and are rejected by the parser's symbol pass; `E0413`/`E0414` stay classified with the other semantic codes, so the corpus conformance test still proves the two layers agree |
+| The specification moved with the code | `LANGUAGE.md` edition-2 section "`Option`, `Result` and `?`" | The three `?` rules, the parenthesised type arguments and the non-goals are normative; six new diagnostic rows (`E0410`–`E0415`) are documented, and `tests/test_spec.py` fails if a registered code has no row |
+| The guide and its measurements moved | `guides/nava-1.md` (digest `84eb3c87…`, 8 238 bytes), `guides/examples/results.nv`, `eval/measurements/overhead-*.json` | New canonical example compiled and run (`8` and `not positive`); overhead re-measured with `tiktoken`, not estimated: `cl100k_base` 2 561 and `o200k_base` 2 567 prompt tokens for the `gcd` task; `guides/examples.json` gained the `results` case |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m unittest discover -s tests -q` | registry `OK: 413 registered tests, 11 tasks with 76 cases, 150 spec fixtures, 121 diagnostic codes`; suite **483 tests OK**; on a host without namespaces the isolation check reports `rlimits` and fails honestly rather than skipping |
+
+Negative controls: eight new fixtures — `E0410` (`propagate_not_option.nv`),
+`E0411` twice (`propagate_in_void.nv`, `propagate_failure_mismatch.nv`), `E0412`
+(`result_wrong_arity.nv`), `E0413` (`propagate_outside_let.nv`), `E0414`
+(`generic_user_type.nv`), `E0415` (`result_not_a_type_arg.nv`) and a mismatched
+pattern instantiation (`propagate_pattern_mismatch.nv`, `E0395`) — each fails with exactly
+its own code, location and message. The one that carries the language claim is
+`propagate_failure_mismatch.nv`: a `Result` whose failure type differs is
+rejected at compile time, so the caller can never receive an error it did not
+declare.
+
+Deliberately not done in N10c: `match` as an expression, guards, generic
+declarations of the user's own (`Option`/`Result` are two fixed templates, not a
+generic facility), `Vec`/`HashMap`, chained `?` inside a larger expression, any
+conversion between failure types, and owned payloads — `str` and array payloads
+remain refused until N11 gives them an ownership story. Those are N10d, N10e and
+later.
 
 Deliberately not done in N10b: `match` as an expression, guards, literal and
 range patterns, matching on `i64` or `str`, `Option`/`Result`, `?`, and generic

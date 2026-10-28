@@ -192,9 +192,25 @@ class VariantValue(Expr):
     args: list[Expr]
     enum_loc: Location | None = None
     variant_loc: Location | None = None
+    #: The written type when the enum takes type arguments, e.g. `Result(i64, str)`.
+    #: None for a plain enum, whose type is just `enum`.
+    instance: str | None = None
     #: Declared enum and variant, filled in by the checker.
     declared: "EnumDecl | None" = field(default=None, init=False)
     choice: "Variant | None" = field(default=None, init=False)
+
+
+@record()
+class Try(Expr):
+    """`f()?`: propagate the failure variant of an `Option` or a `Result`.
+
+    Only a `let` initializer may apply it, and only inside a function whose
+    return type is the same enum with the same failure type. Making it a
+    statement-level rule keeps the generated code a straight line: a test, an
+    early return, and the success value bound to the new local.
+    """
+
+    inner: Expr
 
 
 @record()
@@ -272,6 +288,8 @@ class Arm:
     variant: str | None
     bindings: list[str]
     body: list[Stmt]
+    #: The instantiated enum the pattern names, e.g. `Result(i64, str)`.
+    instance: str | None = None
     #: The declared variant and its binding symbols, filled in by the checker.
     choice: "Variant | None" = field(default=None, init=False)
     symbols: list = field(default_factory=list, init=False)
@@ -283,18 +301,22 @@ class Variant:
 
     name: str
     types: list[str]
-    loc: Location
+    loc: Location | None = None
     #: Position in the declaration; this is the tag the generated code tests.
     tag: int = 0
 
 
 @record()
 class EnumDecl:
-    """`enum Shape { Dot, Circle(i64) }` — edition 2."""
+    """`enum Shape { Dot, Circle(i64) }` — edition 2.
+
+    A prelude instantiation such as `Result(i64, str)` is also an `EnumDecl`,
+    built by the checker on demand: `loc` is None for those.
+    """
 
     name: str
     variants: list[Variant]
-    loc: Location
+    loc: Location | None = None
     module: str = ""
     cname: str = field(default="", init=False)
 
@@ -429,5 +451,8 @@ class Program:
     structs: list["Struct"] = field(default_factory=list)
     #: Every enum declaration in the translation unit, in source order.
     enums: list["EnumDecl"] = field(default_factory=list)
+    #: Prelude instantiations the program uses, keyed by their written type
+    #: (`Result(i64, str)`); filled in by the checker.
+    instances: dict[str, "EnumDecl"] = field(default_factory=dict)
     #: The language edition the entry file declares; 1 when it declares none.
     edition: int = 1

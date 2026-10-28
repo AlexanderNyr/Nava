@@ -1,0 +1,5 @@
+edition 2;
+
+fn main() {
+    let x = Result(i64)::Ok(1)
+}

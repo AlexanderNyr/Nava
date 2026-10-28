@@ -1,0 +1,14 @@
+edition 2;
+
+fn f() -> Result(i64, str) {
+    return Result(i64, str)::Ok(1)
+}
+
+fn g() -> Result(i64, str) {
+    print(f()?)
+    return Result(i64, str)::Ok(0)
+}
+
+fn main() {
+    print(1)
+}

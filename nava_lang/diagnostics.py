@@ -139,6 +139,13 @@ CODES: dict[str, tuple[str, str]] = {
     "E0397": (Severity.ERROR, "duplicate match arm"),
     "E0398": (Severity.ERROR, "unreachable match arm"),
     "E0399": (Severity.ERROR, "unsupported enum variant field type"),
+
+    "E0410": (Severity.ERROR, "`?` expects an Option or a Result"),
+    "E0411": (Severity.ERROR, "`?` cannot propagate into this function's return type"),
+    "E0412": (Severity.ERROR, "wrong number of type arguments"),
+    "E0413": (Severity.ERROR, "`?` is only allowed in a `let` initializer"),
+    "E0414": (Severity.ERROR, "a user type cannot take type arguments yet"),
+    "E0415": (Severity.ERROR, "a type argument is not a type"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

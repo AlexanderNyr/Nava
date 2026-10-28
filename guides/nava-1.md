@@ -202,6 +202,39 @@ binding is a copy of the field. A `match` that misses a variant does not
 compile. There is no `match` expression, no `Option`/`Result`, no guards and no
 matching on `i64` values.
 
+## Edition 2: `Option`, `Result` and `?`
+
+`Option(T)` (`Some(T)`, `None`) and `Result(T, E)` (`Ok(T)`, `Err(E)`) are part of
+edition 2 without a declaration. Write the type arguments in parentheses, never
+in angle brackets: `Option(i64)`, `Result(i64, str)`.
+
+```nava
+edition 2;
+
+fn parse_positive(n: i64) -> Result(i64, str) {
+    if n > 0 { return Result(i64, str)::Ok(n) }
+    return Result(i64, str)::Err("not positive")
+}
+
+fn doubled(n: i64) -> Result(i64, str) {
+    let value = parse_positive(n)?      # on Err the failure is returned now
+    return Result(i64, str)::Ok(value * 2)
+}
+
+fn main() {
+    match doubled(4) {
+        Result(i64, str)::Ok(v) => { print(v) }
+        Result(i64, str)::Err(e) => { print(e) }
+    }
+}
+```
+
+`?` is allowed in exactly one place: the initializer of a `let`, inside a
+function that returns the same enum with the same failure type. The success type
+may differ — `let flag = check()?` where `check()` returns `Result(bool, str)`
+and the caller returns `Result(i64, str)` is fine. A failure is forwarded
+unchanged, never converted, and the rest of the function does not run.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -220,3 +253,6 @@ matching on `i64` values.
    not the struct itself.
 10. A `match` covers every variant of the enum or adds a final `_` arm; a
     variant is written `Enum::Variant`, never bare.
+11. `?` goes after a call inside a `let`, and only when the function returns the
+    same `Result`/`Option`; type arguments are written `Option(i64)`, never
+    `Option<i64>`.

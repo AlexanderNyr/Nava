@@ -72,6 +72,13 @@
       "stdin": "",
       "stdout": "36\n",
       "shows": "edition 2, enum declaration, variant construction and an exhaustive match"
+    },
+    {
+      "id": "results",
+      "entry": "results.nv",
+      "stdin": "",
+      "stdout": "8\nnot positive\n",
+      "shows": "Option/Result with type arguments and `?` propagation"
     }
   ]
 }
