@@ -287,6 +287,18 @@ class IndexAssign(Stmt):
 
 
 @record()
+class Defer(Stmt):
+    """`defer { ... }`: a block that runs when the enclosing block is left.
+
+    It runs on the normal path, on `return`, and on a `break`/`continue` that
+    exits the block, and it runs before the block releases its arrays, so a
+    deferred block can still use them.
+    """
+
+    body: list[Stmt]
+
+
+@record()
 class Match(Stmt):
     """`match value { Enum::Variant(a) => { ... } _ => { ... } }` (edition 2)."""
 
@@ -367,6 +379,8 @@ class If(Stmt):
 class While(Stmt):
     condition: Expr
     body: list[Stmt]
+    #: The name written before the loop (`outer: while ...`), or None.
+    label: str | None = None
 
 
 @record()
@@ -381,17 +395,21 @@ class For(Stmt):
     iterable: Expr
     body: list[Stmt]
     name_loc: Location | None = None
+    #: The name written before the loop (`outer: for ...`), or None.
+    label: str | None = None
     symbol: Symbol | None = field(default=None, init=False)
 
 
 @record()
 class Break(Stmt):
-    pass
+    #: The loop label this `break` leaves, or None for the innermost loop.
+    label: str | None = None
 
 
 @record()
 class Continue(Stmt):
-    pass
+    #: The loop label this `continue` restarts, or None for the innermost loop.
+    label: str | None = None
 
 
 @record()
@@ -446,6 +464,9 @@ class Function:
     #: The module this function belongs to; "" is the entry file.
     module: str = ""
     cname: str = field(default="", init=False)
+    #: True when the declaration says `pub` (edition 2): only such a function is
+    #: callable from another module.
+    public: bool = False
 
     @property
     def qualified(self) -> str:
@@ -473,3 +494,6 @@ class Program:
     instances: dict[str, "EnumDecl"] = field(default_factory=dict)
     #: The language edition the entry file declares; 1 when it declares none.
     edition: int = 1
+    #: Module name -> the edition its file declares. A module that does not
+    #: declare edition 2 exports every function, as it always did.
+    module_editions: dict[str, int] = field(default_factory=dict)

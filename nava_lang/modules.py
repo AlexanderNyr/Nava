@@ -170,6 +170,7 @@ def load(entry: Path, root: Optional[Path] = None,
 
     programs: dict[str, Program] = {}
     sources: dict[str, str] = {}
+    editions: dict[str, int] = {}
     imports_by_module: dict[str, list[Import]] = {}
     order: list[str] = []
     stack: list[str] = []
@@ -210,6 +211,7 @@ def load(entry: Path, root: Optional[Path] = None,
             check_exported(name, program, path)
         if is_standard:
             check_version(name, program, stdlib_root)
+        editions[name] = getattr(program, "edition", 1)
         programs[name] = program
         sources[name] = str(path)
         imports_by_module[name] = list(program.imports)
@@ -229,6 +231,8 @@ def load(entry: Path, root: Optional[Path] = None,
     for name in order:
         functions.extend(programs[name].functions)
     merged = Program(functions)
+    merged.module_editions = editions
+    merged.edition = editions.get(ENTRY_MODULE, 1)
     merged.imports = list(imports_by_module.get(ENTRY_MODULE, []))
     merged.imports_by_module = imports_by_module
     merged.sources = sources

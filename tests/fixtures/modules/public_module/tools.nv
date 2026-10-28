@@ -1,0 +1,13 @@
+edition 2;
+
+pub fn double(n: i64) -> i64 {
+    return n * 2
+}
+
+fn step(n: i64) -> i64 {
+    return n + 1
+}
+
+pub fn visible(n: i64) -> i64 {
+    return step(n)
+}

@@ -151,6 +151,11 @@ CODES: dict[str, tuple[str, str]] = {
     "E0422": (Severity.ERROR, "a slice is a read-only view"),
     "E0423": (Severity.ERROR, "a slice cannot be passed as a `mut` parameter"),
     "E0424": (Severity.ERROR, "an array element type must be a scalar or a struct"),
+    "E0430": (Severity.ERROR, "a deferred block cannot leave the function"),
+    "E0431": (Severity.ERROR, "no loop carries this label"),
+    "E0432": (Severity.ERROR, "a label must name the loop it is written on"),
+    "E0433": (Severity.ERROR, "the function is not public"),
+    "E0434": (Severity.ERROR, "only a function can be `pub` yet"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

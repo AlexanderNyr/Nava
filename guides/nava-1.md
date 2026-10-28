@@ -276,6 +276,54 @@ An element is a value: `let p = points[0]` copies it, and `points[i] = p`
 replaces the whole element. To change one field, copy the element, change the
 copy and write it back with `points[i] = p`.
 
+## Edition 2: `defer`, labelled loops and `pub`
+
+`defer { ... }` runs when the enclosing block is left — on the normal path, on
+`return`, and on a `break` or `continue` that leaves the block. Two `defer`s in
+one block run last-first, a deferred block runs before the block releases its
+arrays, it sees the variables as they are when it runs, and it cannot leave
+itself: `return`, `break`, `continue` and `?` inside one are `E0430`.
+
+A loop may carry a label and a jump may name it: `break outer` leaves every loop
+between the jump and `outer`, and `continue outer` restarts it (running its
+increment). A label on anything that is not a loop is `E0432`; a jump naming a
+loop that is not enclosing is `E0431`.
+
+`pub fn` makes a function of a module callable from another module. A module
+that declares `edition 2;` exports only its `pub` functions (`E0433` otherwise);
+a module that does not declare edition 2 still exports everything.
+
+```nava
+edition 2;
+
+fn find(values: [i64], target: i64) -> i64 {
+    let found = 0 - 1
+    outer: for i in 0..3 {
+        for j in 0..3 {
+            if values[j] == target {
+                found = i * 3 + j
+                break outer
+            }
+        }
+    }
+    return found
+}
+
+fn main() {
+    let values: [i64] = [4, 5, 6]
+    defer { print(0 - 1) }
+    print(find(values, 5))
+    let i = 0
+    while i < 2 {
+        defer { print(100 + i) }
+        print(i)
+        i = i + 1
+    }
+}
+```
+
+Output: `1`, `0`, `101`, `1`, `102`, `-1`.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -299,3 +347,5 @@ copy and write it back with `points[i] = p`.
     `Option<i64>`.
 12. A slice `a[i..j]` is read-only and borrowed: bind it with `let`, pass it to a
     `[T]` parameter, never write through it and never hand it to `mut [T]`.
+13. `defer` takes a block, never a bare statement, and nothing inside it may
+    leave the block (`return`, `break`, `continue`, `?` are all `E0430`).

@@ -1,0 +1,27 @@
+edition 2;
+
+fn find(values: [i64], target: i64) -> i64 {
+    let found = 0 - 1
+    outer: for i in 0..3 {
+        for j in 0..3 {
+            if i * 3 + j > 6 { break outer }
+            if values[j] == target {
+                found = i * 3 + j
+                break outer
+            }
+        }
+    }
+    return found
+}
+
+fn main() {
+    let values: [i64] = [4, 5, 6]
+    defer { print(0 - 1) }
+    print(find(values, 5))
+    let i = 0
+    while i < 2 {
+        defer { print(100 + i) }
+        print(i)
+        i = i + 1
+    }
+}

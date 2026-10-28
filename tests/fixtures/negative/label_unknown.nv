@@ -1,0 +1,8 @@
+edition 2;
+
+fn main() {
+    outer: for i in 0..3 {
+        if i == 1 { break middle }
+        print(i)
+    }
+}

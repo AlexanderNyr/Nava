@@ -165,6 +165,12 @@
       "stdout": "2\n20\n30\n30\n1\n9\nb\n",
       "stdin": "",
       "exit_code": 0
+    },
+    {
+      "file": "defer_labels.nv",
+      "stdout": "-1\n1\n1\n0\n101\n1\n102\n",
+      "stdin": "",
+      "exit_code": 0
     }
   ]
 }

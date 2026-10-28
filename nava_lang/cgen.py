@@ -4,7 +4,7 @@ import os
 
 from . import limits, runtime
 from .model import (
-    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
+    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer, Expr, ExprStmt,
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
     Number, Program, Range, Return, Slice, String, StructLiteral, Try, Unary,
     Variable, VariantValue, While,
@@ -663,7 +663,12 @@ class CGenerator:
         #: Owned-frame index of each open loop body, innermost last. `break` and
         #: `continue` jump out of that frame, so its arrays must be released
         #: explicitly before the jump.
-        self.loops: list[int] = []
+        self.loops: list[dict] = []
+        #: Deferred blocks per open block, parallel to `self.owned`. Each frame
+        #: holds the bodies in declaration order; they run in reverse.
+        self.defers: list[list[list]] = []
+        #: Counter for the C labels a labelled loop needs.
+        self.label_index = 0
         #: Declared structs by name; the C type of one is its `cname`.
         self.structs: dict[str, object] = {struct.name: struct for struct in program.structs}
         #: Declared enums by name; a variant value is a compound literal of one.
@@ -898,9 +903,11 @@ class CGenerator:
             self.line(self.signature(function) + " {")
             self.indent += 1
             self.owned = [[]]
+            self.defers = [[]]
             self.statements(function.body)
             self.release(0)
             self.owned = []
+            self.defers = []
             self.indent -= 1
             self.line("}")
             self.line()
@@ -935,11 +942,22 @@ class CGenerator:
         text = text.replace("/* NV_CAPABILITIES */", capability_block(self.capabilities))
         return text + "\n" + body
 
+    def frame_exit(self, frame: int) -> None:
+        """Leave one block: run its deferred bodies, then release its arrays.
+
+        The order is the documented one: a deferred block can still read an
+        array the block declared, and the release happens after it. Bodies run
+        last-first, which is what makes two `defer`s nest like scopes.
+        """
+        for body in reversed(self.defers[frame]):
+            self.block(body)
+        for cname, typ in reversed(self.owned[frame]):
+            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+
     def release(self, since: int = 0) -> None:
-        """Emit one `free` per owned array, innermost block and binding last-first."""
-        for frame in reversed(self.owned[since:]):
-            for cname, typ in reversed(frame):
-                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+        """Leave every block from the innermost down to `since`."""
+        for index in range(len(self.owned) - 1, since - 1, -1):
+            self.frame_exit(index)
 
     def release_temporaries(self) -> None:
         for cname, typ in reversed(self.temporaries):
@@ -964,32 +982,51 @@ class CGenerator:
         return f"nv_arr_{array_tag(expr.typ)}_new({length})"
 
     def block(self, statements) -> None:
-        """A nested block owns the arrays declared directly in it."""
+        """A nested block owns the arrays and the `defer`s declared directly in it."""
         self.owned.append([])
+        self.defers.append([])
         self.statements(statements)
-        for cname, typ in reversed(self.owned[-1]):
-            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+        self.frame_exit(len(self.owned) - 1)
         self.owned.pop()
+        self.defers.pop()
 
-    def loop_body(self, statements) -> None:
-        """A loop body is a block whose frame `break` and `continue` must free."""
+    def loop_body(self, statements, label=None) -> dict:
+        """A loop body is a block whose frame `break` and `continue` must leave."""
         self.owned.append([])
-        self.loops.append(len(self.owned) - 1)
+        self.defers.append([])
+        if label is None:
+            record = {"frame": len(self.owned) - 1, "name": None,
+                      "continue": None, "break": None}
+        else:
+            self.label_index += 1
+            record = {"frame": len(self.owned) - 1, "name": label,
+                      "continue": f"nv_continue_{label}_{self.label_index}",
+                      "break": f"nv_break_{label}_{self.label_index}"}
+        self.loops.append(record)
         try:
             self.statements(statements)
-            for cname, typ in reversed(self.owned[-1]):
-                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+            self.frame_exit(len(self.owned) - 1)
         finally:
             self.loops.pop()
             self.owned.pop()
+            self.defers.pop()
+        return record
 
-    def release_to_loop(self) -> None:
-        """Release the arrays owned by the innermost loop body, before a jump."""
+    def release_to_loop(self, name: str | None = None) -> dict:
+        """Leave blocks, before a jump, down to the loop that is being left.
+
+        With a label, the search walks outwards until that loop is found (the
+        checker has already proved it exists); without one, the innermost loop
+        is the target, as it always was.
+        """
         self.release_temporaries()
-        depth = self.loops[-1]
-        for frame in reversed(self.owned[depth:]):
-            for cname, typ in reversed(frame):
-                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+        if name is None:
+            record = self.loops[-1]
+        else:
+            record = next(item for item in reversed(self.loops) if item["name"] == name)
+        for index in range(len(self.owned) - 1, record["frame"] - 1, -1):
+            self.frame_exit(index)
+        return record
 
     def statements(self, statements) -> None:
         for statement in statements:
@@ -1068,17 +1105,32 @@ class CGenerator:
                 self.release_temporaries()
                 self.temporaries = saved
                 self.line(f"if (!({condition})) break;")
-                self.loop_body(statement.body)
+                if statement.label is None:
+                    self.loop_body(statement.body)
+                else:
+                    # A labelled `while` needs a place for `continue` to land:
+                    # the end of the body, before the loop repeats.
+                    self.line("{")
+                    self.indent += 1
+                    record = self.loop_body(statement.body, label=statement.label)
+                    self.indent -= 1
+                    self.line("}")
+                    self.line(f"{record['continue']}: ;")
+                    self.line(f"{record['break']}: ;")
                 self.indent -= 1
                 self.line("}")
             elif isinstance(statement, For):
                 self.for_statement(statement)
+            elif isinstance(statement, Defer):
+                # The body is kept, not emitted: the frame that registered it
+                # runs it on every path out of the block.
+                self.defers[-1].append(statement.body)
             elif isinstance(statement, Break):
-                self.release_to_loop()
-                self.line("break;")
+                record = self.release_to_loop(statement.label)
+                self.line(f"goto {record['break']};" if record["break"] else "break;")
             elif isinstance(statement, Continue):
-                self.release_to_loop()
-                self.line("continue;")
+                record = self.release_to_loop(statement.label)
+                self.line(f"goto {record['continue']};" if record["continue"] else "continue;")
             else:
                 raise AssertionError(f"unknown statement: {type(statement)}")
 
@@ -1091,6 +1143,7 @@ class CGenerator:
         """
         iterable = statement.iterable
         symbol = statement.symbol
+        label = statement.label
         saved = self.temporaries
         self.temporaries = []
         try:
@@ -1100,31 +1153,79 @@ class CGenerator:
                 low_name = self.temp("i64", low)
                 high_name = self.temp("i64", high)
                 self.line(f"{self.ctype('i64')} {symbol.cname} = {low_name};")
-                self.line(f"for (; {symbol.cname} < {high_name}; "
-                          f"{symbol.cname} = nv_add({symbol.cname}, INT64_C(1))) {{")
-                self.indent += 1
-                self.loop_body(statement.body)
-                self.indent -= 1
-                self.line("}")
+                if label is None:
+                    self.line(f"for (; {symbol.cname} < {high_name}; "
+                              f"{symbol.cname} = nv_add({symbol.cname}, INT64_C(1))) {{")
+                    self.indent += 1
+                    self.loop_body(statement.body)
+                    self.indent -= 1
+                    self.line("}")
+                else:
+                    self.labelled_range_loop(statement, symbol, high_name)
             else:
                 # The iterable is materialised once: a slice in the header must
                 # not be rebuilt (and its bounds re-evaluated) on every turn.
                 source = self.temp(iterable.typ, self.expression(iterable))
                 end_name = self.temp("i64", f"({source}).len")
                 index_name = self.temp("i64", "INT64_C(0)")
-                tag = array_tag(iterable.typ)
-                self.line(f"for (; {index_name} < {end_name}; "
-                          f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
-                self.indent += 1
-                self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
-                          f"nv_arr_{tag}_get({source}, {index_name});")
-                self.loop_body(statement.body)
-                self.indent -= 1
-                self.line("}")
+                if label is None:
+                    tag = array_tag(iterable.typ)
+                    self.line(f"for (; {index_name} < {end_name}; "
+                              f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
+                    self.indent += 1
+                    self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
+                              f"nv_arr_{tag}_get({source}, {index_name});")
+                    self.loop_body(statement.body)
+                    self.indent -= 1
+                    self.line("}")
+                else:
+                    self.labelled_element_loop(statement, symbol, source, end_name, index_name)
         finally:
             # Arrays that the iterable expression created stay alive for the
             # whole loop and are released with the statement.
             self.temporaries = saved + self.temporaries
+
+    def labelled_range_loop(self, statement: For, symbol, high_name: str) -> None:
+        """A range loop written with a label, emitted so a jump can reach it.
+
+        `continue` has to run the increment, so the increment is a statement
+        before the label that every labelled jump targets — a C `for` header
+        cannot be jumped into, and a `continue` in a labelled loop is emitted as
+        `goto` to exactly that point.
+        """
+        self.line("for (;;) {")
+        self.indent += 1
+        self.line(f"if (!({symbol.cname} < {high_name})) break;")
+        self.line("{")
+        self.indent += 1
+        record = self.loop_body(statement.body, label=statement.label)
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['continue']}: ;")
+        self.line(f"{symbol.cname} = nv_add({symbol.cname}, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['break']}: ;")
+
+    def labelled_element_loop(self, statement: For, symbol, source: str,
+                             end_name: str, index_name: str) -> None:
+        """An element loop written with a label; the index step is a statement."""
+        tag = array_tag(statement.iterable.typ)
+        self.line("for (;;) {")
+        self.indent += 1
+        self.line(f"if (!({index_name} < {end_name})) break;")
+        self.line("{")
+        self.indent += 1
+        self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
+                  f"nv_arr_{tag}_get({source}, {index_name});")
+        record = self.loop_body(statement.body, label=statement.label)
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['continue']}: ;")
+        self.line(f"{index_name} = nv_add({index_name}, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['break']}: ;")
 
     def propagate_let(self, statement: Let) -> None:
         """`let x = call()?`: test the failure tag, return it, bind the payload.

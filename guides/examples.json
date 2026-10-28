@@ -86,6 +86,13 @@
       "stdin": "",
       "stdout": "10\n4\n1\n1\n2\n30\n",
       "shows": "arrays of structs and read-only range slices"
+    },
+    {
+      "id": "control2",
+      "entry": "control2.nv",
+      "stdin": "",
+      "stdout": "1\n0\n101\n1\n102\n-1\n",
+      "shows": "`defer` blocks and a labelled break out of nested loops"
     }
   ]
 }

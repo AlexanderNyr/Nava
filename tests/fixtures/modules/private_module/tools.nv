@@ -1,0 +1,5 @@
+edition 2;
+
+fn hidden(n: i64) -> i64 {
+    return n + 1
+}

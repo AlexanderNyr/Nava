@@ -427,6 +427,36 @@ REGISTERED_TESTS = {
         "test_strict_mode_fails_when_namespaces_are_missing",
         "test_the_ok_line_names_the_isolation_backend",
     },
+    # --- N10e: defer, labelled loops and pub ---------------------------------
+    "DeferFrontendTests": {
+        "test_a_defer_needs_edition_two",
+        "test_a_deferred_block_cannot_leave_itself",
+        "test_a_deferred_block_is_a_block",
+        "test_a_jump_must_name_a_loop_it_can_reach",
+        "test_a_label_must_name_a_loop",
+        "test_a_public_function_needs_edition_two",
+        "test_labels_need_edition_two",
+        "test_only_a_function_can_be_public",
+    },
+    "DeferRuntimeTests": {
+        "test_a_defer_runs_on_break_and_continue",
+        "test_a_defer_runs_on_return",
+        "test_a_defer_runs_per_iteration",
+        "test_a_deferred_block_can_declare_and_release_its_own_array",
+        "test_defers_run_last_first_and_before_the_release",
+    },
+    "LabelledLoopRuntimeTests": {
+        "test_a_label_leaves_every_loop_above_the_target",
+        "test_a_label_works_on_a_while_loop_and_over_an_array",
+        "test_a_labelled_continue_runs_the_increment",
+        "test_a_labelled_jump_releases_the_arrays_it_leaves",
+        "test_a_nested_loop_may_reuse_a_label_and_the_innermost_wins",
+    },
+    "PublicFrontendTests": {
+        "test_a_private_function_cannot_be_called_from_another_module",
+        "test_a_public_function_can_use_a_private_one",
+        "test_an_edition_one_module_still_exports_everything",
+    },
     # --- N10d: arrays of structs and slices ----------------------------------
     "SliceFrontendTests": {
         "test_a_slice_cannot_become_a_mutable_borrow",
@@ -653,14 +683,14 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 120,
-    "tests/fixtures/positive": 27,
+    "tests/fixtures/negative": 124,
+    "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 2,
 }
 
 #: Multi-file module fixtures: one directory per case, listed in
 #: `tests/fixtures/modules.json`.
-REGISTERED_MODULE_CASES = 8
+REGISTERED_MODULE_CASES = 10
 
 #: Diagnostic codes that no source fixture can produce, with the test that
 #: covers them instead. Mirrors `tests/test_spec.py`.
@@ -676,6 +706,7 @@ CODES_TESTED_ELSEWHERE = {
     "E0602": "tests/test_sandbox.py: test_surviving_child_is_reported_by_the_cli",
     "E0352": "tests/test_modules.py: test_missing_module_lists_both_search_locations",
     "E0353": "tests/fixtures/modules.json: cycle",
+    "E0433": "tests/fixtures/modules.json: private_module",
     "E0355": "tests/fixtures/modules.json: duplicate_import",
     "E0356": "tests/test_modules.py: test_an_import_cannot_escape_the_project_boundary",
     "E0357": "tests/fixtures/modules.json: main_in_module",
@@ -712,6 +743,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_ab  # noqa: PLC0415  (import after sys.path setup)
     import test_arrays  # noqa: PLC0415
     import test_control  # noqa: PLC0415
+    import test_defers  # noqa: PLC0415
     import test_enums  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
@@ -732,7 +764,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_ab, test_arrays, test_control, test_enums, test_files,
+    for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
                    test_float, test_grammar, test_guides, test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
                    test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib, test_study):

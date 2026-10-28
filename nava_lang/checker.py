@@ -3,7 +3,7 @@ from __future__ import annotations
 from .diagnostics import make, severity_of
 from .limits import MAX_NESTING
 from .model import (
-    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue,
+    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer,
     Diagnostic, EnumDecl, Expr, ExprStmt, Float, For, Function, If, Import,
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Program, Range,
     Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary, Variable,
@@ -100,6 +100,12 @@ class Checker:
         self.depth = 0
         #: Nesting depth of `while`/`for` bodies; 0 means break/continue is an error.
         self.loop_depth = 0
+        #: The label of every enclosing loop, innermost last; None for a loop
+        #: written without one.
+        self.loop_labels: list[str | None] = []
+        #: How many `defer` blocks enclose the statement being checked. Inside
+        #: one, no jump may leave it.
+        self.defer_depth = 0
 
     def check(self) -> Program:
         # Every type an instantiation mentions must exist before an instance of
@@ -676,8 +682,19 @@ class Checker:
             raise make("E0325", f"module {expr.module!r} has no function {expr.name!r}",
                        expr.loc, expr.loc.advance(f"{expr.module}::{expr.name}"),
                        "modules expose functions only; check the name in LANGUAGE.md")
+        target = table[expr.name]
+        # An edition-2 module decides what it exports; an edition-1 module keeps
+        # the behaviour it was released with, where every function is visible.
+        if self.program.module_editions.get(expr.module, 1) >= 2 and not target.public \
+                and expr.module != self.current_module:
+            raise make(
+                "E0433",
+                f"{expr.module}::{expr.name} is not public",
+                expr.loc, expr.loc.advance(f"{expr.module}::{expr.name}"),
+                hint=f"declare it as `pub fn {expr.name}` in {expr.module}.nv",
+            )
         self.used_modules.add((self.current_module, expr.module))
-        return table[expr.name]
+        return target
 
     def declare(self, name, typ, loc) -> Symbol:
         if name in BUILTINS:
@@ -823,6 +840,14 @@ class Checker:
         if isinstance(statement, Let):
             name_loc = statement.name_loc or statement.loc
             if isinstance(statement.value, Try):
+                if self.defer_depth:
+                    raise make(
+                        "E0430",
+                        "a deferred block cannot propagate a failure out of itself",
+                        statement.value.loc, statement.value.loc.advance("?"),
+                        hint="the block runs while its scope is being left; handle the "
+                             "failure inside it with match",
+                    )
                 # `?` decides the type of the binding from the callee, so the
                 # annotation is checked against that type and never drives it.
                 typ = self.propagate(statement)
@@ -855,6 +880,8 @@ class Checker:
                 # A slice owns nothing: the array it views stays the owner, and
                 # the block that declared that array releases the storage.
                 statement.symbol.borrowed = True
+        elif isinstance(statement, Defer):
+            self.check_defer(statement)
         elif isinstance(statement, Match):
             self.match_statement(statement)
         elif isinstance(statement, MemberAssign):
@@ -925,6 +952,14 @@ class Checker:
             self.expression(statement.expr)
         elif isinstance(statement, Return):
             assert self.current_function is not None
+            if self.defer_depth:
+                raise make(
+                    "E0430",
+                    "a deferred block cannot return from the function",
+                    statement.loc, statement.loc.advance("return"),
+                    hint="the block runs while its scope is being left; do the work "
+                         "in the function body instead",
+                )
             expected = self.current_function.returns
             actual = "void" if statement.value is None else self.expression(statement.value)
             if statement.value is not None and actual == "void":
@@ -954,20 +989,34 @@ class Checker:
                            statement.condition.loc,
                            hint="integers are not converted to bool; compare explicitly, as in x > 0")
             self.loop_depth += 1
+            self.loop_labels.append(getattr(statement, "label", None))
             try:
                 self.check_statements(statement.body, new_scope=True)
             finally:
+                self.loop_labels.pop()
                 self.loop_depth -= 1
         elif isinstance(statement, For):
             self.check_for(statement)
-        elif isinstance(statement, Break):
+        elif isinstance(statement, (Break, Continue)):
+            name = "break" if isinstance(statement, Break) else "continue"
             if not self.loop_depth:
-                raise make("E0343", "'break' is only allowed inside a loop", statement.loc,
+                if self.defer_depth:
+                    raise make(
+                        "E0430",
+                        f"a deferred block cannot `{name}` out of itself",
+                        statement.loc, statement.loc.advance(name),
+                        hint="the block runs while its scope is being left",
+                    )
+                code = "E0343" if isinstance(statement, Break) else "E0344"
+                raise make(code, f"'{name}' is only allowed inside a loop", statement.loc,
                            hint="a loop is `while` or `for`")
-        elif isinstance(statement, Continue):
-            if not self.loop_depth:
-                raise make("E0344", "'continue' is only allowed inside a loop", statement.loc,
-                           hint="a loop is `while` or `for`")
+            if statement.label is not None and statement.label not in self.loop_labels:
+                raise make(
+                    "E0431",
+                    f"no enclosing loop carries the label {statement.label!r}",
+                    statement.loc, statement.loc.advance(f"{name} {statement.label}"),
+                    hint="label the loop itself, as in `outer: for i in 0..n { ... }`",
+                )
         else:
             raise AssertionError(f"unknown statement: {type(statement)}")
 
@@ -1001,6 +1050,26 @@ class Checker:
                 hint="convert explicitly with to_f64(x) or to_i64(x)",
             )
         raise make("E0319", f"operator {op!r} expects two i64 or two f64 values", loc)
+
+    def check_defer(self, statement: Defer) -> None:
+        """A deferred block runs when its block is left, so it cannot leave it.
+
+        `return`, `break`, `continue` and `?` all jump somewhere else; inside a
+        `defer` the enclosing scope is being destroyed, so each of them is
+        refused. Loop depth is reset while the body is checked, which is what
+        makes every jump visible as an error rather than as a jump over the
+        deferred work.
+        """
+        saved_depth, saved_labels = self.loop_depth, self.loop_labels
+        self.loop_depth, self.loop_labels = 0, []
+        self.defer_depth += 1
+        self.scopes.append({})
+        try:
+            self.check_statements(statement.body, new_scope=False)
+        finally:
+            self.scopes.pop()
+            self.defer_depth -= 1
+            self.loop_depth, self.loop_labels = saved_depth, saved_labels
 
     def check_for(self, statement: For) -> None:
         """A `for` iterates over a half-open i64 range or over one array."""
@@ -1039,9 +1108,11 @@ class Checker:
             # silently desynchronise the iteration.
             statement.symbol.readonly = True
             self.loop_depth += 1
+            self.loop_labels.append(statement.label)
             try:
                 self.check_statements(statement.body, new_scope=False)
             finally:
+                self.loop_labels.pop()
                 self.loop_depth -= 1
         finally:
             self.scopes.pop()

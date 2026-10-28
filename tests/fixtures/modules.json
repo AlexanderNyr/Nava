@@ -85,6 +85,25 @@
       "stdin": "",
       "stdout": "22\n22\n9\n",
       "exit_code": 0
+    },
+    {
+      "kind": "error",
+      "dir": "private_module",
+      "entry": "main.nv",
+      "code": "E0433",
+      "file": "private_module/main.nv",
+      "line": 6,
+      "column": 11,
+      "message": "tools::hidden is not public",
+      "hint": "declare it as `pub fn hidden` in tools.nv"
+    },
+    {
+      "kind": "run",
+      "dir": "public_module",
+      "entry": "main.nv",
+      "stdout": "8\n22\n",
+      "stdin": "",
+      "exit_code": 0
     }
   ]
 }

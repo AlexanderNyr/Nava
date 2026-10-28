@@ -1,0 +1,10 @@
+edition 2;
+
+fn finish(n: i64) -> i64 {
+    defer { return 0 }
+    return n
+}
+
+fn main() {
+    print(finish(3))
+}

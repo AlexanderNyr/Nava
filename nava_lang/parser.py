@@ -4,7 +4,7 @@ from .diagnostics import make
 from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
-    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl, Expr,
+    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer, EnumDecl, Expr,
     ExprStmt, Field, Float, For, Function, If, Import, Index, IndexAssign, Let, Match,
     Member, MemberAssign, Number, Param, Program, Range, Return, Slice, String,
     Struct, StructLiteral, Token, Try, Unary, Variable, Variant, VariantValue, While,
@@ -343,6 +343,20 @@ class Parser:
                 structs.append(self.struct_declaration())
             elif self.at("ENUM"):
                 enums.append(self.enum_declaration())
+            elif self.at("PUB"):
+                # `pub` is a prefix, so it is consumed here and checked by
+                # `function()`: a `pub struct` would be a visibility rule with
+                # nothing to apply it to yet (E0434).
+                public = self.current
+                self.i += 1
+                if not self.at("FN"):
+                    raise make(
+                        "E0434",
+                        "only a function can be `pub` yet",
+                        public.loc, public.loc.advance("pub"),
+                        hint="a module exposes functions; struct and enum visibility is later",
+                    )
+                functions.append(self.function(public=True))
             elif self.at("IMPORT"):
                 if functions:
                     raise make(
@@ -374,8 +388,10 @@ class Parser:
         self.end_statement()
         return Import(str(name.value), start.loc, name.loc)
 
-    def function(self) -> Function:
+    def function(self, public: bool = False) -> Function:
         start = self.expect("FN", "'fn'")
+        if public:
+            self.require_edition(start.loc, "a public function")
         name = self.expect("IDENT", "function name")
         self.expect("(")
         params: list[Param] = []
@@ -392,7 +408,7 @@ class Parser:
         if self.take("->"):
             returns = self.parse_type()
         body = self.block()
-        return Function(str(name.value), params, returns, body, start.loc)
+        return Function(str(name.value), params, returns, body, start.loc, public=public)
 
     def block(self) -> list:
         self.separators()
@@ -425,9 +441,31 @@ class Parser:
             return self.match_statement()
         if self.at("IF"):
             return self.if_statement()
+        if self.at("DEFER"):
+            self.require_edition(token.loc, "a deferred block")
+            self.i += 1
+            return Defer(token.loc, self.deferred_block())
+        label = None
+        if self.at("IDENT") and self.tokens[self.i + 1].kind == ":" \
+                and self.tokens[self.i + 2].kind not in ("WHILE", "FOR"):
+            # `name:` at the start of a statement is a loop label, so anything
+            # else after it is a mistake worth naming rather than a parse error
+            # three tokens later.
+            raise make(
+                "E0432",
+                "a label must name the loop it is written on",
+                token.loc, token.loc.advance(str(token.value)),
+                hint="write `outer: for i in 0..n { ... }` or remove the label",
+            )
+        if self.at("IDENT") and self.tokens[self.i + 1].kind == ":" \
+                and self.tokens[self.i + 2].kind in ("WHILE", "FOR"):
+            label = str(token.value)
+            self.require_edition(token.loc, "a loop label")
+            self.i += 2
+            token = self.current
         if self.take("WHILE"):
             condition = self.expression()
-            return While(token.loc, condition, self.block())
+            return While(token.loc, condition, self.block(), label)
         if self.take("FOR"):
             name = self.expect("IDENT", "loop variable name")
             self.expect("IN", "'in'")
@@ -436,13 +474,15 @@ class Parser:
                 # `a..b` is half-open; both bounds are evaluated once, before
                 # the first iteration.
                 iterable = Range(iterable.loc, iterable, self.expression())
-            return For(token.loc, str(name.value), iterable, self.block(), name.loc)
+            return For(token.loc, str(name.value), iterable, self.block(), name.loc, label)
         if self.take("BREAK"):
+            target = self.jump_label()
             self.end_statement()
-            return Break(token.loc)
+            return Break(token.loc, target)
         if self.take("CONTINUE"):
+            target = self.jump_label()
             self.end_statement()
-            return Continue(token.loc)
+            return Continue(token.loc, target)
         if self.take("RETURN"):
             value = None if self.current.kind in ("NL", ";", "}", "EOF") else self.expression()
             self.end_statement()
@@ -483,6 +523,31 @@ class Parser:
         expr = self.expression()
         self.end_statement()
         return ExprStmt(token.loc, expr)
+
+    def deferred_block(self) -> list:
+        """The body of a `defer`: a block, never a bare statement.
+
+        A brace is required rather than optional because `defer print(x)` and
+        `defer { print(x) }` differ in what they capture, and a language that
+        accepts both invites the reader to guess.
+        """
+        if not self.at("{"):
+            raise make(
+                "E0201",
+                "expected '{' after 'defer'",
+                self.current.loc,
+                hint="write `defer { ... }`; the block runs when the enclosing block ends",
+            )
+        return self.block()
+
+    def jump_label(self) -> str | None:
+        """The label of `break name` / `continue name`, or None."""
+        if self.at("IDENT") and self.current.value != "_":
+            token = self.current
+            self.i += 1
+            self.require_edition(token.loc, "a labelled jump")
+            return str(token.value)
+        return None
 
     def match_statement(self) -> Match:
         """`match value { Enum::Variant(a, b) => { ... } _ => { ... } }`."""

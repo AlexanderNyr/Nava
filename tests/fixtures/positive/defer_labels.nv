@@ -1,0 +1,25 @@
+edition 2;
+
+fn walk(n: i64) -> i64 {
+    let seen: [i64] = [0]
+    defer { print(len(seen)) }
+    defer { print(0 - 1) }
+    outer: for i in 0..n {
+        for j in 0..n {
+            if j == 1 { continue outer }
+            if i == 1 { break outer }
+            seen[0] = seen[0] + 1
+        }
+    }
+    return seen[0]
+}
+
+fn main() {
+    print(walk(3))
+    let i = 0
+    while i < 2 {
+        defer { print(100 + i) }
+        print(i)
+        i = i + 1
+    }
+}

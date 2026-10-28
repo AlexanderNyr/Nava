@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+N10e: `defer`, labelled loops and `pub` — three statements about where control
+leaves a scope.
+
+- `defer { ... }` registers a block that runs when its block is left: on the
+  normal path, on `return`, and on a `break`/`continue` that leaves it. Defers
+  run last-first, before the block releases its arrays, once per iteration when
+  written in a loop body, and they read their variables when they run. A
+  deferred block cannot leave itself: `return`, `break`, `continue` and `?`
+  inside one are `E0430`, and the braces are required (`E0201`).
+- A loop may carry a label (`outer: for ...`) and a jump may name it. `break
+  outer` leaves every loop between the jump and the target, releasing the arrays
+  of each block it leaves; `continue outer` restarts the target and runs its
+  increment. An unknown label is `E0431`, a label on something that is not a
+  loop is `E0432`, and labels need edition 2.
+- `pub fn` makes a function callable from another module, and a module that
+  declares `edition 2;` exports **only** its `pub` functions (`E0433`). An
+  edition-1 module keeps exporting every function, which is the released
+  contract and does not change. `pub` on anything but a function is `E0434`.
+- Guide, grammar artefact and measurements moved with the language: new guide
+  section, canonical `control2.nv` example, re-pinned digest, overhead
+  re-measured rather than estimated.
+- The increment is narrower than the plan's original N10e: monomorphised
+  generics and function pointers move to N10f, because a patch that changes
+  types, code generation, the grammar and the guide for five features at once
+  cannot be reviewed. The split is recorded in `INDEPENDENCE.md`.
+- Not in this increment: generic parameters of any kind, function pointers,
+  `defer` on a bare statement, a `defer` that can fail, and struct or enum
+  visibility.
+
 N10d: arrays of structs and slices — the first construct that hands out a view
 of storage somebody else owns, so the ownership rules are the point.
 

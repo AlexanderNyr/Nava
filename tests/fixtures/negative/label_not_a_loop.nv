@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    outer: let n = 1
+    print(n)
+}

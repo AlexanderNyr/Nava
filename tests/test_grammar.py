@@ -50,7 +50,9 @@ GRAMMAR_REJECTS = frozenset(
     # The array shapes keep a syntactic code, E0206, and the grammar models the
     # same fixed element set.
     | {"E0201", "E0202", "E0204", "E0205", "E0206"}
-    | {"E0346", "E0350", "E0415"}
+    # A label is part of a loop and `pub` is a prefix of a function: both are
+    # shapes, so the grammar refuses them in the wrong position as well.
+    | {"E0346", "E0350", "E0415", "E0432", "E0434"}
     # `edition` is a prefix of the file in the grammar and in the compiler.
     | {"E0370"}
 )
@@ -75,7 +77,9 @@ GRAMMAR_ACCEPTS = frozenset(
      | {"E0415"}
      # Slices and arrays of structs: the shape is fine, the types and the
      # ownership rules are not, so the checker is the authority.
-     | {f"E042{index}" for index in range(0, 5)})
+     | {f"E042{index}" for index in range(0, 5)}
+     # A jump that names no enclosing loop, and a jump out of a deferred block.
+     | {"E0430", "E0431", "E0433"})
     - GRAMMAR_REJECTS
 )
 

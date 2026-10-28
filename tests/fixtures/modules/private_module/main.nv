@@ -1,0 +1,7 @@
+edition 2;
+
+import tools
+
+fn main() {
+    print(tools::hidden(4))
+}

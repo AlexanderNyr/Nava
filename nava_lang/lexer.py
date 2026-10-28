@@ -16,6 +16,7 @@ KEYWORDS = {
     # Edition 2 keywords. They are keywords in every edition so that an
     # edition-1 file cannot use them as identifiers and then change meaning.
     "struct": "STRUCT", "edition": "EDITION", "enum": "ENUM", "match": "MATCH",
+    "defer": "DEFER", "pub": "PUB",
 }
 TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", "..", "::", "=>"}
 ONE_CHAR = set("(){}[],:+-*/%=!<>;.?")

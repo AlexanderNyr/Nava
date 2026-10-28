@@ -1080,6 +1080,42 @@
       "end_column": null,
       "message": "an array element type must be i64, bool, str or a struct, got Shape",
       "hint": "an enum has no storage of its own until the memory work (N11)"
+    },
+    {
+      "file": "defer_returns.nv",
+      "code": "E0430",
+      "line": 4,
+      "column": 13,
+      "end_column": 19,
+      "message": "a deferred block cannot return from the function",
+      "hint": "the block runs while its scope is being left; do the work in the function body instead"
+    },
+    {
+      "file": "label_unknown.nv",
+      "code": "E0431",
+      "line": 5,
+      "column": 21,
+      "end_column": 33,
+      "message": "no enclosing loop carries the label 'middle'",
+      "hint": "label the loop itself, as in `outer: for i in 0..n { ... }`"
+    },
+    {
+      "file": "label_not_a_loop.nv",
+      "code": "E0432",
+      "line": 4,
+      "column": 5,
+      "end_column": 10,
+      "message": "a label must name the loop it is written on",
+      "hint": "write `outer: for i in 0..n { ... }` or remove the label"
+    },
+    {
+      "file": "pub_not_a_function.nv",
+      "code": "E0434",
+      "line": 3,
+      "column": 1,
+      "end_column": 4,
+      "message": "only a function can be `pub` yet",
+      "hint": "a module exposes functions; struct and enum visibility is later"
     }
   ]
 }

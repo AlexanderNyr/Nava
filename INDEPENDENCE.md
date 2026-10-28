@@ -5,8 +5,9 @@ language in its own right, and that its toolchain stands on its own — no Pytho
 no C compiler, no libc.
 
 **Status: N10 in progress — N10a (editions and structs), N10b (enums and
-`match`), N10c (`Option`/`Result` and `?`) and N10d (arrays of structs and
-slices) delivered; N10e and N11–N18 specified, not started.** The
+`match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices)
+and N10e (`defer`, labelled loops, `pub`) delivered; N10f and N11–N18
+specified, not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -42,25 +43,25 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 6 064 lines,
-13 modules and 192 functions under `nava_lang/`, which is the program Nava must be able to
+The requirement list below is not a wish list: it is an audit of the 6 335 lines,
+13 modules and 198 functions under `nava_lang/`, which is the program Nava must be able to
 express. Counts are of AST nodes in the current tree, re-measured at the last delivery
-(N10d); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
+(N10e); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
 `tests/test_plan.py` recomputes the size and function count so this paragraph
 cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
-| `class` (AST nodes, diagnostics, module records, type descriptors) | 55 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 228 / 48 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 58 / 36 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort` | 92 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
+| `raise` / `try` | 235 / 49 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 62 / 38 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort` | 104 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
 | set literal, `.add` | 12 / 7 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 335 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| f-strings and `str.format` | 354 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
 | `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 94 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 21 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
+| slice syntax `a[i:j]` | 19 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(..., key=...)` | 3 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 39 / 24 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| generator expressions, list/set comprehensions | 40 / 24 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 1 | function pointers | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
 | generators, `await`, threads, metaclasses, dynamic attribute lookup | 0 | nothing; Nava is not asked to acquire them | — |
@@ -121,7 +122,7 @@ the guard, and the two implementations must agree on every entry.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a, N10b, N10c and N10d delivered, N10e open |
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a–N10e delivered, N10f open |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
@@ -178,7 +179,7 @@ an edition-2 construct is rejected with the edition named.
 **Deliverable:** the patch that lands edition 2, the spec chapter, the fixtures
 and the closed audit.
 
-**Increments.** N10 is delivered in five patches, because one patch that changes
+**Increments.** N10 is delivered in six patches, because one patch that changes
 the grammar, the checker, the code generator, the specification, the grammar
 artefact and the guide at once cannot be reviewed. A phase is still done only
 when the whole gate has run.
@@ -189,7 +190,8 @@ when the whole gate has run.
 | N10b | `enum` with data-carrying variants, `match`, exhaustiveness | **Delivered** (record below) |
 | N10c | `Option(T)`, `Result(T, E)`, `?` | **Delivered** (record below) |
 | N10d | Slices `[T]` and range slicing, arrays of structs | **Delivered** (record below) |
-| N10e | Monomorphised generics, function pointers, `defer`, labelled loops, `pub` | Open (next) |
+| N10e | `defer`, labelled loops, `pub` | **Delivered** (record below) |
+| N10f | Monomorphised generics and function pointers | Open (next) |
 
 #### Delivery record N10a (2026-10-28)
 
@@ -280,6 +282,45 @@ prints nothing. The one that carries the language claim is
 `slice_mut_argument.nv`: a view can be read through and passed on, but it can
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
+
+#### Delivery record N10e (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A deferred block runs on every way out | `tests/test_defers.py`: `test_a_defer_runs_on_return`, `test_a_defer_runs_on_break_and_continue`, `test_a_defer_runs_per_iteration` | `return` prints `-1`, then the caller sees `7`; a `continue` and a `break` each run the block; a `defer` in a loop body runs once per turn (`0 1 2`, then `9`) |
+| Defers nest and see the block's arrays | `test_defers_run_last_first_and_before_the_release` | Two defers print `3` then `3` after the body printed `0`: last-first, and `len(values)` is still readable, so the release happens after them |
+| A deferred block reads variables when it runs | `test_a_defer_runs_on_break_and_continue` | `defer { print(100 + i) }` prints `101` and `102` for the same registration, because `i` changed before the block left — the documented semantics, not an accident of code generation |
+| A deferred block cannot leave itself | `test_a_deferred_block_cannot_leave_itself` | `return`, `break`, `continue` and `?` inside a `defer` are all `E0430` with a message that names the construct; `defer` without a block is `E0201` |
+| A label reaches its loop and stops there | `LabelledLoopRuntimeTests.test_a_label_leaves_every_loop_above_the_target`, `test_a_labelled_continue_runs_the_increment`, `test_a_nested_loop_may_reuse_a_label_and_the_innermost_wins` | A `continue outer` from the inner loop restarts the outer one and the total is `4` (an increment skipped would hang); a `break outer` leaves both loops and prints `0` then `9` |
+| A labelled jump releases what it leaves | `test_a_labelled_jump_releases_the_arrays_it_leaves` | Two arrays per turn, one of them in the inner block, freed on the labelled `continue`: the program prints `4` twice and the suite's allocation instrumentation reports no leak elsewhere |
+| Labels are checked | `test_a_label_must_name_a_loop`, `test_a_jump_must_name_a_loop_it_can_reach`, `test_labels_need_edition_two` | `outer: let n = 1` is `E0432` (the parser refuses a label in front of anything but `while`/`for`), `break middle` is `E0431`, and a label in an edition-1 file is `E0372` |
+| `pub` decides what a module exports | `PublicFrontendTests.test_a_private_function_cannot_be_called_from_another_module`, `test_a_public_function_can_use_a_private_one` | `tools::hidden` is `E0433` with the fix in the hint; a `pub` function that calls a private one of its own module runs and prints `8`, `22` |
+| Edition 1 is not changed by `pub` | `test_an_edition_one_module_still_exports_everything` | The edition-1 `multi_file` fixture still compiles and runs with no `pub` anywhere: visibility is decided per module by the edition its file declares |
+| The grammar artefact agrees | `eval/grammar.py`, `tests/test_grammar.py` | `pub` as a function prefix, `label:` before a loop, `break`/`continue` with a label and `defer` + block are in both the token grammar and the GBNF; `E0432`/`E0434` are shapes the grammar also refuses, `E0430`/`E0431`/`E0433` are classified as semantic |
+| The specification moved with the code | `LANGUAGE.md` edition-2 section "`defer`, labelled loops and `pub`" | The five deferred-block rules, the label rules, the module contract and the edition-1 compatibility are normative, with five new diagnostic rows (`E0430`–`E0434`) |
+| The guide and its measurements moved | `guides/nava-1.md` (digest `e9c0e19d…`, 11 410 bytes), `guides/examples/control2.nv`, `eval/measurements/overhead-*.json` | New canonical example compiled and run (`1`, `0`, `101`, `1`, `102`, `-1`); overhead re-measured: `cl100k_base` 3 515 and `o200k_base` 3 527 prompt tokens; `guides/examples.json` gained the `control2` case |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m unittest discover -s tests -q` | registry `OK: 453 registered tests, 11 tasks with 76 cases, 164 spec fixtures, 131 diagnostic codes`; suite **523 tests OK**; two new module fixtures (`public_module`, `private_module`) carry a runtime case and an `E0433` case |
+
+Negative controls: four new single-file fixtures — `defer_returns.nv` (`E0430`),
+`label_unknown.nv` (`E0431`), `label_not_a_loop.nv` (`E0432`) and
+`pub_not_a_function.nv` (`E0434`) — plus a module fixture `private_module`
+(`E0433`) and its positive twin `public_module`. The control that carries the
+claim is the pair of module fixtures: the same function is reachable from
+outside when it says `pub` and invisible when it does not, while an edition-1
+module keeps its released behaviour.
+
+The increment is deliberately narrower than the phase description: the plan's
+N10e bundled monomorphised generics and function pointers with these three
+features. A single patch that changes type substitution, code generation, the
+grammar and the guide for five unrelated features is exactly what the
+"delivered in increments" paragraph exists to prevent, so the generic work moved
+to **N10f** and the split is recorded in the table above rather than smoothed
+over.
+
+Deliberately not done in N10e: `defer` on a bare statement, a deferred block that
+can fail (nothing inside one may leave it), `defer` interacting with `?` by
+design, generic parameters of any kind, function pointers, and `pub` on structs
+or enums. Those are N10f and later.
 
 Deliberately not done in N10d: arrays of enums (their payloads have no ownership
 story until N11), a field write straight into an array element, slices as values

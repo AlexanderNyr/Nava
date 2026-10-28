@@ -1057,6 +1057,59 @@ starting at `i`. A slice is not a copy and owns nothing.
 Bounds are evaluated left to right, like every other expression in Nava, so a
 program that prints inside the bounds sees the start printed before the end.
 
+### `defer`, labelled loops and `pub`
+
+Three statements about *where control goes*, all edition 2.
+
+```text
+defer          = "defer" block ;
+loop_label     = IDENT ":" ( while_statement | for_statement ) ;
+jump           = ( "break" | "continue" ) [ IDENT ] ;
+public_fn      = "pub" "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
+```
+
+`defer { ... }` registers a block that runs when the **enclosing block is left**:
+on the normal path, on `return`, and on a `break`/`continue` that leaves the
+block. The rules, all observable:
+
+* two `defer`s in one block run last-first, so they nest like scopes;
+* a deferred block runs **before** the block releases its arrays, so it can
+  still read them;
+* it reads its variables when it **runs**, not when it was registered:
+  `let i = 0; while i < 2 { defer { print(i) } ; i = i + 1 }` prints `1`, then
+  `2` — the value of `i` at the moment the block left, not the value it had at
+  registration;
+* the block runs **once per iteration** when it is written inside a loop body;
+* it cannot leave itself: `return` inside a `defer` is `E0430`, and so are
+  `break`, `continue` and `?`, because the scope is being destroyed;
+* the braces are required (`defer print(x)` is `E0201`): the two spellings
+  differ in what they capture and a reader should not have to guess.
+
+A loop may carry a label, and a jump may name it:
+
+```
+outer: for i in 0..rows {
+    for j in 0..cols {
+        if grid[i][j] == target { found = true  break outer }
+    }
+}
+```
+
+`break outer` leaves `outer` and every loop between, releasing the arrays of
+each block it leaves; `continue outer` restarts `outer` and runs its increment.
+A label that no enclosing loop carries is `E0431`; a label written on anything
+that is not a loop is `E0432`. Labels are not variables and are not visible to
+`let`. A nested loop may reuse a label name, and then the **innermost** loop
+with that name is the target — the same rule as a variable lookup, so a jump
+never silently leaves a loop the author did not name.
+
+`pub fn name(...)` makes a function of a module callable from another module. A
+module that declares `edition 2;` exports **only** its `pub` functions, and a
+call to a private one is `E0433`; a module that does not declare edition 2 keeps
+exporting every function, which is the edition-1 contract and does not change.
+A public function may call the private functions of its own module. Only a
+function can be `pub` (`E0434`).
+
 ## Diagnostics
 
 Errors are reported with a stable code, a source range and an optional hint.
@@ -1156,6 +1209,11 @@ never changes meaning; a new condition gets a new code.
 | `E0422` | error | a slice is read-only | `tests/fixtures/negative/slice_read_only.nv` |
 | `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
 | `E0424` | error | an array element may not be an enum | `tests/fixtures/negative/array_of_enum.nv` |
+| `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
+| `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
+| `E0432` | error | a label must name the loop it is written on | `tests/fixtures/negative/label_not_a_loop.nv` |
+| `E0433` | error | the function is not public | `tests/fixtures/modules/private_module` |
+| `E0434` | error | only a function can be `pub` yet | `tests/fixtures/negative/pub_not_a_function.nv` |
 
 **Types and semantics**
 
@@ -1321,12 +1379,12 @@ indexing, string concatenation, string input, mathematical functions such as
 module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
-Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs
-and slices; it does not add generic declarations of your own, `match` as an
-expression, generic containers, string or array fields, arrays of enums, struct
-or enum equality, printing a struct or an enum, function pointers, `defer`,
-labelled loops or module visibility keywords. Those are N10e and later in
-`INDEPENDENCE.md`, and nothing here is a promise that they exist today.
+Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs,
+slices, `defer`, labelled loops and `pub`; it does not add generic declarations
+of your own, `match` as an expression, generic containers, string or array
+fields, arrays of enums, struct or enum equality, printing a struct or an enum,
+or function pointers. Those are N10f and later in `INDEPENDENCE.md`, and nothing
+here is a promise that they exist today.
 
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated

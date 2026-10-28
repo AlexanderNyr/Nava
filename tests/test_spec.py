@@ -66,6 +66,8 @@ CODES_TESTED_ELSEWHERE = {
     "E0353": "tests/fixtures/modules.json: cycle; tests/test_modules.py: "
              "test_a_cycle_names_every_module_and_its_location",
     "E0355": "tests/fixtures/modules.json: duplicate_import",
+    "E0433": "tests/fixtures/modules.json: private_module; tests/test_defers.py: "
+             "PublicFrontendTests.test_a_private_function_cannot_be_called_from_another_module",
     "E0356": "tests/test_modules.py: test_an_import_cannot_escape_the_project_boundary",
     "E0357": "tests/fixtures/modules.json: main_in_module",
     "E0358": "tests/fixtures/modules.json: unqualified",

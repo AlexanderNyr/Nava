@@ -1,0 +1,7 @@
+edition 2;
+
+pub struct Point { x: i64 }
+
+fn main() {
+    print(1)
+}
