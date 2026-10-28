@@ -176,7 +176,7 @@ class RecordValidationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "study.json"
             result = run_study("--provider", "mock", "--task", "gcd", "--languages", "nava",
-                               "--attempts", "1", "--out", str(out))
+                               "--attempts", "1", "--isolation", "auto", "--out", str(out))
             self.assertEqual(result.returncode, 0, result.stderr)
             return load(out)
 
@@ -219,7 +219,10 @@ class StudyRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "study.json"
             result = run_study("--provider", "mock", "--task", "gcd", "--task", "sum_to_n",
-                               "--languages", "nava,c", "--attempts", "2", "--out", str(out))
+                               "--languages", "nava,c", "--attempts", "2",
+                               # `auto`, not `required`: a pipeline check has to run on
+                               # any host, and the record names the backend that ran.
+                               "--isolation", "auto", "--out", str(out))
             self.assertEqual(result.returncode, 0, result.stderr)
             record = load(out)
         self.assertEqual(record["schema"], "nava-study/1")
@@ -231,8 +234,11 @@ class StudyRunTests(unittest.TestCase):
         self.assertAlmostEqual(record["aggregates"]["sum_to_n/nava"]["pass_at_1"]["point"], 0.0)
         self.assertEqual(record["aggregates"]["sum_to_n/nava"]["compile_rate"]["point"], 1.0)
         self.assertEqual(len(record["attempts"]), 8, "2 tasks x 2 languages x 2 attempts")
+        # Which backend ran is recorded, not assumed.
+        self.assertIn(record["plan"]["isolation_backend"], {"namespaces", "rlimits"})
         for attempt in record["attempts"]:
-            self.assertIsNotNone(attempt["rounds"][0]["isolation_backend"])
+            self.assertEqual(attempt["rounds"][0]["isolation_backend"],
+                             record["plan"]["isolation_backend"])
             self.assertEqual(attempt["rounds"][0]["extraction"]["method"], "tagged-fence")
         # Order is rotated per attempt so no language is always first:
         # each attempt block holds one entry per task and language.
@@ -305,7 +311,8 @@ class StudyRunTests(unittest.TestCase):
             answers = Path(temp) / "answers.jsonl"
             answers.write_text("", encoding="utf-8")   # every lookup misses
             result = run_study("--provider", "replay", "--replay-file", str(answers),
-                               "--task", "gcd", "--languages", "nava", "--attempts", "1")
+                               "--task", "gcd", "--languages", "nava", "--attempts", "1",
+                               "--isolation", "auto")
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         record = json.loads(result.stdout) if result.stdout.startswith("{") else None
         self.assertIsNone(record, "the summary is human-readable by default")
@@ -330,16 +337,13 @@ class StudyRunTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             out = Path(temp) / "study.json"
             result = run_study("--provider", "mock", "--task", "gcd", "--languages", "nava",
-                               "--attempts", "1", "--store-raw", "--out", str(out))
+                               "--attempts", "1", "--store-raw", "--isolation", "auto",
+                               "--out", str(out))
             self.assertEqual(result.returncode, 0, result.stderr)
             record = load(out)
         round_record = record["attempts"][0]["rounds"][0]
         self.assertIn("Task:", round_record["prompt"])
         self.assertIn("fn gcd", round_record["response"]["text"])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class HeldOutSetTests(unittest.TestCase):
@@ -608,3 +612,58 @@ class HeaderOptionTests(unittest.TestCase):
         headers, problem = study._parse_headers(["Authorization: Bearer other-key"])
         self.assertEqual(headers, {})
         self.assertIn("--api-key-env", problem)
+
+
+class IsolationRefusalTests(unittest.TestCase):
+    """A setup that cannot run must fail loudly, not produce a table of zeros."""
+
+    def test_required_isolation_is_refused_before_anything_is_measured(self):
+        with tempfile.TemporaryDirectory() as temp:
+            # `unshare` exists here and refuses, which is what a restricted host
+            # (AppArmor, seccomp, a container) actually looks like.
+            empty = Path(temp) / "empty-bin"
+            empty.mkdir()
+            script = empty / "unshare"
+            script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            script.chmod(0o755)
+            out = Path(temp) / "study.json"
+            environment = {"PATH": f"{empty}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+                           "LANG": "C.UTF-8", "HOME": temp}
+            result = subprocess.run(
+                [sys.executable, str(STUDY), "--provider", "mock", "--task", "gcd",
+                 "--languages", "nava", "--attempts", "1", "--isolation", "required",
+                 "--out", str(out)],
+                capture_output=True, text=True, env=environment, timeout=300)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("needs Linux namespaces", result.stderr)
+            # The message must say what to do instead.
+            self.assertIn("--isolation auto", result.stderr)
+            self.assertFalse(out.exists(), "a refused run must not leave a record behind")
+
+    def test_an_evaluator_refusal_is_an_error_not_a_wrong_answer(self):
+        # `evaluate.py` exits 2 with an `error` field when it refuses to run.
+        # Treating that as "0 of N tests passed" is how a broken setup turns into
+        # a plausible-looking model result.
+        refusal = {"error": "isolation mode 'required' needs Linux namespaces",
+                   "isolation": {"mode": "required", "backend": None, "available": False},
+                   "summary": {"passed": 0, "total": 7, "all_passed": False}}
+        original = study.run_evaluator
+        study.run_evaluator = lambda *a, **k: dict(refusal)
+        self.addCleanup(setattr, study, "run_evaluator", original)
+        with tempfile.TemporaryDirectory() as temp:
+            provider = providers.MockProvider(["fn main() { print(0) }\n"])
+            parts = build_parts("gcd", "nava")
+            record = study.attempt_once(
+                task_id="gcd", language="nava", attempt_index=0, provider=provider,
+                request_template={"prompt": study.prompt_module.build_prompt("gcd", "nava"),
+                                  "model": None, "temperature": 0.0, "max_tokens": 64,
+                                  "stream": False},
+                parts=parts, system=None, repair_rounds=0, isolation="required",
+                timeout=5.0, memory=256, store_raw=False, workdir=Path(temp))
+        self.assertFalse(record["final_passed"])
+        self.assertIsNotNone(record["provider_error"])
+        self.assertEqual(record["provider_error"]["class"], "EvaluatorError")
+        self.assertIn("namespaces", record["provider_error"]["message"])
+
+if __name__ == "__main__":
+    unittest.main()

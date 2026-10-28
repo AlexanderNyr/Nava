@@ -144,9 +144,19 @@ def host_processes_matching(needle: str) -> list[int]:
     return found
 
 
+#: The modes to drive in this run. `required` is only meaningful where the
+#: namespace backend exists; elsewhere it *is* the refusal path, and pretending
+#: otherwise is how a lane ends up green while testing nothing (it did: the whole
+#: `required` matrix died on a hosted runner before a single test ran).
+MODES = ("required", "off") if sandbox.namespaces_available() else ("off",)
+#: The strongest mode this host can actually run, for CLI-level checks.
+STRONGEST_MODE = "required" if sandbox.namespaces_available() else "off"
+
+
 @unittest.skipUnless(CC, "a C compiler is required for the isolation gate")
 class SandboxTests(unittest.TestCase):
-    backends = ("namespaces", "rlimits") if sandbox.namespaces_available() else ("rlimits",)
+    backends = (("namespaces", "rlimits") if sandbox.namespaces_available()
+                else ("rlimits",))
 
     @classmethod
     def setUpClass(cls):
@@ -187,7 +197,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- positive control ---------------------------------------------------
     def test_allowed_program_completes(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 outcome = self.run_probe("allowed", mode=mode)
                 self.assertTrue(outcome.ok, outcome.failure_reason())
@@ -196,7 +206,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- runaway CPU --------------------------------------------------------
     def test_infinite_loop_is_stopped(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 outcome = self.run_probe("loop", mode=mode,
                                          limits=sandbox.Limits(wall_seconds=1, cpu_seconds=1))
@@ -207,7 +217,7 @@ class SandboxTests(unittest.TestCase):
 
     def test_wall_clock_limit_stops_an_idle_program(self):
         """A sleeping program burns no CPU, so only the wall clock can stop it."""
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 outcome = self.run_probe("sleepy", mode=mode,
                                          limits=sandbox.Limits(wall_seconds=1, cpu_seconds=60))
@@ -218,7 +228,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- unbounded output ---------------------------------------------------
     def test_excess_output_is_stopped(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 outcome = self.run_probe("output", mode=mode,
                                          limits=sandbox.Limits(wall_seconds=10, output_bytes=8192))
@@ -229,7 +239,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- memory -------------------------------------------------------------
     def test_memory_ceiling_stops_allocation(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 outcome = self.run_probe("memory", mode=mode,
                                          limits=sandbox.Limits(wall_seconds=10, cpu_seconds=10,
@@ -239,7 +249,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- process tree -------------------------------------------------------
     def test_child_processes_do_not_survive(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 work = Path(tempfile.mkdtemp(dir=self.work))
                 tag = "-" + uuid.uuid4().hex[:12]
@@ -257,7 +267,7 @@ class SandboxTests(unittest.TestCase):
 
     # -- filesystem ---------------------------------------------------------
     def test_filesystem_boundary(self):
-        for mode in ("required", "off"):
+        for mode in MODES:
             with self.subTest(mode=mode):
                 work = Path(tempfile.mkdtemp(dir=self.work))
                 # A path outside the work directory: the only place the
@@ -300,7 +310,7 @@ class SandboxTests(unittest.TestCase):
         thread.start()
         port = listener.getsockname()[1]
         try:
-            for mode in ("required", "off"):
+            for mode in MODES:
                 with self.subTest(mode=mode):
                     outcome = self.run_probe("network", mode=mode, arguments=(str(port),),
                                              limits=sandbox.Limits(wall_seconds=5))
@@ -394,13 +404,13 @@ class SandboxTests(unittest.TestCase):
             source = Path(temp) / "program.nv"
             source.write_text("fn main() { print(read_i64() * 2) }\n", encoding="utf-8")
             result = subprocess.run([sys.executable, str(ROOT / "nava"), "run", str(source),
-                                     "--isolation", "required"], input="21\n",
+                                     "--isolation", STRONGEST_MODE], input="21\n",
                                     capture_output=True, text=True, timeout=180)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout, "42\n")
             source.write_text("fn main() { while true {} }\n", encoding="utf-8")
             result = subprocess.run([sys.executable, str(ROOT / "nava"), "run", str(source),
-                                     "--timeout", "0.5", "--isolation", "required"],
+                                     "--timeout", "0.5", "--isolation", STRONGEST_MODE],
                                     capture_output=True, text=True, timeout=180)
             self.assertEqual(result.returncode, 124)
             self.assertIn("exceeded", result.stderr)
@@ -425,8 +435,8 @@ class SandboxTests(unittest.TestCase):
             source = Path(temp) / "program.nv"
             source.write_text("fn main() { print(1 / 0) }\n", encoding="utf-8")
             result = subprocess.run([sys.executable, str(ROOT / "nava"), "run", str(source),
-                                     "--isolation", "required"], capture_output=True, text=True,
-                                    timeout=180)
+                                     "--isolation", STRONGEST_MODE], capture_output=True,
+                                    text=True, timeout=180)
         self.assertEqual(result.returncode, 1)
         self.assertIn("division by zero", result.stderr)
 

@@ -36,6 +36,14 @@ package version, `pyproject.toml` and any released changelog section disagree.
   available isolation backend documented in `SECURITY.md`; where namespaces are
   unavailable it falls back according to `--isolation` and never claims the
   stronger mode.
+- **Unprivileged user namespaces** for the jail itself. Ubuntu 24.04 restricts
+  them by default (AppArmor), so the GitHub runner needs
+  `sysctl kernel.apparmor_restrict_unprivileged_userns=0`; the workflow attempts
+  it and then *reports* which backend this host has. The isolation gate demands
+  the jail where namespaces exist and asserts the documented refusal (`exit 2`,
+  `E0601`) where they do not — it never skips, because a skipped test is not a
+  pass. Every CI log names the backend in its `isolation backend` step and in
+  the registry OK line.
 
 ## Support matrix
 

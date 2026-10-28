@@ -18,6 +18,7 @@ local mode instead of silently passing.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
@@ -335,6 +336,10 @@ REGISTERED_TESTS = {
         "test_a_requests_own_size_is_not_a_daily_quota",
         "test_a_transient_output_limit_is_retried_not_blocked",
     },
+    "IsolationRefusalTests": {
+        "test_required_isolation_is_refused_before_anything_is_measured",
+        "test_an_evaluator_refusal_is_an_error_not_a_wrong_answer",
+    },
     "HeaderOptionTests": {
         "test_headers_are_parsed_in_both_shapes",
         "test_a_malformed_header_is_refused_before_anything_is_called",
@@ -372,6 +377,55 @@ REGISTERED_TESTS = {
     },
     "StudyAgainstTheShimTests": {
         "test_a_correct_answer_through_the_shim_is_a_measured_result",
+    },
+    # --- N9: packaging, release gate and CI honesty ----------------------------
+    "MetadataTests": {
+        "test_a_platform_cannot_be_promoted_without_evidence",
+        "test_a_released_changelog_section_must_match_the_version",
+        "test_a_version_mismatch_is_reported",
+        "test_an_unknown_status_is_rejected",
+        "test_the_ci_matrix_and_the_support_matrix_agree",
+        "test_the_license_is_the_one_the_metadata_claims",
+        "test_the_repository_declares_one_version_everywhere",
+    },
+    "SyntaxFloorTests": {
+        "test_a_newer_syntax_is_rejected",
+        "test_every_file_parses_with_the_declared_python_floor",
+    },
+    "SecretTests": {
+        "test_credential_shapes_are_caught",
+        "test_prose_about_secrets_is_not_a_secret",
+        "test_the_repository_carries_no_credentials",
+    },
+    "ArtifactTests": {
+        "test_a_complete_pair_of_artifacts_passes",
+        "test_a_credential_inside_an_artifact_is_rejected",
+        "test_a_wheel_without_the_standard_library_is_rejected",
+        "test_an_sdist_without_its_license_is_rejected",
+        "test_benchmark_records_never_ship",
+        "test_tests_may_ship_in_an_sdist_but_not_in_a_wheel",
+        "test_the_digests_are_reported",
+    },
+    "ReportTests": {
+        "test_a_failed_check_makes_the_report_unhappy",
+        "test_the_cli_exits_non_zero_on_a_problem",
+        "test_the_report_is_machine_readable",
+    },
+    "DocumentationTests": {
+        "test_the_readme_points_at_the_release_document",
+        "test_the_release_checklist_names_the_real_commands",
+        "test_the_workflow_runs_the_release_gate",
+    },
+    "ContinuousIntegrationHonestyTests": {
+        "test_the_ab_lane_checks_both_arms",
+        "test_the_isolation_gate_demands_the_jail_only_where_it_can_run",
+        "test_the_runner_is_told_to_allow_user_namespaces",
+        "test_the_study_lane_runs_where_it_can_and_proves_it_compiled",
+    },
+    "RegistryIsolationReportTests": {
+        "test_a_host_without_namespaces_says_why",
+        "test_strict_mode_fails_when_namespaces_are_missing",
+        "test_the_ok_line_names_the_isolation_backend",
     },
     # --- N7: model-facing guide, grammar conformance, A/B and feedback ---------
     "GuideManifestTests": {
@@ -565,6 +619,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
+    import test_release  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
@@ -573,8 +628,8 @@ def discovered_tests() -> dict[str, set[str]]:
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_files, test_float,
                    test_grammar, test_guides, test_local_model_server, test_modules,
-                   test_nava, test_registry, test_sandbox, test_spec, test_stdlib,
-                   test_study):
+                   test_nava, test_registry, test_release, test_sandbox, test_spec,
+                   test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -758,9 +813,35 @@ def check_diagnostics() -> list[str]:
     return problems
 
 
-def verify() -> list[str]:
+def isolation_state() -> dict:
+    """Which isolation backend this host can actually run programs under.
+
+    The registry is the project's "nothing goes missing quietly" mechanism, so
+    it reports this instead of leaving it implicit: a run under `rlimits` tests
+    the documented gap, not the jail, and a reader of the log must be able to
+    tell which one happened.
+    """
+    from nava_lang import sandbox  # noqa: PLC0415
+    available = sandbox.namespaces_available()
+    return {
+        "backend": "namespaces" if available else "rlimits",
+        "namespaces_available": available,
+        "reason": None if available else sandbox.namespaces_probe()["reason"],
+    }
+
+
+def verify(require_namespaces: bool = False) -> list[str]:
     """Return every problem found; an empty list means the gate passes."""
     problems: list[str] = []
+    state = isolation_state()
+    if require_namespaces and not state["namespaces_available"]:
+        problems.append(
+            "the namespace backend is required but unavailable on this host: "
+            f"{state['reason']} (the jail tests would silently assert the refusal path "
+            "instead of testing isolation; run where unprivileged user namespaces are "
+            "permitted, e.g. `sudo sysctl -w "
+            "kernel.apparmor_restrict_unprivileged_userns=0`)"
+        )
     missing = missing_tools()
     if missing:
         message = f"required tools are missing: {', '.join(missing)}"
@@ -781,8 +862,17 @@ def verify() -> list[str]:
     return problems
 
 
-def main() -> int:
-    problems = verify()
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Suite and fixture registry guard.",
+        epilog="By default a host without user namespaces is reported, not failed: the "
+               "suite asserts the documented refusal there. --require-namespaces turns "
+               "that into a failure, for a CI lane that claims to test the jail.",
+    )
+    parser.add_argument("--require-namespaces", action="store_true",
+                        help="fail unless the namespace backend can run here")
+    args = parser.parse_args(argv)
+    problems = verify(require_namespaces=args.require_namespaces)
     for problem in problems:
         print(f"registry: {problem}", file=sys.stderr)
     if problems:
@@ -790,10 +880,15 @@ def main() -> int:
     tests = sum(len(methods) for methods in REGISTERED_TESTS.values())
     cases = sum(REGISTERED_TASKS.values())
     fixtures = sum(REGISTERED_FIXTURE_DIRS.values()) + REGISTERED_MODULE_CASES
+    state = isolation_state()
+    isolation = f"isolation {state['backend']}"
+    if not state["namespaces_available"]:
+        isolation += f" (no namespaces: {state['reason']})"
     print(
         f"OK: {tests} registered tests, {len(REGISTERED_TASKS)} tasks with {cases} cases, "
         f"{fixtures} spec fixtures, {len(CODES)} diagnostic codes, "
-        f"tools {', '.join(REQUIRED_TOOLS)} present, languages {', '.join(REGISTERED_LANGUAGES)}"
+        f"tools {', '.join(REQUIRED_TOOLS)} present, languages {', '.join(REGISTERED_LANGUAGES)}, "
+        f"{isolation}"
     )
     return 0
 

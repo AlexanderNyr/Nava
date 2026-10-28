@@ -38,6 +38,35 @@ jobs:
           "$CC" --version | head -1
           "$CXX" --version | head -1
 
+      # Hosted runners deny unprivileged user namespaces (AppArmor on Ubuntu
+      # 23.10+), which silently turned the isolation gate into a test of the
+      # refusal path. Restore the backend when the runner allows it, and report
+      # which backend actually ran either way: a lane must not be green while
+      # testing something other than what its name says.
+      - name: Enable unprivileged user namespaces (best effort)
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Isolation backend
+        id: isolation
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, ".")
+          from nava_lang import sandbox
+          host = sandbox.describe_host()
+          print("host:", json.dumps(host, indent=2))
+          available = host["namespaces_available"]
+          if available:
+              print("::notice::isolation backend: namespaces")
+          else:
+              print(f"::warning::isolation backend: rlimits ({host['namespaces_reason']}); "
+                    "the gate below asserts the documented refusal instead of the jail")
+          with open(os.environ["GITHUB_OUTPUT"], "w", encoding="utf-8") as handle:
+              handle.write(f"namespaces={'true' if available else 'false'}\n")
+          PY
+
       - name: Registry and fixture guard
         run: python3 tests/registry.py
 
@@ -53,18 +82,32 @@ jobs:
       - name: Test suite (no skipped tests allowed)
         run: python3 -m unittest discover -s tests -v
 
-      - name: Isolation gate (host-dependent backend)
+      - name: Isolation gate
         run: |
-          python3 - <<'PY'
-          import sys
-          sys.path.insert(0, ".")
-          from nava_lang import sandbox
-          host = sandbox.describe_host()
-          print("host:", host)
-          mode = "required" if host["namespaces_available"] else "auto"
-          print("testing with mode:", mode)
-          PY
-          python3 -m unittest tests.test_sandbox -v
+          if [ "${{ steps.isolation.outputs.namespaces }}" = "true" ]; then
+            # The jail really is exercisable here, so demand it rather than
+            # quietly accepting the fallback.
+            python3 tests/registry.py --require-namespaces
+            python3 -m unittest -v tests.test_sandbox tests.test_files
+          else
+            python3 -m unittest -v tests.test_sandbox tests.test_files
+            echo "::warning::no namespace backend on this runner: the jail test asserted the refusal path"
+            set +e
+            python3 nava run eval/solutions/gcd.nv --isolation required
+            status=$?
+            python3 tests/registry.py --require-namespaces > /dev/null 2>&1
+            strict=$?
+            set -e
+            if [ "$status" -ne 2 ]; then
+              echo "::error::'--isolation required' did not refuse on a host without namespaces (status $status)"
+              exit 1
+            fi
+            if [ "$strict" -ne 1 ]; then
+              echo "::error::'registry.py --require-namespaces' passed without a namespace backend"
+              exit 1
+            fi
+            echo "the CLI refused required isolation with status 2 and E0601, and the strict registry guard failed, as documented"
+          fi
 
       - name: Diagnostic contract smoke test
         run: |
@@ -180,8 +223,22 @@ jobs:
       - name: Mock study end to end
         run: |
           python3 eval/study.py --provider mock --task gcd --task sum_to_n \
-            --languages nava,c,cpp --attempts 2 --out "$RUNNER_TEMP/study.json"
+            --languages nava,c,cpp --attempts 2 --isolation auto \
+            --out "$RUNNER_TEMP/study.json"
           python3 eval/check_study_record.py "$RUNNER_TEMP/study.json" --require not-measured
+          python3 - "$RUNNER_TEMP/study.json" <<'PY'
+          import json, sys
+          record = json.load(open(sys.argv[1], encoding="utf-8"))
+          # Without this the lane was green while every attempt failed to run:
+          # the record said "not-measured" and nobody asked why.
+          backend = record["plan"]["isolation_backend"]
+          assert backend in ("namespaces", "rlimits"), backend
+          evaluated = record["model_measurements"]["evaluated_attempts"]
+          assert evaluated == 12, f"only {evaluated} of 12 attempts were compiled and tested"
+          point = record["aggregates"]["gcd/nava"]["pass_at_1"]["point"]
+          assert point == 1.0, f"the known-correct answer did not pass: pass@1 {point}"
+          print(f"compiled and tested {evaluated} attempts under {backend}")
+          PY
       - name: A provider error must not look like a measurement
         run: |
           set +e
@@ -251,9 +308,18 @@ jobs:
       - name: A/B harness without a model
         run: |
           python3 eval/ab.py --plan-only --provider openai --model ci --attempts 30 > /dev/null
-          python3 eval/ab.py --provider mock --task gcd --attempts 1 \
+          python3 eval/ab.py --provider mock --task gcd --attempts 1 --isolation auto \
             --out "$RUNNER_TEMP/ab.json"
           python3 eval/check_ab_record.py "$RUNNER_TEMP/ab.json" --require not-measured
+          python3 - "$RUNNER_TEMP/ab.json" <<'PY'
+          import json, sys
+          record = json.load(open(sys.argv[1], encoding="utf-8"))
+          for arm in ("free", "constrained"):
+              evaluated = record["arms"][arm]["evaluated_attempts"]
+              assert evaluated == 1, f"{arm}: {evaluated} of 1 attempt was compiled and tested"
+          print("both arms compiled and tested their attempt under",
+                record["plan"]["isolation_backend"])
+          PY
           set +e
           python3 eval/check_ab_record.py "$RUNNER_TEMP/ab.json" --require measured
           status=$?

@@ -192,6 +192,21 @@ def main(argv: list[str] | None = None) -> int:
         selected = [tasks[task_id] for task_id in args.task_ids]
     task_index = {task["id"]: task for task in selected}
 
+    # Same rule as `eval/study.py`: refuse before spending a call when the
+    # requested isolation cannot run here. Otherwise a two-arm comparison ends up
+    # as two tables of zeros and looks like a model result.
+    try:
+        isolation_backend = sandbox.select_backend(args.isolation)
+    except sandbox.SandboxUnavailable as error:
+        if args.plan_only:
+            print(f"warning: this plan cannot run on this host: {error}", file=sys.stderr)
+            isolation_backend = None
+        else:
+            print(f"ab: {error}", file=sys.stderr)
+            print(f"ab: use --isolation auto to fall back to {sandbox.select_backend('auto')}, "
+                  "or run where user namespaces are permitted", file=sys.stderr)
+            return 2
+
     grammar_text = grammar.emit_gbnf()
     problems = constrained.check(grammar_text)
     if problems:
@@ -216,6 +231,7 @@ def main(argv: list[str] | None = None) -> int:
                     "max_tokens": args.max_tokens, "guide_included": not args.no_guide},
         "scale": study.classify_scale(len(selected), args.attempts),
         "isolation": args.isolation,
+        "isolation_backend": isolation_backend,
     }
     if args.plan_only:
         print(json.dumps(plan, indent=2, ensure_ascii=False))

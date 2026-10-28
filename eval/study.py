@@ -321,11 +321,18 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
         candidate.write_text(code, encoding="utf-8")
         report = run_evaluator(candidate, task_id, language, isolation=isolation,
                                timeout=timeout, memory=memory, task_file=task_file)
-        if "internal_error" in report:
-            round_record["error"] = report["internal_error"]
-            round_record["error_class"] = "EvaluatorError"
-            record["provider_error"] = {"message": report["internal_error"],
-                                        "class": "EvaluatorError", "round": round_index}
+        refusal = report.get("internal_error") or report.get("error")
+        if refusal:
+            # `evaluate.py` exits 2 with an `error` field when it *refused* to run
+            # — no isolation backend, no compiler, a bad task file. Recording
+            # that as "compiled: false, 0 of N tests" would turn an unrunnable
+            # study into a table of zeros (it happened on a CI runner), so it is
+            # an error and the run exits non-zero.
+            round_record["error"] = refusal
+            round_record["error_class"] = report.get("error_class") or "EvaluatorError"
+            record["provider_error"] = {"message": refusal,
+                                        "class": round_record["error_class"],
+                                        "round": round_index}
             break
         summary = report.get("summary", {})
         round_record.update({
@@ -465,6 +472,19 @@ def main(argv: list[str] | None = None) -> int:
                            "sha256": hashlib.sha256(material).hexdigest(),
                            "tasks": sum(1 for task in tasks if task["source"] == str(path)),
                            "name": "held-out set" if held_out else path.name})
+    # Which backend would run programs here, and — when the answer is "none" —
+    # why. `--plan-only` describes a run without performing it, so it records the
+    # decision; an actual run refuses before spending a single call, because with
+    # `--isolation required` on a host that denies unprivileged user namespaces
+    # (hosted CI runners do) every attempt would fail identically and the run
+    # would produce a table of zeros that looks like a weak model.
+    isolation_problem = None
+    try:
+        isolation_backend = sandbox.select_backend(args.isolation)
+    except sandbox.SandboxUnavailable as error:
+        isolation_backend = None
+        isolation_problem = str(error)
+
     plan = {
         "tasks": [{"id": task["id"], "held_out": task["held_out"], "cases": len(task["tests"])}
                   for task in tasks],
@@ -480,13 +500,27 @@ def main(argv: list[str] | None = None) -> int:
                     # Names only: a value may be a credential.
                     "extra_header_names": sorted(headers)},
         "isolation": args.isolation,
+        # The mode asked for, the backend that will actually run programs, and —
+        # when there is none — the reason, so a plan is self-checking.
+        "isolation_backend": isolation_backend,
+        "isolation_available": isolation_problem is None,
+        "isolation_reason": isolation_problem,
         "store_raw": args.store_raw,
     }
     scale = classify_scale(len(tasks), args.attempts)
     plan["expected_scale"] = scale
     if args.plan_only:
         print(json.dumps(plan, ensure_ascii=False, indent=2))
+        if isolation_problem:
+            print(f"warning: this plan cannot run on this host: {isolation_problem}",
+                  file=sys.stderr)
         return 0
+    if isolation_problem:
+        print(f"error: {isolation_problem}", file=sys.stderr)
+        print(f"error: use --isolation auto to fall back to "
+              f"{sandbox.select_backend('auto')} (the record will say which backend ran), "
+              "or run where user namespaces are permitted", file=sys.stderr)
+        return 2
 
     provider = build_provider(args.provider, model=args.model, base_url=args.base_url,
                               api_key_env=args.api_key_env, replay_path=args.replay_file,

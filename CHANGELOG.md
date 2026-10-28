@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+CI follow-up: the eight `required` jobs are red on GitHub-hosted runners, and the
+study lane was green while measuring nothing.
+
+- The red jobs: `tests/test_files.py` called `sandbox.select_backend("required")`
+  at module level — a *selection*, which raises by design — where it needed a
+  *probe*. On a runner without unprivileged user namespaces it aborted
+  `tests/registry.py` at import time, before a single test ran.
+- `nava_lang/sandbox.py` gains `namespaces_probe()`, which returns
+  `{available, reason, detail}`; `namespaces_available()` is the boolean view, and
+  the refusal message for `--isolation required` now carries the reason `unshare`
+  gave. Nothing falls back silently: `required` still refuses (`exit 2`, `E0601`).
+- The study and A/B harnesses refuse *before* spending a provider call when
+  `--isolation required` cannot be satisfied (`exit 2`, stderr names
+  `--isolation auto`), and `--plan-only` records `isolation_available`,
+  `isolation_reason` and `isolation_backend`. An evaluator refusal is now a
+  `provider_error` (`EvaluatorError`), never a wrong answer — a harness that
+  compiled nothing can no longer report `pass@1 = 0.00` as a measurement.
+- `tests/registry.py` prints the isolation backend in its OK line and accepts
+  `--require-namespaces`, which fails instead of skipping when the jail cannot
+  run (the message names the AppArmor sysctl).
+- The workflow attempts to enable unprivileged user namespaces, reports which
+  backend the runner has, and the isolation gate now gates: it demands the jail
+  where namespaces exist, and where they do not it asserts the documented
+  refusal and requires `--require-namespaces` to fail. The study and A/B lanes
+  run `--isolation auto` and assert `evaluated_attempts` and `pass@1`, so a lane
+  cannot be green while compiling nothing.
+- `tests/test_release.py` is registered with the registry guard (it was not
+  discovered at all) and pins these properties, including the lane assertions.
+
 Phase N3 of `PLAN.md` follow-up: the study now runs against a hosted,
 rate-limited provider as well as a local model, and the results are recorded.
 

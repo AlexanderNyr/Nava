@@ -162,26 +162,49 @@ class Outcome:
 # Backend detection
 # --------------------------------------------------------------------------
 
-_probe_cache: dict[str, bool] = {}
+_probe_cache: dict[str, dict] = {}
 
 
-def namespaces_available() -> bool:
-    """True when a real namespace backend can be used on this host."""
+def namespaces_probe() -> dict:
+    """Probe the namespace backend once and keep the reason, not just the answer.
+
+    A bare `False` is not enough to act on: hosted CI runners deny
+    unprivileged user namespaces (AppArmor on Ubuntu 24.04 and similar), a
+    kernel can be built without them, and container seccomp policies block
+    `unshare` outright. Each of those needs a different response, so the probe
+    records what actually happened.
+    """
     if "namespaces" in _probe_cache:
         return _probe_cache["namespaces"]
-    available = False
-    if sys.platform.startswith("linux") and shutil.which("unshare"):
+    result = {"available": False, "reason": None, "detail": None}
+    unshare = shutil.which("unshare") if sys.platform.startswith("linux") else None
+    if not sys.platform.startswith("linux"):
+        result["reason"] = f"Linux namespaces do not exist on {sys.platform}"
+    elif unshare is None:
+        result["reason"] = "`unshare` is not on PATH"
+    else:
         try:
             probe = subprocess.run(
                 ["unshare", "--user", "--map-root-user", "--net", "--pid", "--fork",
                  "--mount", "--", "true"],
-                capture_output=True, timeout=30,
+                capture_output=True, timeout=30, text=True,
             )
-            available = probe.returncode == 0
-        except (OSError, subprocess.TimeoutExpired):
-            available = False
-    _probe_cache["namespaces"] = available
-    return available
+            if probe.returncode == 0:
+                result["available"] = True
+            else:
+                detail = (probe.stderr or probe.stdout or "").strip()
+                result["reason"] = (f"`unshare` exited {probe.returncode}: "
+                                    f"{detail.splitlines()[-1] if detail else 'no message'}")
+                result["detail"] = detail[-2000:]
+        except (OSError, subprocess.TimeoutExpired) as error:
+            result["reason"] = f"the probe could not run: {type(error).__name__}: {error}"
+    _probe_cache["namespaces"] = result
+    return result
+
+
+def namespaces_available() -> bool:
+    """True when a real namespace backend can be used on this host."""
+    return bool(namespaces_probe()["available"])
 
 
 def select_backend(mode: str) -> str:
@@ -193,19 +216,25 @@ def select_backend(mode: str) -> str:
     if namespaces_available():
         return "namespaces"
     if mode == "required":
+        reason = namespaces_probe()["reason"]
         raise SandboxUnavailable(
             "isolation mode 'required' needs Linux namespaces via `unshare` "
-            "(user, mount, PID and network namespaces); this host does not provide them. "
-            "Refusing to run instead of falling back to an unsandboxed mode."
+            "(user, mount, PID and network namespaces); this host does not provide them"
+            + (f": {reason}" if reason else "")
+            + ". Refusing to run instead of falling back to an unsandboxed mode."
         )
     return "rlimits"
 
 
 def describe_host() -> dict:
+    probe = namespaces_probe()
     return {
         "platform": sys.platform,
         "unshare": shutil.which("unshare"),
-        "namespaces_available": namespaces_available(),
+        "namespaces_available": probe["available"],
+        # Why not, when not: "`unshare` is not on PATH", "`unshare` exited 1:
+        # unshare: unshare failed: Operation not permitted", ...
+        "namespaces_reason": probe["reason"],
         "user_namespaces_max": _read_sysctl("/proc/sys/user/max_user_namespaces"),
         "backends": {"namespaces": namespaces_available(), "rlimits": True},
     }

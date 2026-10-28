@@ -13,6 +13,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -21,6 +23,10 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from nava_lang import sandbox  # noqa: E402
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -312,6 +318,89 @@ class DocumentationTests(unittest.TestCase):
         # The packaging lane must use the wheel from a directory that is not the
         # checkout, or a missing package-data entry would go unnoticed.
         self.assertIn('cd "$RUNNER_TEMP', workflow)
+
+
+class ContinuousIntegrationHonestyTests(unittest.TestCase):
+    """A lane must not be green while it measured nothing.
+
+    Every assertion here exists because one of these lanes passed on a hosted
+    runner while compiling nothing: the isolation backend was unavailable there,
+    the harness recorded "not-measured" and the step was considered successful.
+    """
+
+    def setUp(self):
+        self.workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    def test_the_study_lane_runs_where_it_can_and_proves_it_compiled(self):
+        self.assertIn("--isolation auto", self.workflow,
+                      "the study lane must not require a backend the runner may lack")
+        self.assertIn('record["model_measurements"]["evaluated_attempts"]', self.workflow,
+                      "the study lane must assert that attempts were compiled and tested")
+        self.assertIn('record["plan"]["isolation_backend"]', self.workflow,
+                      "the study lane must record and print which backend ran")
+
+    def test_the_ab_lane_checks_both_arms(self):
+        for arm in ("free", "constrained"):
+            self.assertIn(arm, self.workflow)
+        self.assertIn('record["arms"][arm]["evaluated_attempts"]', self.workflow)
+
+    def test_the_isolation_gate_demands_the_jail_only_where_it_can_run(self):
+        self.assertIn("tests/registry.py --require-namespaces", self.workflow)
+        self.assertIn("steps.isolation.outputs.namespaces", self.workflow)
+        # Where the jail cannot run, the refusal path is asserted instead, and
+        # the strict guard must fail there — otherwise "isolation gate" is a name
+        # for a lane that tests nothing.
+        self.assertIn("did not refuse on a host without namespaces", self.workflow)
+        self.assertIn("passed without a namespace backend", self.workflow)
+
+    def test_the_runner_is_told_to_allow_user_namespaces(self):
+        self.assertIn("kernel.apparmor_restrict_unprivileged_userns=0", self.workflow)
+        self.assertIn("::warning::isolation backend", self.workflow)
+
+
+class RegistryIsolationReportTests(unittest.TestCase):
+    """`tests/registry.py` must say which backend this host can run."""
+
+    def deny_namespaces(self):
+        """A PATH whose `unshare` exists but refuses, as AppArmor makes it do.
+
+        Emptying PATH instead would also hide `sh` and `cc`, which the registry
+        legitimately needs.
+        """
+        directory = Path(tempfile.mkdtemp(prefix="nava-no-userns-"))
+        script = directory / "unshare"
+        script.write_text("#!/bin/sh\n"
+                          "echo 'unshare: unshare failed: Operation not permitted' >&2\n"
+                          "exit 1\n", encoding="utf-8")
+        script.chmod(0o755)
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory, ignore_errors=True))
+        return f"{directory}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+
+    def run_registry(self, *arguments, path=None):
+        environment = dict(os.environ)
+        if path is not None:
+            environment["PATH"] = path
+        return subprocess.run([sys.executable, str(ROOT / "tests" / "registry.py"), *arguments],
+                              capture_output=True, text=True, cwd=str(ROOT),
+                              env=environment, timeout=300)
+
+    def test_the_ok_line_names_the_isolation_backend(self):
+        result = self.run_registry()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertRegex(result.stdout, r"isolation (namespaces|rlimits)")
+
+    def test_strict_mode_fails_when_namespaces_are_missing(self):
+        result = self.run_registry("--require-namespaces", path=self.deny_namespaces())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("namespace backend is required but unavailable", result.stderr)
+        self.assertIn("apparmor_restrict_unprivileged_userns", result.stderr)
+
+    def test_a_host_without_namespaces_says_why(self):
+        result = self.run_registry(path=self.deny_namespaces())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("isolation rlimits (no namespaces:", result.stdout)
+        # The reason, not just the verdict: this is what a CI log must show.
+        self.assertIn("Operation not permitted", result.stdout)
 
 
 if __name__ == "__main__":

@@ -29,7 +29,12 @@ for path in (ROOT, ROOT / "tests"):
 import grants  # noqa: E402
 from nava_lang import sandbox  # noqa: E402
 
-NAMESPACES = sandbox.select_backend("required") == "namespaces"
+#: Whether this host can run the namespace jail. This is a *probe*, not a
+#: selection: `select_backend("required")` raises by design when namespaces are
+#: unavailable, and a module-level constant must never be able to fail the
+#: import of a whole test module (it did: the registry guard died on the GitHub
+#: runner before any test ran).
+NAMESPACES = sandbox.namespaces_available()
 READ = 'fn main() {\n    print(read_file("data.txt"))\n}\n'
 
 
