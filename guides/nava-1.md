@@ -381,6 +381,48 @@ fn main() {
 
 Output: `2`, `1`, `9`, `2.5`.
 
+## Edition 2: function values
+
+A function is a value whose type is its signature, written `fn(i64) -> i64` and
+`fn() -> void` for one that returns nothing:
+
+* name a declared function where a value is expected — `let f = double` — and
+  the type is inferred from its signature; `let f: fn(i64) -> i64 = double` says
+  it out loud;
+* call through a variable like any function: `f(21)`. The checker knows the
+  arity and every argument type, so `f(true)` is `E0327` before the program runs;
+* a signature fits everywhere a value fits: pass it, return it, keep it in a
+  struct field or a variant payload, put it in `Option(fn(i64) -> i64)`, and use
+  it as the type argument of a generic call.
+
+The value is the address of a function; there are no closures and nothing is
+captured, so a function defined inside another one does not exist. A call goes
+through a **name only**: `ops.op(x)` is `E0441`, so bind the field first with
+`let f: fn(i64) -> i64 = ops.op`. Function values cannot be compared
+(`E0442`), printed (`E0323`) or stored in an array, and a generic function is
+not a value at all (`E0437`) — write a small non-generic wrapper to pass one on.
+
+```nava
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+fn main() {
+    let f: fn(i64) -> i64 = double
+    print(f(21))
+    print(apply(double, 5))
+    print(apply(f, 6))
+}
+```
+
+Output: `42`, `10`, `12`.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -409,3 +451,6 @@ Output: `2`, `1`, `9`, `2.5`.
 14. Type parameters are declared with `<>` and instantiated with `()`:
     `fn swap<T>(p: Pair(T)) -> Pair(T)`, `Pair(i64)(first: 1, second: 2)`. A
     template name on its own is not a type (`E0437`).
+15. A function type is written `fn(i64) -> i64`, with the result always spelled
+    out. A call through a value goes through a name only: bind `ops.op` to a
+    `let` before calling it (`E0441`).

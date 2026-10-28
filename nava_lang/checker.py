@@ -9,7 +9,8 @@ from .model import (
     Diagnostic, EnumDecl, Expr, ExprStmt, Field, Float, For, Function, If, Import,
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Param, Program,
     Range, Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary,
-    Variable, Variant, VariantValue, While,
+    Variable, Variant, VariantValue, While, function_signature, function_type_parts,
+    is_function_type,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -50,6 +51,12 @@ def substitute_type(typ: str, substitution: dict[str, str]) -> str:
     """`Pair(T)` with `{T: i64}` -> `Pair(i64)`; an unknown name is unchanged."""
     if typ in substitution:
         return substitution[typ]
+    if is_function_type(typ):
+        # A signature mentions its parameters the same way a struct does:
+        # `fn(T) -> T` with `{T: i64}` is `fn(i64) -> i64`.
+        params, returns = function_type_parts(typ)
+        inner = ", ".join(substitute_type(item, substitution) for item in params)
+        return f"fn({inner}) -> {substitute_type(returns, substitution)}"
     split = split_instance(typ)
     if split is None:
         return typ
@@ -106,6 +113,13 @@ def is_array(typ: str | None) -> bool:
 
 def element_of(typ: str) -> str:
     return typ[1:-1]
+
+
+def is_value_type(typ: str | None) -> bool:
+    """Everything that may be held, passed, returned and copied but not printed."""
+    if not typ:
+        return False
+    return typ in VALUE_TYPES or is_array(typ) or is_function_type(typ)
 
 
 #: Element types an array may hold. A struct is allowed in edition 2 because it
@@ -217,8 +231,11 @@ class Checker:
                         param.loc, param.loc.advance(param.name),
                         hint=f"write `{param.typ}(i64)` with the type arguments",
                     )
+                if is_function_type(param.typ):
+                    self.check_function_type(param.typ, param.loc)
                 if param.typ not in VALUE_TYPES and not is_array(param.typ) \
-                        and not self.is_struct(param.typ) and not self.is_enum(param.typ):
+                        and not self.is_struct(param.typ) and not self.is_enum(param.typ) \
+                        and not is_function_type(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
                                param.loc.advance(param.name))
                 if param.mutable and not is_array(param.typ):
@@ -263,6 +280,8 @@ class Checker:
     def check_field_types(self, struct: Struct) -> None:
         """One struct's fields: a scalar, a struct or an enum, nothing owning."""
         for item in struct.fields:
+            if is_function_type(item.typ):
+                self.check_function_type(item.typ, item.loc)
             if item.typ in ("str",) or is_array(item.typ):
                 raise make(
                     "E0378",
@@ -279,7 +298,7 @@ class Checker:
                     hint=f"write `{item.typ}(i64)` with the type arguments",
                 )
             if item.typ not in VALUE_TYPES and not self.is_struct(item.typ) \
-                    and not self.is_enum(item.typ):
+                    and not self.is_enum(item.typ) and not is_function_type(item.typ):
                 raise make(
                     "E0203",
                     f"unknown type {item.typ!r}; use i64, bool, f64, or a declared "
@@ -352,9 +371,11 @@ class Checker:
                 f"{'s' if len(parameters) != 1 else ''}, got {len(arguments)}",
             )
         for argument in arguments:
-            if not (argument in VALUE_TYPES or self.is_struct(argument)
+            if not (is_value_type(argument) or self.is_struct(argument)
                     or self.is_enum(argument)):
                 raise make("E0203", f"unknown type {argument!r} in {typ}")
+            if is_function_type(argument):
+                self.check_function_type(argument, None)
         substitution = dict(zip(parameters, arguments))
         declared_variants = []
         for tag, (variant_name, types) in enumerate(variants):
@@ -439,6 +460,9 @@ class Checker:
                     *span,
                     hint=f"write `{item}(i64)` with the type arguments",
                 )
+            if is_function_type(item):
+                self.check_function_type(item, variant.loc)
+                continue
             if item not in VALUE_TYPES and not self.is_struct(item) \
                     and not self.is_enum(item):
                 raise make(
@@ -939,6 +963,12 @@ class Checker:
         """
         if typ in allowed or typ in VALUE_TYPES or typ == "void":
             return True
+        if is_function_type(typ):
+            parts = function_type_parts(typ)
+            if parts is None:
+                return False
+            params, returns = parts
+            return all(self.type_is_known(item, allowed) for item in params + [returns])
         split = split_instance(typ)
         if split is not None:
             name, arguments = split
@@ -1103,10 +1133,35 @@ class Checker:
         self.scopes[-1][name] = symbol
         return symbol
 
-    def lookup(self, name, loc) -> Symbol:
+    def check_function_type(self, typ: str, loc) -> None:
+        """Every part of a `fn(...) -> T` must itself be a value type."""
+        span = () if loc is None else (loc, loc)
+        parts = function_type_parts(typ)
+        if parts is None:
+            raise make("E0203", f"unknown type {typ!r}", *span)
+        params, returns = parts
+        if returns != "void" and not is_value_type(returns) \
+                and not self.is_struct(returns) and not self.is_enum(returns):
+            raise make("E0203", f"unknown return type {returns!r} in {typ}", *span)
+        for item in params:
+            if not is_value_type(item) and not self.is_struct(item) \
+                    and not self.is_enum(item):
+                raise make("E0203", f"unknown parameter type {item!r} in {typ}", *span)
+
+    def find_symbol(self, name) -> Symbol | None:
         for scope in reversed(self.scopes):
             if name in scope:
                 return scope[name]
+        return None
+
+    def function_named(self, name) -> Function | None:
+        """A function of the current module by name, or None."""
+        return self.by_module.get(self.current_module, {}).get(name)
+
+    def lookup(self, name, loc) -> Symbol:
+        symbol = self.find_symbol(name)
+        if symbol is not None:
+            return symbol
         raise make("E0308", f"unknown variable {name!r}", loc, loc.advance(name),
                    "declare it with `let` in this or an enclosing block before use")
 
@@ -1539,8 +1594,29 @@ class Checker:
         elif isinstance(expr, Boolean):
             typ = "bool"
         elif isinstance(expr, Variable):
-            expr.symbol = self.lookup(expr.name, expr.loc)
-            typ = expr.symbol.typ
+            symbol = self.find_symbol(expr.name)
+            if symbol is not None:
+                expr.symbol = symbol
+                typ = symbol.typ
+            else:
+                # Not a variable: a declared function used as a value (edition 2)
+                # is the only other thing a bare name can be.
+                function = self.function_named(expr.name)
+                if function is None:
+                    raise make("E0308", f"unknown variable {expr.name!r}", expr.loc,
+                               expr.loc.advance(expr.name),
+                               "declare it with `let` in this or an enclosing block before use")
+                if function.type_params:
+                    raise make(
+                        "E0437",
+                        f"{expr.name!r} is a generic function, so it has no single type",
+                        expr.loc, expr.loc.advance(expr.name),
+                        hint="a template is instantiated by a call; write a non-generic "
+                             "wrapper to pass it as a value",
+                    )
+                expr.function = function
+                expr.typ = function_signature(function)
+                typ = expr.typ
         elif isinstance(expr, Try):
             raise make(
                 "E0413",
@@ -1592,6 +1668,14 @@ class Checker:
                 self.comparable(expr.op, left, right, expr.loc)
                 typ = "bool"
             elif expr.op in {"==", "!="}:
+                if left == right and is_function_type(left):
+                    raise make(
+                        "E0442",
+                        f"operator {expr.op!r} cannot compare function values",
+                        expr.loc,
+                        hint="a function value is the address of its code; compare the "
+                             "results of calls instead",
+                    )
                 if left != right or left not in VALUE_TYPES:
                     raise make("E0320",
                                f"operator {expr.op!r} requires two values of the same type",
@@ -1647,6 +1731,10 @@ class Checker:
         return result
 
     def call(self, expr: Call, expected: str | None = None) -> str:
+        if expr.module is None:
+            indirect = self.indirect_call(expr)
+            if indirect is not None:
+                return indirect
         if expr.module is None and self.is_template(expr.name) \
                 and expr.name not in self.by_module.get(self.current_module, {}):
             raise make(
@@ -1766,6 +1854,38 @@ class Checker:
         expr.target = function
         return function.returns
 
+    def indirect_call(self, expr: Call) -> str | None:
+        """`f(3)` where `f` is a variable: a call through a function value.
+
+        A declared function wins over a variable of the same name, so every
+        edition-1 program keeps meaning what it meant. The parameters of a
+        function type are immutable: a `fn([i64]) -> void` may read an array it
+        is handed, and only a declared function can ask for `mut`.
+        """
+        symbol = self.find_symbol(expr.name)
+        if symbol is None or self.function_named(expr.name) is not None:
+            return None
+        if not is_function_type(symbol.typ):
+            raise make(
+                "E0439",
+                f"{expr.name!r} is {symbol.typ}, so it cannot be called",
+                expr.loc, expr.loc.advance(expr.name),
+                hint="only a variable of a function type can be called; declare it as "
+                     f"`let {expr.name}: fn(i64) -> i64 = ...`",
+            )
+        params, returns = function_type_parts(symbol.typ)
+        if len(expr.args) != len(params):
+            plural = "" if len(params) == 1 else "s"
+            raise make(
+                "E0326",
+                f"{expr.name} expects {len(params)} argument{plural}, got {len(expr.args)}",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"its type is {symbol.typ}",
+            )
+        self.check_arguments(expr, [Param("argument", item, expr.loc) for item in params])
+        expr.callee = symbol
+        return returns
+
     def generic_call(self, expr: Call, template: Function) -> str:
         """A call of a template: one type per instantiation, checked once."""
         if expr.type_args is not None:
@@ -1791,6 +1911,10 @@ class Checker:
     def mentions_type_parameter(typ: str, parameters: list[str]) -> bool:
         if typ in parameters:
             return True
+        if is_function_type(typ):
+            params, returns = function_type_parts(typ)
+            return any(Checker.mentions_type_parameter(item, parameters)
+                       for item in params + [returns])
         split = split_instance(typ)
         if split is None:
             return False

@@ -75,7 +75,9 @@ class PhaseRecordTests(unittest.TestCase):
 
     def test_the_status_lines_name_the_last_specified_phase(self):
         header = PLAN.read_text(encoding="utf-8").splitlines()[2]
-        self.assertIn("N0–N9 DELIVERED", header)
+        # The delivered range grows with every phase; what must not drift is the
+        # shape: a delivered range, the phase under way and an untouched tail.
+        self.assertRegex(header, r"N0–N\d+ DELIVERED")
         self.assertIn("N10", header)
         self.assertIn("NOT STARTED", header)
         # The independence plan carries its own status line, so a phase cannot be

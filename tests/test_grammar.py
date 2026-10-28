@@ -53,6 +53,10 @@ GRAMMAR_REJECTS = frozenset(
     # A label is part of a loop and `pub` is a prefix of a function: both are
     # shapes, so the grammar refuses them in the wrong position as well.
     | {"E0346", "E0350", "E0415", "E0432", "E0434"}
+    # A call target is a name: `h.op(x)` and `fn(mut [i64]) -> i64` are shapes
+    # the grammar does not have, so they are refused while reading the source
+    # rather than by the checker.
+    | {"E0441", "E0443"}
     # `edition` is a prefix of the file in the grammar and in the compiler.
     | {"E0370"}
 )
@@ -84,7 +88,10 @@ GRAMMAR_ACCEPTS = frozenset(
      # that cannot be inferred and a second argument list are names and arities.
      # A grammar with no symbol table cannot tell `identity(i64)(7)` from
      # `double(i64)(21)`, so it accepts both and the compiler says which is which.
-     | {"E0435", "E0436", "E0437", "E0438"})
+     | {"E0435", "E0436", "E0437", "E0438"}
+     # Function values: `x(1)` where `x` is not a function, and `f == g` for two
+     # addresses, are calls and comparisons the shape cannot refuse.
+     | {"E0439", "E0442"})
     - GRAMMAR_REJECTS
 )
 

@@ -1,0 +1,12 @@
+edition 2;
+
+fn fill(a: mut [i64]) -> i64 {
+    a[0] = 1
+    return a[0]
+}
+
+fn main() {
+    let arr: [i64] = array_zeros(2)
+    let f: fn(mut [i64]) -> i64 = fill
+    print(f(arr))
+}

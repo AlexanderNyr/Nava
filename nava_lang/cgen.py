@@ -5,9 +5,9 @@ import os
 from . import limits, runtime
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer, Expr, ExprStmt,
-    Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
-    Number, Program, Range, Return, Slice, String, StructLiteral, Try, Unary,
-    Variable, VariantValue, While,
+    Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
+    MemberAssign, Number, Program, Range, Return, Slice, String, StructLiteral, Try,
+    Unary, Variable, VariantValue, While, function_type_parts, is_function_type,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -637,6 +637,53 @@ def element_of(typ: str) -> str:
     return typ[1:-1]
 
 
+def function_types(program: Program) -> dict[str, str]:
+    """Every function type a program mentions, mapped to its typedef name.
+
+    A function value is a C function pointer, and C has no type expression for a
+    pointer to function: it needs a typedef. Collecting the types up front, from
+    the type strings the checker wrote onto the tree, keeps the typedef block at
+    the top of the file. Names are assigned in sorted order, so the same program
+    always produces the same C.
+    """
+    found: set[str] = set()
+
+    def note(typ: str) -> None:
+        if not is_function_type(typ) or typ in found:
+            return
+        found.add(typ)
+        parts = function_type_parts(typ)
+        for item in parts[0] + [parts[1]]:
+            note(item)
+
+    def walk(node: object, seen: set[int]) -> None:
+        if isinstance(node, str):
+            note(node)
+            return
+        if isinstance(node, (list, tuple)):
+            for item in node:
+                walk(item, seen)
+            return
+        fields = getattr(node, "__dict__", None)
+        if fields is None or id(node) in seen:
+            return
+        seen.add(id(node))
+        for value in fields.values():
+            walk(value, seen)
+
+    # Only what is emitted is walked: a template is a recipe whose type
+    # parameters have no C type, and the checker emits one copy per instantiation.
+    roots = [function for function in program.functions if not function.type_params]
+    roots += [struct for struct in program.structs if not struct.type_params]
+    roots += list(program.struct_instances.values())
+    roots += [decl for decl in program.enums if not decl.type_params]
+    roots += list(program.instances.values())
+    seen: set[int] = set()
+    for root in roots:
+        walk(root, seen)
+    return {typ: f"nv_fnp_{index}" for index, typ in enumerate(sorted(found))}
+
+
 def c_string(value: str) -> str:
     # Fixed-width octal escapes avoid accidental C escape continuation, trigraphs,
     # source encoding differences, and interpolating user text into C syntax.
@@ -675,6 +722,8 @@ class CGenerator:
         self.structs: dict[str, object] = {struct.name: struct for struct in program.structs
                                            if not struct.type_params}
         self.structs.update(program.struct_instances)
+        #: Typedef name per function type: `fn(i64) -> i64` -> `nv_fnp_0`.
+        self.fnptr: dict[str, str] = function_types(program)
         #: Declared enums by name; a variant value is a compound literal of one.
         self.enums: dict[str, object] = {decl.name: decl for decl in program.enums
                                          if not decl.type_params}
@@ -688,6 +737,9 @@ class CGenerator:
             return C_TYPES[typ]
         if typ.startswith("[") and typ.endswith("]"):
             return f"nv_arr_{array_tag(typ)}"
+        pointer = self.fnptr.get(typ)
+        if pointer is not None:
+            return pointer
         struct = self.structs.get(typ)
         if struct is not None:
             return struct.cname
@@ -902,7 +954,20 @@ class CGenerator:
             self.line()
         self.line()
 
+    def emit_function_types(self) -> None:
+        """One typedef per reachable function type, the nested ones first."""
+        if not self.fnptr:
+            return
+        # Innermost first: a typedef's parameters are already declared.
+        for typ in sorted(self.fnptr, key=lambda item: (item.count("fn("), item)):
+            params, returns = function_type_parts(typ)
+            arguments = ", ".join(self.ctype(item) for item in params) or "void"
+            result = "void" if returns == "void" else self.ctype(returns)
+            self.line(f"typedef {result} (*{self.fnptr[typ]})({arguments});")
+        self.line()
+
     def generate(self) -> str:
+        self.emit_function_types()
         self.emit_structs()
         self.emit_arrays()
         # A template function has no C type until a call fixes its parameters, so
@@ -1361,6 +1426,9 @@ class CGenerator:
         if isinstance(expr, Boolean):
             return "true" if expr.value else "false"
         if isinstance(expr, Variable):
+            # A declared function used as a value is the address of its code.
+            if expr.function is not None:
+                return f"&{expr.function.cname}"
             return expr.symbol.cname
         if isinstance(expr, Member):
             return self.member_path(expr)
@@ -1422,7 +1490,9 @@ class CGenerator:
                 name = self.temp("[i64]", f"nv_arr_i64_new({args[0]})")
                 self.temporaries.append((name, "[i64]"))
                 return name
-            call = f"{expr.target.cname}({', '.join(args)})"
+            # A call through a variable dispatches on the pointer it holds.
+            callee = expr.callee.cname if expr.callee is not None else expr.target.cname
+            call = f"{callee}({', '.join(args)})"
             if expr.typ == "void":
                 self.line(call + ";")
                 return None

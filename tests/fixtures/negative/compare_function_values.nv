@@ -1,0 +1,13 @@
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() {
+    let f: fn(i64) -> i64 = double
+    let g: fn(i64) -> i64 = double
+    if f == g {
+        print(1)
+    }
+}

@@ -160,6 +160,10 @@ CODES: dict[str, tuple[str, str]] = {
     "E0436": (Severity.ERROR, "cannot infer a type argument"),
     "E0437": (Severity.ERROR, "a generic declaration is not a type"),
     "E0438": (Severity.ERROR, "type arguments in a call"),
+    "E0439": (Severity.ERROR, "the call target is not a function"),
+    "E0441": (Severity.ERROR, "a call cannot go through a field"),
+    "E0442": (Severity.ERROR, "function values cannot be compared"),
+    "E0443": (Severity.ERROR, "a function type has no mutable parameter"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N9 DELIVERED; N10 IN PROGRESS (N10a–N10f delivered; N10g open); N11–N18 SPECIFIED, NOT STARTED
+## Status: N0–N10 DELIVERED (N10a–N10g); N11–N18 SPECIFIED, NOT STARTED
 
 N3 has exploratory model results from three runs (a local 135M model and two hosted ones); its empirical run is open. N10–N18 (§4A) are the independence plan: a language that needs neither Python nor a C toolchain to build and run its own programs.
 
@@ -1072,7 +1072,7 @@ and the risks. `PLAN.md` states the dependency order and the non-goal reversal;
 
 | Phase | Subject | State |
 |---|---|---|
-| N10 | Structures, sum types, errors, generics | in progress — N10a (editions and structs), N10b (enums and `match`), N10c (`Option`/`Result`, `?`) N10d (arrays of structs, slices) and N10e (`defer`, labelled loops, `pub`) delivered |
+| N10 | Structures, sum types, errors, generics, function values | delivered in seven increments — N10a (editions and structs), N10b (enums and `match`), N10c (`Option`/`Result`, `?`), N10d (arrays of structs, slices), N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g (function values and `fn(T) -> U`); the delivery records are in `INDEPENDENCE.md` |
 | N11 | Memory, collections, strings | specified, not started |
 | N12 | A standard library with contracts | specified, not started |
 | N13 | Projects, packages, reproducibility | specified, not started |

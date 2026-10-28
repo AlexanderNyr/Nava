@@ -1152,6 +1152,42 @@
       "end_column": 17,
       "message": "type arguments come before the arguments of a call",
       "hint": "write double(21), or declare it as `fn double<T>(x: T) -> T`"
+    },
+    {
+      "file": "call_through_non_function.nv",
+      "code": "E0439",
+      "line": 5,
+      "column": 11,
+      "end_column": 12,
+      "message": "'x' is i64, so it cannot be called",
+      "hint": "only a variable of a function type can be called; declare it as `let x: fn(i64) -> i64 = ...`"
+    },
+    {
+      "file": "call_through_field.nv",
+      "code": "E0441",
+      "line": 14,
+      "column": 15,
+      "end_column": null,
+      "message": "a call cannot go through a field",
+      "hint": "bind it first, as in `let f = h.op`, and then call `f(...)`"
+    },
+    {
+      "file": "compare_function_values.nv",
+      "code": "E0442",
+      "line": 10,
+      "column": 10,
+      "end_column": null,
+      "message": "operator '==' cannot compare function values",
+      "hint": "a function value is the address of its code; compare the results of calls instead"
+    },
+    {
+      "file": "mutable_in_function_type.nv",
+      "code": "E0443",
+      "line": 10,
+      "column": 15,
+      "end_column": null,
+      "message": "a function type has no `mut` parameter",
+      "hint": "`mut` belongs to a declared function's array parameter; a function value can take `[i64]`, which is read-only"
     }
   ]
 }

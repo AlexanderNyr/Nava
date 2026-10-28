@@ -1,0 +1,16 @@
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+fn main() {
+    let f: fn(i64) -> i64 = double
+    print(f(21))
+    print(apply(double, 5))
+    print(apply(f, 6))
+}

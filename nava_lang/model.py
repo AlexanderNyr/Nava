@@ -157,6 +157,9 @@ class Slice(Expr):
 class Variable(Expr):
     name: str
     symbol: Symbol | None = field(default=None, init=False)
+    #: The declared function behind the name when it is used as a value in
+    #: edition 2. A variable of the same name wins; see `Checker.find_symbol`.
+    function: Function | None = field(default=None, init=False)
 
 
 @record()
@@ -169,6 +172,9 @@ class Call(Expr):
     #: The written type arguments of a generic function, `identity(i64)`, or None.
     type_args: list[str] | None = None
     target: Function | None = field(default=None, init=False)
+    #: The variable the call goes through, for `f(3)` where `f` is a value of a
+    #: function type (edition 2). None for a call of a declared function.
+    callee: "Symbol | None" = field(default=None, init=False)
 
 
 @record()
@@ -177,6 +183,56 @@ class Range(Expr):
 
     start: Expr
     end: Expr
+
+
+FUNCTION_TYPE = "fn("
+
+
+def is_function_type(typ: object) -> bool:
+    """`fn(i64) -> i64` is a value: the address of a function with that signature."""
+    return isinstance(typ, str) and typ.startswith(FUNCTION_TYPE)
+
+
+def function_type_parts(typ: str) -> tuple[list[str], str] | None:
+    """`fn(i64, [bool]) -> i64` -> `(["i64", "[bool]"], "i64")`.
+
+    The spelling is canonical — the return type is always written — so parsing it
+    back is unambiguous: the parameter list ends at the parenthesis that closes
+    the one after `fn`, at nesting depth zero.
+    """
+    if not is_function_type(typ):
+        return None
+    depth = 0
+    params: list[str] = []
+    current = ""
+    index = len(FUNCTION_TYPE)
+    while index < len(typ):
+        character = typ[index]
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            if depth == 0:
+                break
+            depth -= 1
+        elif character == "," and depth == 0:
+            params.append(current.strip())
+            current = ""
+            index += 1
+            continue
+        current += character
+        index += 1
+    tail = typ[index:]
+    if not tail.startswith(") -> "):
+        return None
+    if current.strip():
+        params.append(current.strip())
+    return params, tail[len(") -> "):]
+
+
+def function_signature(function: "Function") -> str:
+    """The function type of a declaration: `fn(i64, bool) -> i64`."""
+    params = ", ".join(param.typ for param in function.params)
+    return f"fn({params}) -> {function.returns}"
 
 
 @record()

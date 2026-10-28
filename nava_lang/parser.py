@@ -32,6 +32,15 @@ GENERIC_PRELUDE = {"Option": 1, "Result": 2}
 ELEMENT_TYPES = {"i64", "bool", "str"}
 
 
+def member_text(expr: Expr) -> str:
+    """`h.op` written back out, for a hint that names the reader's own code."""
+    if isinstance(expr, Member):
+        return f"{member_text(expr.base)}.{expr.field}"
+    if isinstance(expr, Variable):
+        return expr.name
+    return "value.field"
+
+
 class Parser:
     def __init__(self, tokens: list[Token]):
         self.tokens = tokens
@@ -125,6 +134,8 @@ class Parser:
                        self.current.loc, hint="end the statement with a newline or ';'")
 
     def parse_type(self) -> str:
+        if self.at("FN"):
+            return self.function_type()
         if self.at("["):
             opening = self.expect("[")
             if self.at("["):
@@ -162,6 +173,32 @@ class Parser:
             raise make("E0203", f"unknown type {token.value!r}; use i64, bool, str, or void",
                        token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
+
+    def function_type(self) -> str:
+        """`fn(i64) -> i64`, `fn() -> void`: the signature of a function value."""
+        start = self.expect("FN")
+        self.require_edition(start.loc, "a function type")
+        self.expect("(", "'(' after 'fn' in a function type")
+        params: list[str] = []
+        while not self.at(")"):
+            if self.at("MUT"):
+                raise make(
+                    "E0443",
+                    "a function type has no `mut` parameter",
+                    self.current.loc,
+                    hint="`mut` belongs to a declared function's array parameter; a "
+                         "function value can take `[i64]`, which is read-only",
+                )
+            params.append(self.parse_type())
+            if not self.take(","):
+                break
+        self.expect(")", "')'")
+        returns = "void"
+        if self.take("->"):
+            returns = self.parse_type()
+        # The canonical spelling: the return type is always written, so two
+        # function types are the same exactly when their strings are equal.
+        return f"fn({', '.join(params)}) -> {returns}"
 
     def generic_type(self, name: Token) -> str:
         """`Option(i64)`, `Result(i64, str)` or a declared template `Pair(i64)`."""
@@ -783,6 +820,16 @@ class Parser:
             self.i += 1
             field = self.expect("IDENT", "a field name after '.'")
             expr = Member(dot.loc, expr, str(field.value), field.loc)
+        if isinstance(expr, Member) and self.at("("):
+            # A field can hold a function value, but a call goes through a name,
+            # so the field has to be bound first. Saying so beats two errors.
+            raise make(
+                "E0441",
+                "a call cannot go through a field",
+                self.current.loc,
+                hint=f"bind it first, as in `let f = {member_text(expr)}`, and then "
+                     "call `f(...)`",
+            )
         if self.at("?"):
             mark = self.current
             self.require_edition(mark.loc, "the `?` operator")

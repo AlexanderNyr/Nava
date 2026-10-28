@@ -1202,6 +1202,97 @@ Restrictions, all edition 2 and all stated rather than implied:
   generic **function** crosses the boundary normally: `pub fn pick<T>(...)` is
   callable as `module::pick(3, 4)` from any module that imports it.
 
+### Function values
+
+A function can be used as a value. The value is the address of a top-level
+function; nothing is captured and no function is created while the program runs,
+so a function type is a plain type with a fixed signature.
+
+```text
+function_type  = "fn" "(" [ type { "," type } ] ")" [ "->" type ] ;
+function_value = IDENT ;                                   (* double *)
+indirect_call  = IDENT "(" [ arguments ] ")" ;             (* f(2), f() *)
+```
+
+A function type is written `fn(i64) -> i64`, and `fn() -> void` when it takes no
+arguments and returns nothing. The result is always written out, so two function
+types are the same exactly when their spellings are equal: `fn(i64) -> i64` and
+`fn(i64) -> f64` are different, unrelated types.
+
+```nava
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+fn twice(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(f(x))
+}
+
+fn main() {
+    let f: fn(i64) -> i64 = double
+    print(f(21))
+    print(twice(f, 5))
+    print(twice(double, 5))
+}
+```
+
+A declared function named in a value position has the type of its signature, so
+`let f = double` infers `fn(i64) -> i64` and needs no annotation. A call through
+a variable is checked against that signature before the program runs: the
+number of arguments (`E0326`), each argument type (`E0327`) and the result are
+all known, and a variable that does not hold a function type cannot be called at
+all (`E0439`). Assigning a function value of another signature is `E0311`, like
+any other type mismatch.
+
+A function type may appear wherever a type may: a `let` annotation, a parameter,
+a result, a struct field, a variant payload, a prelude instantiation such as
+`Option(fn(i64) -> i64)`, and the type arguments of a generic call. It is a value
+type, so a signature is copied like an `i64`: `let g = f` copies the address.
+
+```nava
+edition 2;
+
+fn double(x: i64) -> i64 {
+    return x * 2
+}
+
+struct Ops {
+    op: fn(i64) -> i64,
+    value: i64,
+}
+
+fn main() {
+    let ops: Ops = Ops(op: double, value: 4)
+    let f: fn(i64) -> i64 = ops.op
+    print(f(ops.value))
+}
+```
+
+The generated C keeps the type: one `typedef` per distinct signature and one
+`&nv_fn_N` per function value, so no call passes through `void *` and the C
+compiler checks the signature a second time.
+
+Restrictions, all edition 2 and all stated rather than implied:
+
+* there are no closures and no function literals: a value always names a
+  declared function, so there is nothing to capture;
+* a generic function has no single signature and is not a value (`E0437`); a
+  wrapper such as `fn double_i64(x: i64) -> i64 { return double(x) }` is the way
+  to pass one on;
+* a module-qualified name has no value spelling yet: `math::abs` may be called
+  but not bound, so pass it through a `pub fn` of its module instead;
+* a call cannot go through a field or any other expression (`E0441`): bind it
+  first, as in `let f: fn(i64) -> i64 = ops.op`;
+* two function values cannot be compared (`E0442`) and a function value cannot
+  be printed (`E0323`): an address is not a language-level value;
+* a function type takes no `mut` parameter (`E0443`) — a function value may take
+  `[i64]`, which is a read-only borrow, and only a declared function can ask for
+  `mut`;
+* function values cannot be stored in an array: an array element type is still
+  `i64`, `bool`, `str` or a struct (`E0206`).
+
 ## Diagnostics
 
 Errors are reported with a stable code, a source range and an optional hint.
@@ -1310,6 +1401,10 @@ never changes meaning; a new condition gets a new code.
 | `E0436` | error | cannot infer a type argument | `tests/fixtures/negative/cannot_infer_type_argument.nv` |
 | `E0437` | error | a generic declaration is not a type | `tests/fixtures/negative/generic_used_as_type.nv` |
 | `E0438` | error | type arguments come before the arguments of a call | `tests/fixtures/negative/type_args_on_plain_function.nv` |
+| `E0439` | error | the call target is not a function | `tests/fixtures/negative/call_through_non_function.nv` |
+| `E0441` | error | a call cannot go through a field | `tests/fixtures/negative/call_through_field.nv` |
+| `E0442` | error | function values cannot be compared | `tests/fixtures/negative/compare_function_values.nv` |
+| `E0443` | error | a function type has no mutable parameter | `tests/fixtures/negative/mutable_in_function_type.nv` |
 
 **Types and semantics**
 
@@ -1479,11 +1574,13 @@ module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
 Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs,
-slices, `defer`, labelled loops, `pub` and generic declarations of your own; it
-does not add `match` as an expression, generic arrays, type-parameter bounds,
-string or array fields, arrays of enums, struct or enum equality, printing a
-struct or an enum, or function pointers. Those are N10g and later in
-`INDEPENDENCE.md`, and nothing here is a promise that they exist today.
+slices, `defer`, labelled loops, `pub`, generic declarations of your own and
+function values with the type `fn(i64) -> i64`; it does not add closures or
+function literals, `match` as an expression, generic arrays, type-parameter
+bounds, string or array fields, arrays of enums, arrays of function values,
+struct or enum equality, or printing a struct, an enum or a function value.
+Those are N11 and later in `INDEPENDENCE.md`, and nothing here is a promise that
+they exist today.
 
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated

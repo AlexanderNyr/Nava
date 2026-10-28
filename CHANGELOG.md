@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+N10g: function values — a function as a value with a checked signature.
+
+- A function type is written `fn(i64) -> i64`, or `fn() -> void` when it returns
+  nothing. The result is always spelled out, so two signatures are the same type
+  exactly when they are written the same way.
+- A declared function named where a value is expected is a value:
+  `let f: fn(i64) -> i64 = double` (or `let f = double`). The value is the
+  address of the function — there is no closure and nothing is captured — and it
+  can be passed, returned, stored in a struct field or a variant payload, put in
+  `Option(fn(i64) -> i64)` and used as the type argument of a generic call.
+- A call through a variable is checked statically: `f(21)` knows the arity, every
+  argument type and the result, so `f(true)` is `E0327` and `f(1, 2)` is `E0326`
+  before the program runs. `E0311` catches a value of another signature.
+- The generated C keeps the type: one `typedef` per distinct signature and one
+  `&nv_fn_N` per function value, so nothing is passed as `void *` and the C
+  compiler checks the signature a second time.
+- Refusals, each with a code: calling something that is not a function (`E0439`),
+  a call through a field (`E0441`, bind it to a `let` first), comparing two
+  function values (`E0442`), `mut` inside a signature (`E0443`), and a generic
+  function used as a value (`E0437`, it has no single signature).
+- Guide, grammar artefact and measurements moved with the language: new guide
+  section and rule, canonical `fnvalues.nv` example, re-pinned digest, overhead
+  re-measured rather than estimated.
+- This closes the last N10 row of the `INDEPENDENCE.md` §2 audit: a call-back no
+  longer needs a closure.
+
 N10f: monomorphised generics — type parameters on `struct`, `enum` and `fn`.
 
 - `struct Pair<T>`, `enum Box<T>` and `fn swap<T>(p: Pair(T)) -> Pair(T)` are

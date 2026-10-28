@@ -174,6 +174,9 @@ CORE: dict[str, list[list[tuple]]] = {
     "param": [[T("IDENT"), T("COLON"), N("mut_opt"), N("type")]],
     "mut_opt": [[T("MUT")], []],
     "type": [[T("TYPE")], [T("IDENT")], [N("generic_type")],
+             # A function type: `fn(i64) -> i64`, `fn() -> void` (edition 2).
+             # `returns` already writes the arrow and the result type.
+             [T("FN"), T("LPAREN"), N("types_opt"), T("RPAREN"), N("returns")],
              [T("LBRACKET"), T("ELEM"), T("RBRACKET")],
              # An array of structs (edition 2): the element is a name the front
              # end has to resolve, so the grammar cannot tell it from a typo.

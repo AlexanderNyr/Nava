@@ -4,10 +4,10 @@ This is the plan for the two claims `PLAN.md` does not make: that Nava is a
 language in its own right, and that its toolchain stands on its own — no Python,
 no C compiler, no libc.
 
-**Status: N10 in progress — N10a (editions and structs), N10b (enums and
+**Status: N10 delivered — N10a (editions and structs), N10b (enums and
 `match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices),
-N10e (`defer`, labelled loops, `pub`) and N10f (monomorphised generics)
-delivered; N10g (function pointers) and N11–N18 specified, not started.** The
+N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
+(function values and pointers) are done; N11–N18 are specified, not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -43,26 +43,26 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 6 968 lines,
-13 modules and 221 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 7 269 lines,
+13 modules and 235 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N10f) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N10g) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
 | `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 256 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 68 / 53 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 108 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add`, `.discard`, `.update` | 12 / 12 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 395 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 89 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 20 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
-| `sorted(...)`, of which `key=` | 3 / 0 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 47 / 32 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
-| `lambda` | 1 | function pointers (the last N10 increment, N10g) | N10 |
+| `raise` / `try` | 266 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 69 / 59 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 111 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add`, `.discard`, `.update` | 12 / 14 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 413 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 98 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 22 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
+| `sorted(...)`, of which `key=` | 5 / 1 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
+| generator expressions, list/set comprehensions | 52 / 36 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| `lambda` | 2 | a function used as a value: `fn(i64) -> i64` and a call through a variable (N10g; there is still no closure, and the audit row is closed because a call-back needs no `lambda`) | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
 | generators, `await`, async functions | 0 | nothing; Nava is not asked to acquire them | — |
 
@@ -122,7 +122,7 @@ the guard, and the two implementations must agree on every entry.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a–N10f delivered, N10g open |
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
@@ -179,7 +179,7 @@ an edition-2 construct is rejected with the edition named.
 **Deliverable:** the patch that lands edition 2, the spec chapter, the fixtures
 and the closed audit.
 
-**Increments.** N10 is delivered in six patches, because one patch that changes
+**Increments.** N10 is delivered in seven patches, because one patch that changes
 the grammar, the checker, the code generator, the specification, the grammar
 artefact and the guide at once cannot be reviewed. A phase is still done only
 when the whole gate has run.
@@ -192,7 +192,7 @@ when the whole gate has run.
 | N10d | Slices `[T]` and range slicing, arrays of structs | **Delivered** (record below) |
 | N10e | `defer`, labelled loops, `pub` | **Delivered** (record below) |
 | N10f | Monomorphised generics: type parameters on `struct`, `enum` and `fn`, instantiation, inference | **Delivered** (record below) |
-| N10g | Function pointers: `fn(T) -> U` as a type, a function as a value, a call through a variable | Open (next) |
+| N10g | Function pointers: `fn(T) -> U` as a type, a function as a value, a call through a variable | **Delivered** (record below) |
 
 #### Delivery record N10a (2026-10-28)
 
@@ -283,6 +283,43 @@ prints nothing. The one that carries the language claim is
 `slice_mut_argument.nv`: a view can be read through and passed on, but it can
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
+
+#### Delivery record N10g (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A function type is a type, and a value has it | `tests/test_functions.py`: `test_a_declared_function_can_be_bound_and_called`, `test_a_function_value_fits_every_value_position` | `let f = double` infers `fn(i64) -> i64`; a signature is accepted in a `let` annotation, a parameter, a result, a struct field, a variant payload, `Option(fn(i64) -> i64)` and a generic call, and all seven run |
+| A call through a value is checked before it runs | `test_a_value_carries_its_signature`, `test_the_arity_is_checked_through_the_value`, `test_a_signature_is_part_of_the_type` | `f(true)` is `E0327` "argument 1 of f expects i64, got bool"; `f(1, 2)` is `E0326`; assigning `fn(i64) -> bool` to a `fn(i64) -> i64` variable is `E0312` |
+| The C keeps the type instead of erasing it | `test_the_generated_c_typedefs_each_signature` | Two distinct signatures over four bindings produce exactly two `typedef`s — one per signature, not one per binding, and no `void *` anywhere; a third repeat of the first signature adds nothing |
+| A signature is a value type like any other | `FunctionValueRuntimeTests.test_a_value_is_called_through_the_pointer`, `test_a_function_value_is_passed_and_returned`, `test_two_values_of_one_signature_compose` | A value passed, returned and called prints `42`, `20`, `12`; two values of one signature compose to `8` and `7`; a `void` function is a value (`1`, `1`); an array parameter travels through a value (`6`, `6`) |
+| Monomorphisation and function values meet correctly | `test_a_template_instantiates_per_signature`, `test_a_generic_instance_takes_one_copy_per_signature` | `apply<T>(f: fn(T) -> T, x: T)` compiles once per signature: two definitions for `i64`/`bool` on top of `main`, `double` and `flip`; running it prints `8`, `false`, `10` |
+| A nested signature is its own type, emitted in the right order | `test_a_nested_signature_is_its_own_type` | `fn(fn(i64) -> i64, i64) -> i64` is a separate `typedef` emitted after the inner one, and `apply2(twice)` prints `12` |
+| What cannot be done is refused with a code and a hint | `test_only_a_function_type_can_be_called`, `test_a_generic_function_is_not_a_value`, `test_a_call_cannot_go_through_a_field`, `test_two_function_values_cannot_be_compared`, `test_a_function_type_takes_no_mut_parameter`, `test_a_function_value_cannot_be_printed` | `E0439` names the type that is not a function and shows the annotation to write; `E0437` refuses a generic function as a value; `E0441` shows `let f = h.op`; `E0442` refuses `==`; `E0443` refuses `mut` in a signature; `print(f)` is `E0323` |
+| The grammar artefact agrees with the parser | `eval/grammar.py`, `tests/test_grammar.py` | A function type is a `type` production (`fn` `(` types `)` returns) in both back ends. `E0439` and `E0442` are classified as semantic — a call shape and a comparison the grammar cannot refuse; `E0441` and `E0443` as syntactic, because a call target is a name and `mut` belongs to a declaration |
+| The specification moved with the code | `LANGUAGE.md`, section "Function values" | Normative: the spelling, the address-not-closure semantics, the value positions, static checking of the call, the `typedef` in the generated C, and six stated restrictions; four new diagnostic rows (`E0439`, `E0441`–`E0443`) |
+| The guide and its measurements moved | `guides/nava-1.md` (digest `0ab04681…`, 15 157 bytes, 456 lines), `guides/examples/fnvalues.nv`, `eval/measurements/overhead-*.json` | New canonical example compiled and run (`42`, `10`, `12`); overhead re-measured: `cl100k_base` 50 917 prompt and 50 270 guide tokens, `o200k_base` 51 126 and 50 479, over the eleven tasks; `guides/examples.json` gained the `fnvalues` case; rule 15 added |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 497 registered tests, 11 tasks with 76 cases, 174 spec fixtures, 140 diagnostic codes`; suite **567 tests OK**; 23 new tests in `tests/test_functions.py`, four new negative fixtures, and `FunctionValueRuntimeTests` added to the guard that a skipped runtime test is not a pass |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 7 269 lines, 13 modules, 235 functions under `nava_lang/` after this increment; `tests/test_plan.py` recomputes them |
+
+Negative controls: four new single-file fixtures — `call_through_non_function.nv`
+(`E0439`), `call_through_field.nv` (`E0441`), `compare_function_values.nv`
+(`E0442`) and `mutable_in_function_type.nv` (`E0443`). The control that carries
+the claim is the emitted-C one: a compiler that represented a function value as
+`void *`, or that emitted one `typedef` per binding, would produce a different
+count, and `test_the_generated_c_typedefs_each_signature` reads the C rather
+than the intent. The second is `test_a_generic_instance_takes_one_copy_per_signature`:
+a template instantiated with a function-typed parameter must produce one copy
+per signature, which only a monomorphising compiler can do.
+
+The increment closes the last N10 row of the §2 audit (`lambda`: a call-back no
+longer needs a closure, because a function is a value with a checked signature).
+
+Deliberately not done in N10g: closures and function literals, a value spelling
+for a module-qualified name (`math::abs` is callable, not bindable), a call
+through a field or any other expression (`E0441`), comparison and printing of
+function values (`E0442`, `E0323`), `mut` in a signature (`E0443`), arrays of
+function values, and a generic function as a value (`E0437`). Those are N11 and
+later, and each is stated in `LANGUAGE.md` rather than implied.
 
 #### Delivery record N10f (2026-10-28)
 
@@ -693,7 +730,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 6 968 Python lines and 221 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 7 269 Python lines and 235 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

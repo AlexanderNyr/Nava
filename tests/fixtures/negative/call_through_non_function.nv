@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let x: i64 = 3
+    print(x(1))
+}

@@ -483,6 +483,34 @@ REGISTERED_TESTS = {
         "test_instances_nest",
         "test_the_same_instance_is_generated_once",
     },
+    # --- N10g: function values and function pointers -------------------------
+    "FunctionValueFrontendTests": {
+        "test_a_call_cannot_go_through_a_field",
+        "test_a_declared_function_can_be_bound_and_called",
+        "test_a_function_type_needs_edition_two",
+        "test_a_function_type_takes_no_mut_parameter",
+        "test_a_function_value_cannot_be_printed",
+        "test_a_function_value_fits_every_value_position",
+        "test_a_generic_function_is_not_a_value",
+        "test_a_signature_is_part_of_the_type",
+        "test_a_template_instantiates_per_signature",
+        "test_a_value_carries_its_signature",
+        "test_every_part_of_a_function_type_must_be_a_type",
+        "test_only_a_function_type_can_be_called",
+        "test_the_arity_is_checked_through_the_value",
+        "test_the_generated_c_typedefs_each_signature",
+        "test_two_function_values_cannot_be_compared",
+    },
+    "FunctionValueRuntimeTests": {
+        "test_a_field_and_a_variant_payload_hold_a_value",
+        "test_a_generic_instance_takes_one_copy_per_signature",
+        "test_a_nested_signature_is_its_own_type",
+        "test_a_value_is_called_through_the_pointer",
+        "test_a_value_is_passed_and_returned",
+        "test_a_void_function_is_a_value_too",
+        "test_an_array_parameter_travels_through_the_value",
+        "test_two_values_of_one_signature_compose",
+    },
     # --- N10d: arrays of structs and slices ----------------------------------
     "SliceFrontendTests": {
         "test_a_slice_cannot_become_a_mutable_borrow",
@@ -709,7 +737,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 128,
+    "tests/fixtures/negative": 132,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -773,6 +801,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_enums  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_functions  # noqa: PLC0415
     import test_generics  # noqa: PLC0415
     import test_grammar  # noqa: PLC0415
     import test_guides  # noqa: PLC0415
@@ -792,7 +821,8 @@ def discovered_tests() -> dict[str, set[str]]:
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
-                   test_float, test_generics, test_grammar, test_guides, test_local_model_server,
+                   test_float, test_functions, test_generics, test_grammar, test_guides,
+                   test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
                    test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib, test_study):
         for name, value in vars(module).items():
@@ -846,6 +876,7 @@ def check_skip_state() -> list[str]:
     import test_control  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
+    import test_functions  # noqa: PLC0415
     import test_generics  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
@@ -857,6 +888,7 @@ def check_skip_state() -> list[str]:
                                (test_stdlib, "MathTests"),
                                (test_stdlib, "SortTests"),
                                (test_stdlib, "TextTests"),
+                               (test_functions, "FunctionValueRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),
