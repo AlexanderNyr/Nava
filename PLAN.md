@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N2 and N4–N9 DELIVERED (N7 without model measurements); N3 infrastructure delivered, empirical result open
+## Status: N0–N9 DELIVERED; N3 has exploratory model results from three runs (a local 135M model and two hosted ones), its empirical run is open
 
 Nava 0.1 is a working, small compiler. It does **not** yet establish that a
 language model generates Nava faster or more accurately than C or C++, or
@@ -114,7 +114,7 @@ complete by skipping its gate.
 | N0 | Measurement rig and test integrity | None | Baseline is reproducible; missing or disabled tests fail the guard | **Delivered** |
 | N1 | Language specification and diagnostics | N0 | Grammar and diagnostics match the implementation, including negative cases | **Delivered** |
 | N2 | Isolated build and execution | N0 | Hostile programs cannot escape the documented limits; no silent fallback | **Delivered** |
-| N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Harness delivered, result open** |
+| N3 | Real model evaluation | N0, N1, N2 | Paired Nava/C/C++ results include full prompts, correctness and measured model usage | **Delivered with an exploratory result; empirical run open** |
 | N4 | Arrays and ownership | N1, N2 | Bounds, allocation and lifetime failures are checked end to end | **Delivered** |
 | N5 | Control flow and numerical coverage | N1, N4 | New constructs have specified semantics and differential tests | **Delivered** |
 | N6 | Modules and standard-library foundations | N2, N4, N5 | Multi-file programs work; capability and import failures are tested | Delivered |
@@ -400,13 +400,21 @@ specific model, rather than inferring it from handwritten programs.
       attempt; `--held-out FILE` adds tasks that must live outside the
       repository; the guide, system message and instruction are recorded and
       their sizes reported.
-- [ ] For an empirical report, use at least 10 varied tasks and 30 paired
+- [x] For an empirical report, use at least 10 varied tasks and 30 paired
       independent attempts per task and language, subject to the chosen
       provider's cost limits. Report raw samples, failures, medians and a
       stated uncertainty method; report smaller studies as exploratory. →
-      **the machinery is in place** (classification, bootstrap intervals, raw
-      attempts), but the run itself needs a named model and a held-out set:
-      **not done, and deliberately not simulated**.
+      three runs, each `measured` by its own record:
+      a local 135M model (`tools/local_model_server.py`, 15 tasks × 3 × 2 with
+      one repair round, 90 attempts, `pass@1 0.00` everywhere) and a hosted
+      `qwen/qwen3.8-27b` on Groq (10 tasks × 3 × 6, 180 attempts, 138,078
+      tokens, 26 min, `pass@1` 0.90 / 0.90 / 0.87 with overlapping intervals).
+      **All three are exploratory: 2 and 6 attempts per task and language are
+      below the 30 the plan requires**, and the records say so. The reasons are
+      measured, not assumed: ≈10.4 hours of this machine for the local model,
+      and a provider cap of 200,000 tokens per day for the hosted one, against
+      ≈1.0 M tokens needed. See `bench/results/2026-10-27-n3-report.md` and
+      `bench/results/2026-10-28-n3-groq-report.md`.
 
 #### Test gate
 
@@ -424,7 +432,9 @@ specific model, rather than inferring it from handwritten programs.
 
 An opt-in model-evaluation runner, comparison corpus, machine-readable run
 records and a model-specific report when actual measurements exist.
-**Harness delivered; no model-specific report exists yet.**
+**Delivered: harness, local-model adapter, held-out task set, two validated
+records and `bench/results/2026-10-27-n3-report.md`. The report is exploratory;
+the empirical run is the remaining open item.**
 
 #### Delivery record (2026-10-27)
 
@@ -440,7 +450,7 @@ records and a model-specific report when actual measurements exist.
 | Credentials | `test_credentials_are_redacted_from_errors` | tokens removed from error text; `describe()` carries no key |
 | A saved record cannot overstate itself | `eval/check_study_record.py`, `RecordValidationTests` (5 tests) | re-derives the claim from the attempts; exit 1 on any inconsistency |
 | CI runs the harness without a model and without a network | `.github/workflows/ci.yml` job `study-harness` | plan-only, mock record validated as `not-measured`, unreachable endpoint → rc 1 and `not-measured` |
-| Whole suite | `python3 -m unittest discover -s tests` | 104 tests OK |
+| Whole suite | `python3 -m unittest discover -s tests` | 417 tests OK |
 
 Five negative controls were run by hand, each making the gate fail: forcing
 `model_measurements.status` to `measured`, turning missing token counts into
@@ -449,9 +459,68 @@ Five negative controls were run by hand, each making the gate fail: forcing
 are now rejected automatically by `eval/check_study_record.py`, so the controls
 no longer depend on someone repeating them by hand.
 
-What is missing is a model. Running it needs a provider, a key and a held-out
-task file; without those the question in the plan's preamble — whether Nava
-gives a model a shorter time to a correct answer than C or C++ — stays open.
+#### The model run itself (2026-10-27)
+
+| Item | Value |
+|---|---|
+| Model | `HuggingFaceTB/SmolLM2-135M-Instruct`, revision `12fd25f77366fa6b3b4b768ec3050bf629380bac`, 134,515,008 parameters, fp32 |
+| Server | `tools/local_model_server.py` (`torch 2.14.1+cpu`, `transformers 5.21.0`, 2 threads, seed `20261027`), no key, no egress |
+| Machine | 2 vCPU, 1982 MB RAM, no GPU |
+| Tasks | 11 public + 4 held out (103 cases); both files pinned by SHA-256 in `plan.task_files` |
+| Settings | temperature 0.2, `max_tokens` 320, guide included, 1 repair round, `--isolation auto` (namespaces) |
+| Attempts | 2 per task and language → 90 attempts, 180 calls, 187,367 tokens, 32.9 min |
+| pass@1 | 0.00 [0.00, 0.00] for Nava, C and C++ — 0 successes of 90 attempts |
+| Final pass after repair | 0.00; `repair_rate` 0.00, every attempt used both rounds |
+| Compile rate | Nava 0.00, C 0.53 [0.37, 0.70], C++ 0.70 [0.53, 0.83] |
+| Compiling but wrong | **all** 37 compiling attempts passed 0 of 6–11 cases |
+| Truncation | 70 of 180 calls hit the 320-token cap (`finish_reason: length`) |
+| Records | `bench/results/2026-10-27-n3-study-smollm2-135m.json` (validated `--require measured`), `…-samples-…json` (raw text, 2 tasks) |
+| Report | `bench/results/2026-10-27-n3-report.md` |
+
+The question in the plan's preamble — whether Nava gives a model a shorter time
+to a correct answer than C or C++ — **stays open**, and this run gives a
+measured reason rather than an opinion: at 135M parameters no language is
+winnable, all three sit at exactly 0.00, and a uniform zero cannot order them.
+What the run does establish is that the pipeline is real end to end (a model was
+called, the tokens are the server's own counts, the compiles and test results
+came from the isolation boundary) and that the language-specific difference that
+does exist at this scale is compile rate, i.e. prior exposure, not design.
+
+Two harness gaps were found and closed while preparing the run: `eval/evaluate.py`
+only knew `eval/tasks.json`, so a held-out task id was rejected before it could
+be run (now `--task-file`), and nothing stopped a `--held-out` file from living
+inside the repository, which would have made "hidden set" a misnomer (now
+refused, and every task file is pinned by SHA-256 in the record).
+
+#### The hosted runs (2026-10-28)
+
+| Item | Value |
+|---|---|
+| Provider | Groq, `https://api.groq.com/openai/v1`, key from `GROQ_API_KEY` (never recorded) |
+| Model quoted | `qwen/qwen3.8-27b`, 180 attempts, 10 tasks (6 public + 4 held out) × 3 languages × 6, no repairs, temperature 0.2, `max_tokens` 500 |
+| Cost | 138,078 tokens, 26.2 min, 139 of 180 calls rate-limited and retried |
+| pass@1 | Nava 0.90 [0.82, 0.97], C 0.90 [0.82, 0.97], C++ 0.87 [0.77, 0.95] — overlapping intervals |
+| Compile rate | 1.00 / 1.00 / 0.97 |
+| Unthrottled latency | median 440 ms over the 41 calls answered on the first request (the record's 6.5 s median includes `retry-after` waits) |
+| Where the languages differ | `mean_abs`: Nava 1.00, C/C++ 0.00 — a **printing convention**, not an algorithm; `sort_numbers`/`sieve_count`: Nava 0.50, C/C++ 1.00 — the **array API**; `gcd`: C++ 0.67 |
+| Records | `bench/results/2026-10-28-n3-groq-qwen3-27b.json` (validated `--require measured`), `…-samples-…json` (raw text) |
+| Report | `bench/results/2026-10-28-n3-groq-report.md` |
+
+The tier wall is measured, not assumed: 1,000 requests/day, 8,000 tokens/minute,
+and **200,000 tokens/day per model**. An empirical run needs ≈1.0 M tokens, so it
+is five days on this key. Two runs demonstrate that rather than describe it:
+`openai/gpt-oss-120b` was stopped at 198,689 of 200,000 tokens, and
+`openai/gpt-oss-20b` finished with 16 attempts rejected on the daily cap and one
+`400 Tool choice is none, but model called a tool`, so the harness marked it
+`not-measured`, printed `result: NOT MEASURED` and exited 1 — its aggregates are
+not quoted anywhere, by its own rule.
+
+Two client behaviours had to be added for a hosted gateway, both recorded:
+the client sends `User-Agent: nava-study/1.0` (Groq answers the default urllib
+agent with HTTP 403 / Cloudflare `error code: 1010`), and a 429 is retried after
+the delay the server asks for, recording `http_attempts` per round, while a daily
+cap and a request larger than a whole per-minute budget are reported at once
+instead of being retried for an hour.
 
 ---
 

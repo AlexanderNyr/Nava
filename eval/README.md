@@ -15,9 +15,11 @@ Two workflows share one task set, one prompt builder and one isolation boundary:
 | `eval/ab.py` | free versus grammar-constrained generation, same tasks and settings |
 | `eval/check_ab_record.py` | validate an A/B record before anyone quotes it |
 | `eval/feedback.py` | structured compiler feedback for repair rounds |
+| `tools/local_model_server.py` | serve a local model over the same chat-completions schema |
 
-`eval/study.py` can call a model through an OpenAI-compatible endpoint, replay
-answers saved earlier, or run a deterministic mock. **No measured neural-model
+`eval/study.py` can call a model through an OpenAI-compatible endpoint (a hosted
+one, or a local server — see the last section), replay answers saved earlier, or
+run a deterministic mock. **No measured neural-model
 result is included in this repository**: the mock and replay modes exist so the
 machinery can be tested and audited without a model, and every record says
 whether a model was actually called.
@@ -78,9 +80,37 @@ bootstrap 95% interval (fixed seed, so a re-run reports the same interval).
 `study.py` classifies itself using the thresholds in `PLAN.md` N3: at least
 **10 tasks** and **30 independent attempts per task and language**. Below either
 threshold the record is `exploratory`, the reasons are printed, and the summary
-line says so. The public task set has 8 tasks, so reaching `empirical` requires
-a held-out file with at least two more; keep that file **outside this
-repository** so it never appears in prompts or fixtures.
+line says so. The public task set has 11 tasks and 76 cases, so the task
+threshold is already met; the attempt threshold is not, and reaching `empirical`
+needs 30 independent attempts per task and language. A hidden set goes in a file
+**outside this repository** — `--held-out` refuses a path inside the checkout,
+and both files are identified in the record by SHA-256 (`plan.task_files`).
+
+A task from a held-out file is evaluated with `--task-file`, so the evaluator
+reads the same contract the prompt was built from instead of rejecting an id it
+has never seen:
+
+```bash
+python3 eval/evaluate.py --task my_hidden_task --task-file /path/outside/held-out.json \
+  --language nava --source answer.nv
+```
+
+### Rate limits, gateways and retries
+
+A rate limit is not a model failure. When the server answers 429 (or a
+transient 5xx) the call is retried after the delay the server itself asks for —
+`retry-after` or `x-ratelimit-reset-tokens`, both as `1.5`, `690ms`, `12s` or
+`1m26.4s` — with exponential backoff otherwise, up to `--retries` (default 5).
+Every round records `http_attempts`, and a run that needed retries says so in
+`notes`. A permanent error (401, 400) is **not** retried.
+
+The client sends `User-Agent: nava-study/1.0`. That is not cosmetic: a gateway
+may answer the default `Python-urllib/3.13` with HTTP 403 and Cloudflare's
+`error code: 1010`, and a study that silently turned that into "the model
+failed" would be worthless. Extra headers go through `--header 'Name: value'`
+(repeatable); only the header **names** are recorded, never the values, and
+`Authorization` may not be set that way — the key comes from `--api-key-env` and
+nowhere else.
 
 ### Missing values
 
@@ -118,6 +148,55 @@ record and on a deliberately broken endpoint.
 guide was included and how large it is, `environment` records Nava, Python,
 platform and the sandbox probe. Prompts and answers are stored only with
 `--store-raw`; by default only their SHA-256 and byte length are kept.
+
+## Running a study against a local model (N3)
+
+`eval/providers.py` speaks the OpenAI chat-completions schema, so a model that
+lives on the same machine only needs something that speaks the same schema.
+`tools/local_model_server.py` is that something: `transformers` plus `torch`,
+no API key, no egress, and `usage` counts that are the lengths of the token
+sequences actually processed and generated.
+
+```bash
+# 1. Serve the weights. The revision is pinned so the record can cite it.
+python3 tools/local_model_server.py \
+  --model HuggingFaceTB/SmolLM2-135M-Instruct --revision <commit> \
+  --host 127.0.0.1 --port 8765 --threads 2 --max-tokens 1024 &
+
+# 2. Run the ordinary study against it. Nothing in eval/ changes.
+NAVA_LOCAL_KEY=local python3 eval/study.py --provider openai \
+  --base-url http://127.0.0.1:8765/v1 --api-key-env NAVA_LOCAL_KEY \
+  --model HuggingFaceTB/SmolLM2-135M-Instruct \
+  --held-out /path/outside/the/repo/held-out.json \
+  --languages nava,c,cpp --attempts 2 --repair-rounds 1 \
+  --temperature 0.2 --max-tokens 320 --isolation auto \
+  --out bench/results/<date>-n3-study-<model>.json
+```
+
+The server refuses streaming requests with HTTP 400 instead of pretending to
+stream, records the revision in every response (`model@revision`), and caps the
+completion length whatever the client asks for; the cap is why
+`finish_reason: "length"` dominates a small-model record. It imports
+`transformers` and `torch` inside `load()`, so importing it, and testing it,
+needs no ML stack at all (`tests/test_local_model_server.py`).
+
+The key is ignored by the server, and the harness still wants the environment
+variable to exist: the provider layer treats a missing key as an error, and that
+behaviour should not change just because the endpoint is local.
+
+`bench/results/2026-10-27-n3-report.md` is the report of the run that was
+actually executed on this machine, and
+`bench/results/2026-10-27-n3-study-smollm2-135m.json` is its record. It is
+**exploratory**, not empirical: the scale block says why, in numbers.
+
+### A hosted provider
+
+The same command works against a hosted endpoint; nothing in `eval/` changes.
+For Groq, note the two client behaviours described above — the User-Agent and the
+retry policy — and the tier limits measured on a free key: 1,000 requests/day,
+8,000 tokens/minute and **200,000 tokens/day per model**, which is why
+`bench/results/2026-10-28-n3-groq-report.md` reports 6 attempts per task and
+language rather than the 30 an empirical run needs.
 
 ## Model-facing guide, grammar and constrained decoding (N7)
 

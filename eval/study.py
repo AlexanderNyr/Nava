@@ -55,6 +55,23 @@ BOOTSTRAP_RESAMPLES = 2000
 BOOTSTRAP_SEED = 20261027
 
 
+def _parse_headers(items: list[str]) -> tuple[dict, str | None]:
+    """`NAME: value` or `NAME=value` pairs, validated before anything is called."""
+    headers: dict[str, str] = {}
+    for item in items:
+        name, separator, value = item.partition(":")
+        if not separator:
+            name, separator, value = item.partition("=")
+        if not separator or not name.strip() or not value.strip():
+            return {}, f"--header expects 'Name: value', got {item!r}"
+        if name.strip().lower() in {"authorization", "content-type", "user-agent"} and \
+                name.strip().lower() != "user-agent":
+            return {}, (f"--header may not set {name.strip()!r}: the key comes from "
+                        "--api-key-env and the content type is set by the client")
+        headers[name.strip()] = value.strip()
+    return headers, None
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -148,13 +165,17 @@ def aggregate(attempts: list[dict]) -> dict:
 # --------------------------------------------------------------------------
 
 def run_evaluator(source: Path, task_id: str, language: str, *, isolation: str,
-                  timeout: float, memory: int) -> dict:
+                  timeout: float, memory: int, task_file: Path | None = None) -> dict:
     """Run `eval/evaluate.py` and return its parsed report, or an error record."""
     command = [
         sys.executable, str(HERE / "evaluate.py"),
         "--task", task_id, "--language", language, "--source", str(source),
         "--timeout", str(timeout), "--memory", str(memory), "--isolation", isolation,
     ]
+    if task_file is not None:
+        # A held-out task is not in `eval/tasks.json`; the evaluator has to be
+        # told where the contract came from or it would reject the task id.
+        command += ["--task-file", str(task_file)]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=600)
     except (OSError, subprocess.TimeoutExpired) as error:
@@ -212,7 +233,8 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
                  request_template: dict, parts: dict[str, str], system: str | None,
                  repair_rounds: int, isolation: str, timeout: float, memory: int,
                  store_raw: bool, workdir: Path, feedback_mode: str = "structured",
-                 syntax_check=None, request_extra: dict | None = None) -> dict:
+                 syntax_check=None, request_extra: dict | None = None,
+                 task_file: Path | None = None) -> dict:
     record = {
         "task": task_id,
         "language": language,
@@ -263,6 +285,7 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
             "ttft_ms": response.ttft_ms,
             "wall_ms": response.wall_ms,
             "finish_reason": response.finish_reason,
+            "http_attempts": response.attempts,
             "error": response.error,
             "error_class": response.error_class,
             "compile_ok": False,
@@ -297,7 +320,7 @@ def attempt_once(*, task_id: str, language: str, attempt_index: int, provider,
         candidate = workdir / f"{task_id}-{language}-{attempt_index}-{round_index}{SUFFIXES[language]}"
         candidate.write_text(code, encoding="utf-8")
         report = run_evaluator(candidate, task_id, language, isolation=isolation,
-                               timeout=timeout, memory=memory)
+                               timeout=timeout, memory=memory, task_file=task_file)
         if "internal_error" in report:
             round_record["error"] = report["internal_error"]
             round_record["error_class"] = "EvaluatorError"
@@ -368,6 +391,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--api-key-env", default="OPENAI_API_KEY",
                         help="environment variable holding the API key (never recorded)")
     parser.add_argument("--replay-file", type=Path, help="JSONL of saved answers for --provider replay")
+    parser.add_argument("--header", action="append", default=[], dest="headers", metavar="NAME: VALUE",
+                        help="extra request header for the openai provider; only the header "
+                             "names are recorded, never the values")
+    parser.add_argument("--retries", type=int, default=5,
+                        help="retries for a rate-limited or transiently failing call (default 5)")
     parser.add_argument("--tasks", type=Path, default=HERE / "tasks.json")
     parser.add_argument("--held-out", type=Path,
                         help="additional task file kept outside the repository")
@@ -401,8 +429,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.attempts < 1:
         parser.error("--attempts must be at least 1")
     system = args.system_file.read_text(encoding="utf-8") if args.system_file else None
+    headers, header_problem = _parse_headers(args.headers)
+    if header_problem:
+        parser.error(header_problem)
+    if args.retries < 0:
+        parser.error("--retries must not be negative")
 
     public = load_task_file(args.tasks, held_out=False)
+    if args.held_out:
+        # "Held out" has to mean something: a file inside the repository is a
+        # public task set with a different name, so refuse it rather than
+        # record a hidden set that was never hidden.
+        resolved = args.held_out.resolve()
+        if resolved == ROOT or ROOT in resolved.parents:
+            parser.error(f"--held-out {args.held_out} is inside the repository "
+                         f"({ROOT}); keep the hidden set outside it")
     held_out_tasks = load_task_file(args.held_out, held_out=True) if args.held_out else []
     tasks = public + held_out_tasks
     if args.task_ids:
@@ -415,9 +456,19 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("no tasks selected")
     task_index = {task["id"]: task for task in tasks}
 
+    task_files = []
+    for path, held_out in ((args.tasks, False), (args.held_out, True)):
+        if path is None:
+            continue
+        material = path.read_bytes()
+        task_files.append({"held_out": held_out,
+                           "sha256": hashlib.sha256(material).hexdigest(),
+                           "tasks": sum(1 for task in tasks if task["source"] == str(path)),
+                           "name": "held-out set" if held_out else path.name})
     plan = {
         "tasks": [{"id": task["id"], "held_out": task["held_out"], "cases": len(task["tests"])}
                   for task in tasks],
+        "task_files": task_files,
         "languages": languages,
         "attempts_per_task_language": args.attempts,
         "repair_rounds": args.repair_rounds,
@@ -425,7 +476,9 @@ def main(argv: list[str] | None = None) -> int:
         "request": {"model": args.model, "temperature": args.temperature,
                     "max_tokens": args.max_tokens, "stream": args.stream,
                     "system_message": bool(system), "guide_included": not args.no_guide,
-                    "feedback": args.feedback},
+                    "feedback": args.feedback,
+                    # Names only: a value may be a credential.
+                    "extra_header_names": sorted(headers)},
         "isolation": args.isolation,
         "store_raw": args.store_raw,
     }
@@ -437,7 +490,8 @@ def main(argv: list[str] | None = None) -> int:
 
     provider = build_provider(args.provider, model=args.model, base_url=args.base_url,
                               api_key_env=args.api_key_env, replay_path=args.replay_file,
-                              script=_mock_script(args, task_index, languages))
+                              script=_mock_script(args, task_index, languages),
+                              headers=headers, max_retries=args.retries)
     record = {
         "schema": SCHEMA,
         "created_at_utc": utc_now(),
@@ -501,6 +555,7 @@ def main(argv: list[str] | None = None) -> int:
                         repair_rounds=args.repair_rounds, isolation=args.isolation,
                         timeout=args.timeout, memory=args.memory, store_raw=args.store_raw,
                         workdir=workdir, feedback_mode=args.feedback,
+                        task_file=Path(task["source"]),
                     )
                     attempt["held_out"] = task["held_out"]
                     record["attempts"].append(attempt)
@@ -517,6 +572,14 @@ def main(argv: list[str] | None = None) -> int:
             [attempt for attempt in record["attempts"] if attempt["language"] == language])
     record["aggregates"]["all/all"] = aggregate(record["attempts"])
 
+    retried = sum(1 for attempt in record["attempts"]
+                  if any((round_record.get("http_attempts") or 1) > 1
+                         for round_record in attempt["rounds"]))
+    if retried:
+        record["notes"].append(
+            f"{retried} attempt(s) needed more than one HTTP request because the server "
+            "rate-limited or failed transiently; each is recorded with its real token "
+            "counts, not as a provider error")
     errors = sum(1 for attempt in record["attempts"] if attempt.get("provider_error"))
     overall = record["aggregates"]["all/all"]
     evaluated = sum(1 for attempt in record["attempts"]
@@ -580,8 +643,13 @@ def _print_summary(record: dict, languages: list[str], args) -> None:
               f"{entry['compile_rate']['point']:>8.2f} {wall:>9s} {prompt_tokens:>10s} {completion:>10s}")
     for note in record["notes"]:
         print(f"note: {note}")
-    if record["model_measurements"]["status"] != "measured":
-        print("result: no model was called; this run is a pipeline check, not a model measurement")
+    measurements = record["model_measurements"]
+    if measurements["status"] != "measured":
+        if args.provider in ("mock", "replay"):
+            print("result: no model was called; this run is a pipeline check, "
+                  "not a model measurement")
+        else:
+            print(f"result: NOT MEASURED — {measurements['reason']}")
 
 
 def _mock_script(args, task_index: dict, languages: list[str]):

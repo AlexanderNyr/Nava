@@ -1,0 +1,1202 @@
+{
+  "schema": "nava-study/1",
+  "created_at_utc": "2026-10-28T14:38:30+00:00",
+  "plan": {
+    "tasks": [
+      {
+        "id": "sort_numbers",
+        "held_out": false,
+        "cases": 8
+      },
+      {
+        "id": "sieve_count",
+        "held_out": false,
+        "cases": 8
+      },
+      {
+        "id": "mean_abs",
+        "held_out": false,
+        "cases": 11
+      }
+    ],
+    "task_files": [
+      {
+        "held_out": false,
+        "sha256": "5a0eb6681af65fd584ede38425ca5887a29c3c00017df7f7af7ccd330f1a29f6",
+        "tasks": 3,
+        "name": "tasks.json"
+      }
+    ],
+    "languages": [
+      "nava",
+      "c",
+      "cpp"
+    ],
+    "attempts_per_task_language": 1,
+    "repair_rounds": 0,
+    "order_policy": "languages rotated per attempt index; attempts are independent",
+    "request": {
+      "model": "qwen/qwen3.8-27b",
+      "temperature": 0.2,
+      "max_tokens": 500,
+      "stream": false,
+      "system_message": false,
+      "guide_included": true,
+      "feedback": "structured",
+      "extra_header_names": []
+    },
+    "isolation": "auto",
+    "store_raw": true,
+    "expected_scale": {
+      "label": "exploratory",
+      "reasons": [
+        "3 tasks < 10 required",
+        "1 attempts per task and language < 30 required"
+      ],
+      "thresholds": {
+        "tasks": 10,
+        "attempts_per_task_language": 30
+      }
+    }
+  },
+  "scale": {
+    "label": "exploratory",
+    "reasons": [
+      "3 tasks < 10 required",
+      "1 attempts per task and language < 30 required"
+    ],
+    "thresholds": {
+      "tasks": 10,
+      "attempts_per_task_language": 30
+    }
+  },
+  "provider": {
+    "provider": "openai-compatible",
+    "base_url": "https://api.groq.com/openai/v1",
+    "model": "qwen/qwen3.8-27b",
+    "api_key_env": "GROQ_API_KEY",
+    "user_agent": "nava-study/1.0",
+    "max_retries": 8,
+    "extra_header_names": []
+  },
+  "request": {
+    "model": "qwen/qwen3.8-27b",
+    "temperature": 0.2,
+    "max_tokens": 500,
+    "stream": false,
+    "system_message": false,
+    "guide_included": true,
+    "feedback": "structured",
+    "extra_header_names": []
+  },
+  "prompt_policy": {
+    "guide_included": true,
+    "guide_bytes": {
+      "nava": 4708,
+      "c": 164,
+      "cpp": 144
+    },
+    "guide": {
+      "name": "nava-1",
+      "file": "guides/nava-1.md",
+      "version": 1,
+      "spec_version": 1,
+      "sha256": "e8446c38d99a716b233f818029368d30c8fa517cab81c0df854d1aa303e11e44",
+      "bytes": 4708,
+      "chars": 4692,
+      "lines": 143
+    },
+    "guide_sha256": {
+      "nava": "e8446c38d99a716b233f818029368d30c8fa517cab81c0df854d1aa303e11e44",
+      "c": "504ac794d16b55d66c03b3d778a98b0e233aea9e1cf455fb92d32615eafc9044",
+      "cpp": "282f1dc2817ca98ec88ed242b7c9c04f174bf132a718a4dd206f21c0c92a137a"
+    },
+    "feedback": "structured",
+    "instruction": "Print only the requested result, with a newline. Output source code only, without Markdown or explanation.",
+    "system_message": null
+  },
+  "environment": {
+    "nava_version": "0.1.0",
+    "python": "3.13.16",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.41",
+    "isolation": {
+      "platform": "linux",
+      "unshare": "/usr/bin/unshare",
+      "namespaces_available": true,
+      "user_namespaces_max": "7909",
+      "backends": {
+        "namespaces": true,
+        "rlimits": true
+      }
+    }
+  },
+  "attempts": [
+    {
+      "task": "sort_numbers",
+      "language": "nava",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "ecf7b326b487c594f3a7e4ca43b5026af2636ce00f2d0834eda36c83dca9a99a",
+          "prompt_bytes": 5040,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read an integer n (0 to 1000), then n integers, each between -9223372036854775808 and 9223372036854775807, separated by whitespace. Print the n integers in non-decreasing order, one per line. For n = 0 print nothing.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nfn main() {\n    let n = read_i64()\n    let a = array_zeros(n)\n    for i in 0..n {\n        a[i] = read_i64()\n    }\n    for i in 0..n {\n        let min_idx = i\n        for j in i + 1..n {\n            if a[j] < a[min_idx] {\n                min_idx = j\n            }\n        }\n        let tmp = a[i]\n        a[i] = a[min_idx]\n        a[min_idx] = tmp\n    }\n    for i in 0..n {\n        print(a[i])\n    }\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 1645,
+            "completion_tokens": 157,
+            "ttft_ms": null,
+            "wall_ms": 545.525,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "5bdbccf6cce32f675c9bc9972a9c84188f80f574b7cf104209050829f450c1cb",
+          "response_bytes": 412,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 1645,
+          "completion_tokens": 157,
+          "ttft_ms": null,
+          "wall_ms": 545.525,
+          "finish_reason": "stop",
+          "http_attempts": 1,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "nava"
+          },
+          "code": "fn main() {\n    let n = read_i64()\n    let a = array_zeros(n)\n    for i in 0..n {\n        a[i] = read_i64()\n    }\n    for i in 0..n {\n        let min_idx = i\n        for j in i + 1..n {\n            if a[j] < a[min_idx] {\n                min_idx = j\n            }\n        }\n        let tmp = a[i]\n        a[i] = a[min_idx]\n        a[min_idx] = tmp\n    }\n    for i in 0..n {\n        print(a[i])\n    }\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 545.525,
+      "total_wall_ms": 545.525,
+      "prompt_tokens": 1645,
+      "completion_tokens": 157,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "sort_numbers",
+      "language": "c",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "fc20e01572bb16e63a177c009dafc39a9033353267899203480f79f94de98512",
+          "prompt_bytes": 496,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read an integer n (0 to 1000), then n integers, each between -9223372036854775808 and 9223372036854775807, separated by whitespace. Print the n integers in non-decreasing order, one per line. For n = 0 print nothing.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```c\n#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n\nint main(void) {\n    int n;\n    if (scanf(\"%d\", &n) != 1) {\n        return 0;\n    }\n\n    if (n <= 0) {\n        return 0;\n    }\n\n    int64_t *arr = (int64_t *)malloc((size_t)n * sizeof(int64_t));\n    if (arr == NULL) {\n        return 1;\n    }\n\n    for (int i = 0; i < n; i++) {\n        if (scanf(\"%lld\", (long long *)&arr[i]) != 1) {\n            free(arr);\n            return 1;\n        }\n    }\n\n    // Simple insertion sort for small n (up to 1000)\n    for (int i = 1; i < n; i++) {\n        int64_t key = arr[i];\n        int j = i - 1;\n        while (j >= 0 && arr[j] > key) {\n            arr[j + 1] = arr[j];\n            j--;\n        }\n        arr[j + 1] = key;\n    }\n\n    for (int i = 0; i < n; i++) {\n        printf(\"%lld\\n\", (long long)arr[i]);\n    }\n\n    free(arr);\n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 160,
+            "completion_tokens": 329,
+            "ttft_ms": null,
+            "wall_ms": 766.83,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "07cbcaeedf5893c7ad28e812c3ef699068b15cb400a6aecf64a1b8a86db73187",
+          "response_bytes": 855,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 160,
+          "completion_tokens": 329,
+          "ttft_ms": null,
+          "wall_ms": 766.83,
+          "finish_reason": "stop",
+          "http_attempts": 1,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "c"
+          },
+          "code": "#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n\nint main(void) {\n    int n;\n    if (scanf(\"%d\", &n) != 1) {\n        return 0;\n    }\n\n    if (n <= 0) {\n        return 0;\n    }\n\n    int64_t *arr = (int64_t *)malloc((size_t)n * sizeof(int64_t));\n    if (arr == NULL) {\n        return 1;\n    }\n\n    for (int i = 0; i < n; i++) {\n        if (scanf(\"%lld\", (long long *)&arr[i]) != 1) {\n            free(arr);\n            return 1;\n        }\n    }\n\n    // Simple insertion sort for small n (up to 1000)\n    for (int i = 1; i < n; i++) {\n        int64_t key = arr[i];\n        int j = i - 1;\n        while (j >= 0 && arr[j] > key) {\n            arr[j + 1] = arr[j];\n            j--;\n        }\n        arr[j + 1] = key;\n    }\n\n    for (int i = 0; i < n; i++) {\n        printf(\"%lld\\n\", (long long)arr[i]);\n    }\n\n    free(arr);\n    return 0;\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 766.83,
+      "total_wall_ms": 766.83,
+      "prompt_tokens": 160,
+      "completion_tokens": 329,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "sort_numbers",
+      "language": "cpp",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "4ee8888e8b0b91382dcb125d500b1a8ee4e714081e5faabb55949455977768cd",
+          "prompt_bytes": 476,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read an integer n (0 to 1000), then n integers, each between -9223372036854775808 and 9223372036854775807, separated by whitespace. Print the n integers in non-decreasing order, one per line. For n = 0 print nothing.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```cpp\n#include <iostream>\n#include <vector>\n#include <algorithm>\n\nint main() {\n    int n;\n    std::cin >> n;\n    \n    std::vector<long long> nums(n);\n    for (int i = 0; i < n; ++i) {\n        std::cin >> nums[i];\n    }\n    \n    std::sort(nums.begin(), nums.end());\n    \n    for (int i = 0; i < n; ++i) {\n        std::cout << nums[i] << '\\n';\n    }\n    \n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 156,
+            "completion_tokens": 136,
+            "ttft_ms": null,
+            "wall_ms": 389.405,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "0e8607bd072010673b355291101deebd83fb272444e41192f506419760c58b97",
+          "response_bytes": 373,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 156,
+          "completion_tokens": 136,
+          "ttft_ms": null,
+          "wall_ms": 389.405,
+          "finish_reason": "stop",
+          "http_attempts": 1,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "cpp"
+          },
+          "code": "#include <iostream>\n#include <vector>\n#include <algorithm>\n\nint main() {\n    int n;\n    std::cin >> n;\n    \n    std::vector<long long> nums(n);\n    for (int i = 0; i < n; ++i) {\n        std::cin >> nums[i];\n    }\n    \n    std::sort(nums.begin(), nums.end());\n    \n    for (int i = 0; i < n; ++i) {\n        std::cout << nums[i] << '\\n';\n    }\n    \n    return 0;\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 389.405,
+      "total_wall_ms": 389.405,
+      "prompt_tokens": 156,
+      "completion_tokens": 136,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "sieve_count",
+      "language": "nava",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "405bf4d423b3d4a82bc805b65a535872346e43d62e6ca8b98486430c87060080",
+          "prompt_bytes": 4908,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read an integer n (0 to 1000000). Print how many primes are less than or equal to n.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nfn main() {\n    let n = read_i64()\n    if n < 2 {\n        print(0)\n        return\n    }\n    let limit = n\n    let is_prime = array_zeros(limit + 1)\n    for i in 0..(limit + 1) {\n        is_prime[i] = 1\n    }\n    is_prime[0] = 0\n    is_prime[1] = 0\n    let i = 2\n    while i * i <= limit {\n        if is_prime[i] == 1 {\n            let j = i * i\n            while j <= limit {\n                is_prime[j] = 0\n                j = j + i\n            }\n        }\n        i = i + 1\n    }\n    let count = 0\n    for k in 0..(limit + 1) {\n        if is_prime[k] == 1 {\n            count = count + 1\n        }\n    }\n    print(count)\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 1586,
+            "completion_tokens": 236,
+            "ttft_ms": null,
+            "wall_ms": 703.483,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "e504e13abe2246721488f8341ee50e07eb28cadc1e59dec2a6bcb001405e5371",
+          "response_bytes": 636,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 1586,
+          "completion_tokens": 236,
+          "ttft_ms": null,
+          "wall_ms": 703.483,
+          "finish_reason": "stop",
+          "http_attempts": 1,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "nava"
+          },
+          "code": "fn main() {\n    let n = read_i64()\n    if n < 2 {\n        print(0)\n        return\n    }\n    let limit = n\n    let is_prime = array_zeros(limit + 1)\n    for i in 0..(limit + 1) {\n        is_prime[i] = 1\n    }\n    is_prime[0] = 0\n    is_prime[1] = 0\n    let i = 2\n    while i * i <= limit {\n        if is_prime[i] == 1 {\n            let j = i * i\n            while j <= limit {\n                is_prime[j] = 0\n                j = j + i\n            }\n        }\n        i = i + 1\n    }\n    let count = 0\n    for k in 0..(limit + 1) {\n        if is_prime[k] == 1 {\n            count = count + 1\n        }\n    }\n    print(count)\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 703.483,
+      "total_wall_ms": 703.483,
+      "prompt_tokens": 1586,
+      "completion_tokens": 236,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "sieve_count",
+      "language": "c",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "8dc6dfa1c208d579fde41e1aa71ec4ab8c74582cf53d90f9b2c9d8eade01053f",
+          "prompt_bytes": 364,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read an integer n (0 to 1000000). Print how many primes are less than or equal to n.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```c\n#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main(void) {\n    int64_t n;\n    if (scanf(\"%lld\", &n) != 1) {\n        return 1;\n    }\n\n    if (n < 2) {\n        printf(\"0\\n\");\n        return 0;\n    }\n\n    int64_t size = n + 1;\n    uint8_t *is_prime = (uint8_t *)malloc(size);\n    if (is_prime == NULL) {\n        return 1;\n    }\n\n    memset(is_prime, 1, size);\n    is_prime[0] = 0;\n    if (size > 1) {\n        is_prime[1] = 0;\n    }\n\n    for (int64_t i = 2; i * i <= n; i++) {\n        if (is_prime[i]) {\n            for (int64_t j = i * i; j <= n; j += i) {\n                is_prime[j] = 0;\n            }\n        }\n    }\n\n    int64_t count = 0;\n    for (int64_t i = 2; i <= n; i++) {\n        if (is_prime[i]) {\n            count++;\n        }\n    }\n\n    printf(\"%lld\\n\", count);\n\n    free(is_prime);\n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 101,
+            "completion_tokens": 335,
+            "ttft_ms": null,
+            "wall_ms": 3834.817,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 2,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "e29d68aeb566d2ad3b6bbd715fd8a62aeac62787145eb0d6ada4a77e6f38e7eb",
+          "response_bytes": 857,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 101,
+          "completion_tokens": 335,
+          "ttft_ms": null,
+          "wall_ms": 3834.817,
+          "finish_reason": "stop",
+          "http_attempts": 2,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "c"
+          },
+          "code": "#include <stdio.h>\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\nint main(void) {\n    int64_t n;\n    if (scanf(\"%lld\", &n) != 1) {\n        return 1;\n    }\n\n    if (n < 2) {\n        printf(\"0\\n\");\n        return 0;\n    }\n\n    int64_t size = n + 1;\n    uint8_t *is_prime = (uint8_t *)malloc(size);\n    if (is_prime == NULL) {\n        return 1;\n    }\n\n    memset(is_prime, 1, size);\n    is_prime[0] = 0;\n    if (size > 1) {\n        is_prime[1] = 0;\n    }\n\n    for (int64_t i = 2; i * i <= n; i++) {\n        if (is_prime[i]) {\n            for (int64_t j = i * i; j <= n; j += i) {\n                is_prime[j] = 0;\n            }\n        }\n    }\n\n    int64_t count = 0;\n    for (int64_t i = 2; i <= n; i++) {\n        if (is_prime[i]) {\n            count++;\n        }\n    }\n\n    printf(\"%lld\\n\", count);\n\n    free(is_prime);\n    return 0;\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 3834.817,
+      "total_wall_ms": 3834.817,
+      "prompt_tokens": 101,
+      "completion_tokens": 335,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "sieve_count",
+      "language": "cpp",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "8cbffae43e86ade8bf634e189cf5815bea679c466823a32e1028d185573a5bc0",
+          "prompt_bytes": 344,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read an integer n (0 to 1000000). Print how many primes are less than or equal to n.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```cpp\n#include <iostream>\n#include <vector>\n#include <cmath>\n\nint main() {\n    long long n;\n    std::cin >> n;\n    \n    if (n < 2) {\n        std::cout << 0 << std::endl;\n        return 0;\n    }\n    \n    int limit = static_cast<int>(n);\n    std::vector<bool> is_prime(limit + 1, true);\n    is_prime[0] = false;\n    is_prime[1] = false;\n    \n    for (long long i = 2; i * i <= limit; ++i) {\n        if (is_prime[i]) {\n            for (long long j = i * i; j <= limit; j += i) {\n                is_prime[j] = false;\n            }\n        }\n    }\n    \n    long long count = 0;\n    for (int i = 2; i <= limit; ++i) {\n        if (is_prime[i]) {\n            ++count;\n        }\n    }\n    \n    std::cout << count << std::endl;\n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 97,
+            "completion_tokens": 259,
+            "ttft_ms": null,
+            "wall_ms": 19711.301,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 3,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "850b9b9080b611b0cc9eb05e66c1a8e9554c8a5220b46aad1291bec504aa46ad",
+          "response_bytes": 738,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 97,
+          "completion_tokens": 259,
+          "ttft_ms": null,
+          "wall_ms": 19711.301,
+          "finish_reason": "stop",
+          "http_attempts": 3,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 8,
+          "tests_total": 8,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "cpp"
+          },
+          "code": "#include <iostream>\n#include <vector>\n#include <cmath>\n\nint main() {\n    long long n;\n    std::cin >> n;\n    \n    if (n < 2) {\n        std::cout << 0 << std::endl;\n        return 0;\n    }\n    \n    int limit = static_cast<int>(n);\n    std::vector<bool> is_prime(limit + 1, true);\n    is_prime[0] = false;\n    is_prime[1] = false;\n    \n    for (long long i = 2; i * i <= limit; ++i) {\n        if (is_prime[i]) {\n            for (long long j = i * i; j <= limit; j += i) {\n                is_prime[j] = false;\n            }\n        }\n    }\n    \n    long long count = 0;\n    for (int i = 2; i <= limit; ++i) {\n        if (is_prime[i]) {\n            ++count;\n        }\n    }\n    \n    std::cout << count << std::endl;\n    return 0;\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 19711.301,
+      "total_wall_ms": 19711.301,
+      "prompt_tokens": 97,
+      "completion_tokens": 259,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "mean_abs",
+      "language": "nava",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "0d4c49638885ad8bdf478d75d189575693362c6c364e10b169646becb22dd0eb",
+          "prompt_bytes": 4989,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read an integer n (0 to 1000), then n floating-point numbers. Print the mean of their absolute values. For n = 0 print 0.0. Numbers use '.' as the decimal separator.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nfn main() {\n    let n = read_i64()\n    let sum: f64 = 0.0\n    for i in 0..n {\n        let x = read_f64()\n        if x < 0.0 {\n            sum = sum + (0.0 - x)\n        } else {\n            sum = sum + x\n        }\n    }\n    if n == 0 {\n        print(0.0)\n    } else {\n        print(sum / to_f64(n))\n    }\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 1604,
+            "completion_tokens": 132,
+            "ttft_ms": null,
+            "wall_ms": 14639.84,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 4,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "085bd4318b05ab486aa7eacc355e45c96e3ab1fb7d899b1b8834aa888300f83c",
+          "response_bytes": 317,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 1604,
+          "completion_tokens": 132,
+          "ttft_ms": null,
+          "wall_ms": 14639.84,
+          "finish_reason": "stop",
+          "http_attempts": 4,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": true,
+          "tests_passed": 11,
+          "tests_total": 11,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "nava"
+          },
+          "code": "fn main() {\n    let n = read_i64()\n    let sum: f64 = 0.0\n    for i in 0..n {\n        let x = read_f64()\n        if x < 0.0 {\n            sum = sum + (0.0 - x)\n        } else {\n            sum = sum + x\n        }\n    }\n    if n == 0 {\n        print(0.0)\n    } else {\n        print(sum / to_f64(n))\n    }\n}\n",
+          "evaluator_exit_code": 0
+        }
+      ],
+      "first_attempt_passed": true,
+      "final_passed": true,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": 14639.84,
+      "total_wall_ms": 14639.84,
+      "prompt_tokens": 1604,
+      "completion_tokens": 132,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "mean_abs",
+      "language": "c",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "79f3291a00bc65a7d370a3ce60eb0ce090ff5a1506edc43bc235a16410f3dd56",
+          "prompt_bytes": 445,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read an integer n (0 to 1000), then n floating-point numbers. Print the mean of their absolute values. For n = 0 print 0.0. Numbers use '.' as the decimal separator.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```c\n#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n\nint main(void) {\n    int n;\n    if (scanf(\"%d\", &n) != 1) {\n        return 1;\n    }\n\n    if (n == 0) {\n        printf(\"0.0\\n\");\n        return 0;\n    }\n\n    double sum = 0.0;\n    for (int i = 0; i < n; i++) {\n        double x;\n        if (scanf(\"%lf\", &x) != 1) {\n            return 1;\n        }\n        if (x < 0.0) {\n            sum += -x;\n        } else {\n            sum += x;\n        }\n    }\n\n    double mean = sum / (double)n;\n    printf(\"%.1f\\n\", mean);\n\n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 119,
+            "completion_tokens": 209,
+            "ttft_ms": null,
+            "wall_ms": 5609.739,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 2,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "39a1061f5b7f74aad2520695dd3f217b0bb12933e6681f2d780b0218f05805e3",
+          "response_bytes": 546,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 119,
+          "completion_tokens": 209,
+          "ttft_ms": null,
+          "wall_ms": 5609.739,
+          "finish_reason": "stop",
+          "http_attempts": 2,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": false,
+          "tests_passed": 7,
+          "tests_total": 11,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "c"
+          },
+          "code": "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n\nint main(void) {\n    int n;\n    if (scanf(\"%d\", &n) != 1) {\n        return 1;\n    }\n\n    if (n == 0) {\n        printf(\"0.0\\n\");\n        return 0;\n    }\n\n    double sum = 0.0;\n    for (int i = 0; i < n; i++) {\n        double x;\n        if (scanf(\"%lf\", &x) != 1) {\n            return 1;\n        }\n        if (x < 0.0) {\n            sum += -x;\n        } else {\n            sum += x;\n        }\n    }\n\n    double mean = sum / (double)n;\n    printf(\"%.1f\\n\", mean);\n\n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 5609.739,
+      "prompt_tokens": 119,
+      "completion_tokens": 209,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "mean_abs",
+      "language": "cpp",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "fd25e546404c8f2280c927d4097cb14b08ddb77205849d507acb7ee22b4eceb5",
+          "prompt_bytes": 425,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read an integer n (0 to 1000), then n floating-point numbers. Print the mean of their absolute values. For n = 0 print 0.0. Numbers use '.' as the decimal separator.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```cpp\n#include <iostream>\n#include <cmath>\n#include <iomanip>\n\nint main() {\n    int n;\n    std::cin >> n;\n    \n    if (n == 0) {\n        std::cout << \"0.0\" << std::endl;\n        return 0;\n    }\n    \n    double sum = 0.0;\n    for (int i = 0; i < n; i++) {\n        double x;\n        std::cin >> x;\n        sum += std::abs(x);\n    }\n    \n    double mean = sum / n;\n    std::cout << mean << std::endl;\n    \n    return 0;\n}\n```",
+            "model": "qwen/qwen3.8-27b",
+            "prompt_tokens": 115,
+            "completion_tokens": 158,
+            "ttft_ms": null,
+            "wall_ms": 6469.578,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 2,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "6301032fad580dbb57558b878a2d1c3f45ca9d85f775857cc7b5aa02ed8d523a",
+          "response_bytes": 423,
+          "model": "qwen/qwen3.8-27b",
+          "prompt_tokens": 115,
+          "completion_tokens": 158,
+          "ttft_ms": null,
+          "wall_ms": 6469.578,
+          "finish_reason": "stop",
+          "http_attempts": 2,
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": false,
+          "tests_passed": 3,
+          "tests_total": 11,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "cpp"
+          },
+          "code": "#include <iostream>\n#include <cmath>\n#include <iomanip>\n\nint main() {\n    int n;\n    std::cin >> n;\n    \n    if (n == 0) {\n        std::cout << \"0.0\" << std::endl;\n        return 0;\n    }\n    \n    double sum = 0.0;\n    for (int i = 0; i < n; i++) {\n        double x;\n        std::cin >> x;\n        sum += std::abs(x);\n    }\n    \n    double mean = sum / n;\n    std::cout << mean << std::endl;\n    \n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 1,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 6469.578,
+      "prompt_tokens": 115,
+      "completion_tokens": 158,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    }
+  ],
+  "aggregates": {
+    "sort_numbers/nava": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 545.525,
+      "median_time_to_correct_ms": 545.525,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 1645.0,
+      "median_completion_tokens": 157.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "sieve_count/nava": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 703.483,
+      "median_time_to_correct_ms": 703.483,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 1586.0,
+      "median_completion_tokens": 236.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "mean_abs/nava": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 14639.84,
+      "median_time_to_correct_ms": 14639.84,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 1604.0,
+      "median_completion_tokens": 132.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "sort_numbers/c": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 766.83,
+      "median_time_to_correct_ms": 766.83,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 160.0,
+      "median_completion_tokens": 329.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "sieve_count/c": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 3834.817,
+      "median_time_to_correct_ms": 3834.817,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 101.0,
+      "median_completion_tokens": 335.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "mean_abs/c": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 5609.739,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 119.0,
+      "median_completion_tokens": 209.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 0
+    },
+    "sort_numbers/cpp": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 389.405,
+      "median_time_to_correct_ms": 389.405,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 156.0,
+      "median_completion_tokens": 136.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "sieve_count/cpp": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 19711.301,
+      "median_time_to_correct_ms": 19711.301,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 97.0,
+      "median_completion_tokens": 259.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 1
+    },
+    "mean_abs/cpp": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 6469.578,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 115.0,
+      "median_completion_tokens": 158.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 1.0,
+      "successes": 0
+    },
+    "all/nava": {
+      "attempts": 3,
+      "pass_at_1": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 703.483,
+      "median_time_to_correct_ms": 703.483,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 1604.0,
+      "median_completion_tokens": 157.0,
+      "tokens_reported": {
+        "prompt": 3,
+        "completion": 3,
+        "of_attempts": 3
+      },
+      "median_rounds_used": 1.0,
+      "successes": 3
+    },
+    "all/c": {
+      "attempts": 3,
+      "pass_at_1": {
+        "point": 0.6667,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.6667,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 3834.817,
+      "median_time_to_correct_ms": 2300.823,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 119.0,
+      "median_completion_tokens": 329.0,
+      "tokens_reported": {
+        "prompt": 3,
+        "completion": 3,
+        "of_attempts": 3
+      },
+      "median_rounds_used": 1.0,
+      "successes": 2
+    },
+    "all/cpp": {
+      "attempts": 3,
+      "pass_at_1": {
+        "point": 0.6667,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.6667,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 6469.578,
+      "median_time_to_correct_ms": 10050.353,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 115.0,
+      "median_completion_tokens": 158.0,
+      "tokens_reported": {
+        "prompt": 3,
+        "completion": 3,
+        "of_attempts": 3
+      },
+      "median_rounds_used": 1.0,
+      "successes": 2
+    },
+    "all/all": {
+      "attempts": 9,
+      "pass_at_1": {
+        "point": 0.7778,
+        "low": 0.4444,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.7778,
+        "low": 0.4444,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 3834.817,
+      "median_time_to_correct_ms": 766.83,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 156.0,
+      "median_completion_tokens": 209.0,
+      "tokens_reported": {
+        "prompt": 9,
+        "completion": 9,
+        "of_attempts": 9
+      },
+      "median_rounds_used": 1.0,
+      "successes": 7
+    }
+  },
+  "notes": [
+    "exploratory study: 3 tasks < 10 required; 1 attempts per task and language < 30 required",
+    "5 attempt(s) needed more than one HTTP request because the server rate-limited or failed transiently; each is recorded with its real token counts, not as a provider error"
+  ],
+  "duration_s": 65.128,
+  "model_measurements": {
+    "status": "measured",
+    "reason": "every attempt produced a compile and test result",
+    "evaluated_attempts": 9,
+    "provider": "openai",
+    "model": "qwen/qwen3.8-27b",
+    "pass_at_1": 0.7778,
+    "final_pass": 0.7778,
+    "median_wall_ms": 3834.817,
+    "median_completion_tokens": 209.0
+  }
+}

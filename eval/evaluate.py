@@ -20,6 +20,7 @@ sandboxed.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -92,14 +93,21 @@ def emit_c(source: Path, output: Path) -> tuple[bool, str]:
     return result.returncode == 0, result.stderr[-4000:]
 
 
+def load_tasks(path: Path) -> dict[str, dict]:
+    """Task definitions by id, from the public set or a held-out file."""
+    return {task["id"]: task for task in json.loads(path.read_text(encoding="utf-8"))}
+
+
 def main() -> int:
-    tasks = {task["id"]: task for task in json.loads((HERE / "tasks.json").read_text(encoding="utf-8"))}
     ap = argparse.ArgumentParser(
         description="Compile and test a saved response inside an isolation boundary.",
         epilog="Exit status: 0 all tests passed, 1 a test or the compilation failed, "
                "2 the evaluation could not run (including unavailable isolation).",
     )
-    ap.add_argument("--task", choices=sorted(tasks), required=True)
+    ap.add_argument("--task", required=True,
+                    help="task id, from --task-file (default: eval/tasks.json)")
+    ap.add_argument("--task-file", type=Path, default=HERE / "tasks.json",
+                    help="task definitions; a held-out set lives outside the repository")
     ap.add_argument("--language", choices=LANGUAGES, required=True)
     ap.add_argument("--source", type=Path, required=True)
     ap.add_argument("--timeout", type=positive_float, default=2.0, help="wall-clock seconds per test")
@@ -117,6 +125,13 @@ def main() -> int:
     ap.add_argument("--prompt-tokens", type=nonnegative_int, help="API-reported input tokens, supplied by you")
     ap.add_argument("--completion-tokens", type=nonnegative_int, help="API-reported output tokens, supplied by you")
     args = ap.parse_args()
+    try:
+        tasks = load_tasks(args.task_file)
+    except (OSError, ValueError, KeyError) as error:
+        ap.error(f"cannot read the task file {args.task_file}: {error}")
+    if args.task not in tasks:
+        ap.error(f"unknown task {args.task!r}; --task-file has "
+                 f"{', '.join(sorted(tasks)) or 'no tasks'}")
     if args.prompt_file and not (args.encoding or args.hf_tokenizer):
         ap.error("--prompt-file requires --encoding or --hf-tokenizer")
     try:
@@ -125,6 +140,8 @@ def main() -> int:
         result = {
             "task": args.task,
             "language": args.language,
+            "task_file": {"path": str(args.task_file), "sha256": hashlib.sha256(
+                args.task_file.read_bytes()).hexdigest(), "tasks": len(tasks)},
             "source": {"path": str(source), "bytes_utf8": len(text.encode("utf-8")), "characters": len(text)},
             "generation": {
                 "model": args.model,

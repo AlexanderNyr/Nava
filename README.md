@@ -304,7 +304,8 @@ is not, on which platforms, and how each claim is tested.
 | `tests/test_files.py` | Capability gate: deny by default, symbolic links, limits, isolation interaction |
 | `nava_lang/stdlib/` | The versioned standard library in Nava source (`math`, `sort`, `text`) |
 | `examples/modules/` | Multi-file example: a local module plus three standard modules |
-| `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction |
+| `tests/test_study.py` | Study gate: providers, repairs, missing values, scale label, credential redaction, held-out task files |
+| `tests/test_local_model_server.py` | Local-model shim gate: request validation, response schema, laziness, a study run through the shim |
 | `guides/` | Versioned model-facing guide, canonical examples and the measured guidance overhead |
 | `tests/test_guides.py` | Guide gate: digests, canonical examples, coverage of the implemented language, overhead records |
 | `tests/test_grammar.py` | Grammar gate: conformance corpus, the emitted GBNF artefact, syntax versus semantics |
@@ -315,7 +316,7 @@ is not, on which platforms, and how each claim is tested.
 | `bench/` | Reproducible comparison with C++, phase-by-phase compiler profile, record comparison and negative controls; JSON records in `bench/results/` |
 | `eval/` | Prompts, tasks, reference answers, saved-response evaluator and the paired study harness |
 | `experiment/` | Nava-versus-C GCD sources and the authoring-time experiment |
-| `tools/` | Release verification (`verify_release.py`) |
+| `tools/` | Release verification (`verify_release.py`) and the local model shim for the N3 study (`local_model_server.py`) |
 | `.github/workflows/ci.yml` | Required, fail-closed, release-artifact, harness and benchmark lanes |
 | [`pyproject.toml`](pyproject.toml) | Packaging metadata and the `nava` console script |
 | [`SECURITY.md`](SECURITY.md) | Threat model, platform support and how isolation is tested |

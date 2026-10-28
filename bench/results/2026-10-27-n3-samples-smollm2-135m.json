@@ -1,0 +1,1220 @@
+{
+  "schema": "nava-study/1",
+  "created_at_utc": "2026-10-27T20:16:43+00:00",
+  "plan": {
+    "tasks": [
+      {
+        "id": "gcd",
+        "held_out": false,
+        "cases": 7
+      },
+      {
+        "id": "triangle_kind",
+        "held_out": true,
+        "cases": 7
+      }
+    ],
+    "task_files": [
+      {
+        "held_out": false,
+        "sha256": "5a0eb6681af65fd584ede38425ca5887a29c3c00017df7f7af7ccd330f1a29f6",
+        "tasks": 1,
+        "name": "tasks.json"
+      },
+      {
+        "held_out": true,
+        "sha256": "27a34fc1ce0eed38ceb3cf39be34c2a7ad2b3337f5d49af2da7baba3ef2ff6b6",
+        "tasks": 1,
+        "name": "held-out set"
+      }
+    ],
+    "languages": [
+      "nava",
+      "c",
+      "cpp"
+    ],
+    "attempts_per_task_language": 1,
+    "repair_rounds": 1,
+    "order_policy": "languages rotated per attempt index; attempts are independent",
+    "request": {
+      "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+      "temperature": 0.2,
+      "max_tokens": 320,
+      "stream": false,
+      "system_message": false,
+      "guide_included": true,
+      "feedback": "structured"
+    },
+    "isolation": "auto",
+    "store_raw": true,
+    "expected_scale": {
+      "label": "exploratory",
+      "reasons": [
+        "2 tasks < 10 required",
+        "1 attempts per task and language < 30 required"
+      ],
+      "thresholds": {
+        "tasks": 10,
+        "attempts_per_task_language": 30
+      }
+    }
+  },
+  "scale": {
+    "label": "exploratory",
+    "reasons": [
+      "2 tasks < 10 required",
+      "1 attempts per task and language < 30 required"
+    ],
+    "thresholds": {
+      "tasks": 10,
+      "attempts_per_task_language": 30
+    }
+  },
+  "provider": {
+    "provider": "openai-compatible",
+    "base_url": "http://127.0.0.1:8765/v1",
+    "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "api_key_env": "NAVA_LOCAL_KEY"
+  },
+  "request": {
+    "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "temperature": 0.2,
+    "max_tokens": 320,
+    "stream": false,
+    "system_message": false,
+    "guide_included": true,
+    "feedback": "structured"
+  },
+  "prompt_policy": {
+    "guide_included": true,
+    "guide_bytes": {
+      "nava": 4708,
+      "c": 164,
+      "cpp": 144
+    },
+    "guide": {
+      "name": "nava-1",
+      "file": "guides/nava-1.md",
+      "version": 1,
+      "spec_version": 1,
+      "sha256": "e8446c38d99a716b233f818029368d30c8fa517cab81c0df854d1aa303e11e44",
+      "bytes": 4708,
+      "chars": 4692,
+      "lines": 143
+    },
+    "guide_sha256": {
+      "nava": "e8446c38d99a716b233f818029368d30c8fa517cab81c0df854d1aa303e11e44",
+      "c": "504ac794d16b55d66c03b3d778a98b0e233aea9e1cf455fb92d32615eafc9044",
+      "cpp": "282f1dc2817ca98ec88ed242b7c9c04f174bf132a718a4dd206f21c0c92a137a"
+    },
+    "feedback": "structured",
+    "instruction": "Print only the requested result, with a newline. Output source code only, without Markdown or explanation.",
+    "system_message": null
+  },
+  "environment": {
+    "nava_version": "0.1.0",
+    "python": "3.13.16",
+    "platform": "Linux-6.1.158+-x86_64-with-glibc2.41",
+    "isolation": {
+      "platform": "linux",
+      "unshare": "/usr/bin/unshare",
+      "namespaces_available": true,
+      "user_namespaces_max": "7909",
+      "backends": {
+        "namespaces": true,
+        "rlimits": true
+      }
+    }
+  },
+  "attempts": [
+    {
+      "task": "gcd",
+      "language": "nava",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "67bbad5fa9449aeaf1bfd94e43775060a20ab40c264fb91a0c9271394b3e7320",
+          "prompt_bytes": 4956,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nimport math\n\ndef gcd(a: int, b: int) -> int:\n    \"\"\"\n    Returns the greatest common divisor of two integers a and b,\n    with the following rules:\n    - If a and b have the same sign, return 0.\n    - If a and b are both 0, return 1.\n    - If a and b are both negative, return -1.\n    - If a and b are both 0, return 0.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    - If a and b are both negative, return -1.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    \"\"\"\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 1\n    if a == 1 and b == 0:\n        return 0\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == -1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == -1 and b == 1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == 0 and b == 1:",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 1734,
+            "completion_tokens": 320,
+            "ttft_ms": null,
+            "wall_ms": 19615.781,
+            "finish_reason": "length",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "c72054dce6e2ed5d592da06790cc6c4df46e9e8c6de209303fd8f8eeb0638dee",
+          "response_bytes": 912,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 1734,
+          "completion_tokens": 320,
+          "ttft_ms": null,
+          "wall_ms": 19615.781,
+          "finish_reason": "length",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": null,
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "parse",
+            "codes": [
+              "E0101"
+            ],
+            "diagnostics": 1,
+            "failures": 0,
+            "elided": 0,
+            "bytes": 270,
+            "sha256": "0d59dfb067607933d19648feac8b24f1c9bcfdb9436fc32f1db7f6f075dd95f2"
+          },
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "```nava\nimport math\n\ndef gcd(a: int, b: int) -> int:\n    \"\"\"\n    Returns the greatest common divisor of two integers a and b,\n    with the following rules:\n    - If a and b have the same sign, return 0.\n    - If a and b are both 0, return 1.\n    - If a and b are both negative, return -1.\n    - If a and b are both 0, return 0.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    - If a and b are both negative, return -1.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    \"\"\"\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 1\n    if a == 1 and b == 0:\n        return 0\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == -1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == -1 and b == 1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == 0 and b == 1:",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "e646fceeaff41877c9bda99543e27a80b4f410b5772ece80916cbff843380716",
+          "prompt_bytes": 6264,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nYour previous answer did not parse. Feedback (nava-feedback/1, stage parse):\n{\"diagnostics\": [{\"code\": \"E0101\", \"column\": 1, \"end_column\": 2, \"hint\": \"identifiers use ASCII letters, digits and '_'\", \"line\": 1, \"message\": \"unexpected character '`'\", \"severity\": \"error\"}], \"elided\": 0, \"failures\": [], \"schema\": \"nava-feedback/1\", \"stage\": \"parse\"}\n\nPrevious answer:\n```nava\nimport math\n\ndef gcd(a: int, b: int) -> int:\n    \"\"\"\n    Returns the greatest common divisor of two integers a and b,\n    with the following rules:\n    - If a and b have the same sign, return 0.\n    - If a and b are both 0, return 1.\n    - If a and b are both negative, return -1.\n    - If a and b are both 0, return 0.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    - If a and b are both negative, return -1.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    \"\"\"\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 1\n    if a == 1 and b == 0:\n        return 0\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == -1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == -1 and b == 1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nimport math\n\ndef gcd(a: int, b: int) -> int:\n    \"\"\"\n    Returns the greatest common divisor of two integers a and b,\n    with the following rules:\n    - If a and b have the same sign, return 0.\n    - If a and b are both 0, return 1.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    \"\"\"\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 1\n    if a == 1 and b == 0:\n        return 0\n    if a == 1 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 0\n    if a == 0 and b == -1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == -1 and b == 1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 0\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 2183,
+            "completion_tokens": 320,
+            "ttft_ms": null,
+            "wall_ms": 22283.637,
+            "finish_reason": "length",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "f22962d1df8a0c44b00e976937211f9c6fe910c493bfbdb67f35130af000effa",
+          "response_bytes": 900,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 2183,
+          "completion_tokens": 320,
+          "ttft_ms": null,
+          "wall_ms": 22283.637,
+          "finish_reason": "length",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": null,
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "```nava\nimport math\n\ndef gcd(a: int, b: int) -> int:\n    \"\"\"\n    Returns the greatest common divisor of two integers a and b,\n    with the following rules:\n    - If a and b have the same sign, return 0.\n    - If a and b are both 0, return 1.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    - If a and b are both 1, return 1.\n    - If a and b are both 0, return 0.\n    \"\"\"\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 1\n    if a == 1 and b == 0:\n        return 0\n    if a == 1 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 0\n    if a == 0 and b == -1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == -1 and b == 1:\n        return 0\n    if a == -1 and b == 0:\n        return 0\n    if a == 0 and b == 1:\n        return 0\n    if a == 0 and b == 0:\n        return 0\n    if a == 0 and",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 41899.418,
+      "prompt_tokens": 3917,
+      "completion_tokens": 640,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "gcd",
+      "language": "c",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "9ef1014bd08370a2285f38c0a9847c5a10683b5a9f21c7f519bc9b6154479342",
+          "prompt_bytes": 412,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```c\n#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    int a, b;\n\n    printf(\"Enter the first non-negative integer: \");\n    scanf(\"%d\", &a);\n\n    printf(\"Enter the second non-negative integer: \");\n    scanf(\"%d\", &b);\n\n    printf(\"The greatest common divisor of %d and %d is %d\\n\", a, b, gcd(a, b));\n\n    return 0;\n}\n```\n\nOutput:\n```\nEnter the first non-negative integer: 12\nEnter the second non-negative integer: 12\nThe greatest common divisor of 12 and 12 is 12\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 144,
+            "completion_tokens": 171,
+            "ttft_ms": null,
+            "wall_ms": 6641.493,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "1ff854a5f42b397881acb5f2482dec89e30bddf7b03e9600fb7a1ba9113c8b6e",
+          "response_bytes": 474,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 144,
+          "completion_tokens": 171,
+          "ttft_ms": null,
+          "wall_ms": 6641.493,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "parse",
+            "codes": [
+              "E0101"
+            ],
+            "diagnostics": 1,
+            "failures": 0,
+            "elided": 0,
+            "bytes": 272,
+            "sha256": "2cae4e7635b3aa20826fae04fcd2b3df34c14d449653a645ffbd4f1c84c2ec34"
+          },
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 2,
+            "tag": "c"
+          },
+          "code": "#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    int a, b;\n\n    printf(\"Enter the first non-negative integer: \");\n    scanf(\"%d\", &a);\n\n    printf(\"Enter the second non-negative integer: \");\n    scanf(\"%d\", &b);\n\n    printf(\"The greatest common divisor of %d and %d is %d\\n\", a, b, gcd(a, b));\n\n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "3e577270d5b4271a554e99c19b2862113a7634d43ff74c65cac83ce8652a3a60",
+          "prompt_bytes": 1129,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nYour previous answer did not parse. Feedback (nava-feedback/1, stage parse):\n{\"diagnostics\": [{\"code\": \"E0101\", \"column\": 17, \"end_column\": 18, \"hint\": \"identifiers use ASCII letters, digits and '_'\", \"line\": 8, \"message\": \"unexpected character '&'\", \"severity\": \"error\"}], \"elided\": 0, \"failures\": [], \"schema\": \"nava-feedback/1\", \"stage\": \"parse\"}\n\nPrevious answer:\n#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    int a, b;\n\n    printf(\"Enter the first non-negative integer: \");\n    scanf(\"%d\", &a);\n\n    printf(\"Enter the second non-negative integer: \");\n    scanf(\"%d\", &b);\n\n    printf(\"The greatest common divisor of %d and %d is %d\\n\", a, b, gcd(a, b));\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    int a, b;\n\n    printf(\"Enter the first non-negative integer: \");\n    scanf(\"%d\", &a);\n\n    printf(\"Enter the second non-negative integer: \");\n    scanf(\"%d\", &b);\n\n    printf(\"The greatest common divisor of %d and %d is %d\\n\", a, b, gcd(a, b));\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 390,
+            "completion_tokens": 146,
+            "ttft_ms": null,
+            "wall_ms": 6577.087,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "3b19c88b286cbcff93b14cac3094a69d8d46c9ca3218df57f0c780d7a3905a73",
+          "response_bytes": 456,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 390,
+          "completion_tokens": 146,
+          "ttft_ms": null,
+          "wall_ms": 6577.087,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "#include <stdio.h>\n#include <stdlib.h>\n\nint main() {\n    int a, b;\n\n    printf(\"Enter the first non-negative integer: \");\n    scanf(\"%d\", &a);\n\n    printf(\"Enter the second non-negative integer: \");\n    scanf(\"%d\", &b);\n\n    printf(\"The greatest common divisor of %d and %d is %d\\n\", a, b, gcd(a, b));\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 13218.58,
+      "prompt_tokens": 534,
+      "completion_tokens": 317,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "gcd",
+      "language": "cpp",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "31987eeb716b414cc3e8a6e6dde1b6d4c29a6fa1b1a327a6ad2d2d0ed58d0487",
+          "prompt_bytes": 392,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```cpp\n#include <iostream>\n\nint main() {\n    int a, b;\n\n    std::cout << \"Enter the first non-negative decimal number: \";\n    std::cin >> a;\n\n    std::cout << \"Enter the second non-negative decimal number: \";\n    std::cin >> b;\n\n    int gcd = gcd(a, b);\n\n    std::cout << \"GCD of \" << a << \" and \" << b << \" is \" << gcd << std::endl;\n\n    return 0;\n}\n```\n\nOutput:\n```\nEnter the first non-negative decimal number: 12\nEnter the second non-negative decimal number: 12\nGCD of 12 and 12 is 6\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 139,
+            "completion_tokens": 174,
+            "ttft_ms": null,
+            "wall_ms": 6765.016,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "4d2de7dbd07ef8de52c24b6d4ebe7cf2b578479ed96d3e67679d4a0b36657044",
+          "response_bytes": 490,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 139,
+          "completion_tokens": 174,
+          "ttft_ms": null,
+          "wall_ms": 6765.016,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "parse",
+            "codes": [
+              "E0201"
+            ],
+            "diagnostics": 1,
+            "failures": 0,
+            "elided": 0,
+            "bytes": 227,
+            "sha256": "cb09c902f4ebc18a263e9fa4e548a8917e88a3086bfe65944b1634d2bff8534d"
+          },
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 2,
+            "tag": "cpp"
+          },
+          "code": "#include <iostream>\n\nint main() {\n    int a, b;\n\n    std::cout << \"Enter the first non-negative decimal number: \";\n    std::cin >> a;\n\n    std::cout << \"Enter the second non-negative decimal number: \";\n    std::cin >> b;\n\n    int gcd = gcd(a, b);\n\n    std::cout << \"GCD of \" << a << \" and \" << b << \" is \" << gcd << std::endl;\n\n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "15ceb2f56c357984702ab3515baa823d909614945ad55aab82ea9fb3bfb229f8",
+          "prompt_bytes": 1089,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read two non-negative decimal integers a and b, each at most 1000000000. Print their greatest common divisor. Define gcd(0, 0) as 0.\n\nYour previous answer did not parse. Feedback (nava-feedback/1, stage parse):\n{\"diagnostics\": [{\"code\": \"E0201\", \"column\": 1, \"end_column\": 4, \"hint\": null, \"line\": 3, \"message\": \"expected 'fn', got 'int'\", \"severity\": \"error\"}], \"elided\": 0, \"failures\": [], \"schema\": \"nava-feedback/1\", \"stage\": \"parse\"}\n\nPrevious answer:\n#include <iostream>\n\nint main() {\n    int a, b;\n\n    std::cout << \"Enter the first non-negative decimal number: \";\n    std::cin >> a;\n\n    std::cout << \"Enter the second non-negative decimal number: \";\n    std::cin >> b;\n\n    int gcd = gcd(a, b);\n\n    std::cout << \"GCD of \" << a << \" and \" << b << \" is \" << gcd << std::endl;\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "#include <iostream>\n\nint main() {\n    int a, b;\n\n    std::cout << \"Enter the first non-negative decimal number: \";\n    std::cin >> a;\n\n    std::cout << \"Enter the second non-negative decimal number: \";\n    std::cin >> b;\n\n    int gcd = gcd(a, b);\n\n    std::cout << \"GCD of \" << a << \" and \" << b << \" is \" << gcd << std::endl;\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 381,
+            "completion_tokens": 151,
+            "ttft_ms": null,
+            "wall_ms": 6476.832,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "b622387f59a0403a5006595f9d3d4c03c610add5be9e8e7c6ce88bfc2e44722c",
+          "response_bytes": 481,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 381,
+          "completion_tokens": 151,
+          "ttft_ms": null,
+          "wall_ms": 6476.832,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "#include <iostream>\n\nint main() {\n    int a, b;\n\n    std::cout << \"Enter the first non-negative decimal number: \";\n    std::cin >> a;\n\n    std::cout << \"Enter the second non-negative decimal number: \";\n    std::cin >> b;\n\n    int gcd = gcd(a, b);\n\n    std::cout << \"GCD of \" << a << \" and \" << b << \" is \" << gcd << std::endl;\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 13241.848,
+      "prompt_tokens": 520,
+      "completion_tokens": 325,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": false
+    },
+    {
+      "task": "triangle_kind",
+      "language": "nava",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "11013d71b3a18c3ce45ec066944b37ec65820e18071bb48d2b106d2263b92757",
+          "prompt_bytes": 5087,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nlet a = 1.9;\nlet b = 2;\nlet c = 1;\n\nif (a == b && a == c) {\n    print(\"a = b = c\");\n} else if (a == b) {\n    print(\"a = b\");\n} else if (a == c) {\n    print(\"a = c\");\n} else {\n    print(\"a = b\");\n}\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 1761,
+            "completion_tokens": 99,
+            "ttft_ms": null,
+            "wall_ms": 7484.497,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "ab383bfe2d1b0b5aa7074ae7494b8f087442b50af8e069ee70da4f8377bb1d23",
+          "response_bytes": 208,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 1761,
+          "completion_tokens": 99,
+          "ttft_ms": null,
+          "wall_ms": 7484.497,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": null,
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "parse",
+            "codes": [
+              "E0201"
+            ],
+            "diagnostics": 1,
+            "failures": 0,
+            "elided": 0,
+            "bytes": 227,
+            "sha256": "e00efa8296462fa86bfe892a25e334500f74033741d26cae5b47209599132ece"
+          },
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "nava"
+          },
+          "code": "let a = 1.9;\nlet b = 2;\nlet c = 1;\n\nif (a == b && a == c) {\n    print(\"a = b = c\");\n} else if (a == b) {\n    print(\"a = b\");\n} else if (a == c) {\n    print(\"a = c\");\n} else {\n    print(\"a = b\");\n}\n",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "26b1618df35698fc65cff2cc033d458d900982e313f12e518c978e6e6152ba6b",
+          "prompt_bytes": 5637,
+          "prompt": "# Nava 0.1 — model-facing guide (`nava-1`, `nava-guide/1`)\n\nCompact guide to the implemented language. It is tied to specification version 1\n(`LANGUAGE.md`); every example in `guides/examples/` is compiled and run by\n`tests/test_guides.py`, and the digest of this file is what an evaluation record\ncites.\n\nWrite **one complete program**. It must define `fn main()` with no parameters.\nOne statement per line; a newline or `;` separates statements. Comments start\nwith `#` or `//`.\n\n## Types\n\n`i64`, `bool`, `str` (a byte string, printed as-is), `f64`, and the fixed-length\narrays `[i64]`, `[bool]`, `[str]`. There are no implicit conversions:\n`to_i64(x: f64)` and `to_f64(x: i64)` convert explicitly. Integer arithmetic is\nchecked and a runtime overflow is an error, not a wrapped value.\n\n## Values and variables\n\n```nava\nlet count = 0              # i64, inferred\nlet ratio: f64 = 1.5       # annotation optional but checked\nlet name = \"nava\"          # str\nlet empty: [i64] = array_zeros(4)\n```\n\n`true` and `false` are the only `bool` literals. `let` declares a mutable\nlocal. Assignment is `count = count + 1`; the type may\nnot change. Variables are block-scoped. Array elements are assigned with\n`a[i] = value` and read with `a[i]` (bounds are checked at run time).\n\n## Statements\n\n```nava\nif n < 0 {\n    print(\"negative\")\n} else if n == 0 {\n    print(\"zero\")\n} else {\n    print(\"positive\")\n}\n\nwhile n > 0 {\n    n = n / 10\n}\n\nfor i in 0..n {          # i64 range, half-open: 0, 1, ..., n-1\n    if i == 3 { continue }\n    if i > 8 { break }\n}\n\nfor item in a {          # over an array, read-only\n    print(item)\n}\n```\n\nConditions must be `bool`; `while` and `if` take a bare expression, no\nparentheses. `break` and `continue` act on the innermost loop.\n\n## Functions\n\n```nava\nfn gcd(a: i64, b: i64) -> i64 {\n    while b != 0 {\n        let r = a % b\n        a = b\n        b = r\n    }\n    return a\n}\n\nfn greet() {             # no return type means void\n    print(\"hi\")\n}\n\nfn main() {\n    print(gcd(48, 18))\n}\n```\n\nFunctions may be called before their definition and may be recursive. Every\npath of a non-`void` function must return a value. A parameter declared\n`fn fill(a: mut [i64])` may write elements; a plain `[i64]` parameter is a\nread-only view. An array is created by a `let` binding, has exactly one owner,\nis released when its block ends, and is never copied (`E0331`) or returned\n(`E0330`); a borrow cannot outlive the call, so there are no lifetimes.\n\n## Built-in functions\n\n- `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.\n- `read_i64()`, `read_f64()` — one whitespace-separated value from stdin.\n- `len(a: [T]) -> i64`, `array_zeros(n: i64) -> [i64]`.\n- `to_i64(x: f64) -> i64`, `to_f64(x: i64) -> f64`.\n- `bytes_len(s)`, `chars_len(s)`, `byte_at(s, i)` — byte length, Unicode code\n  point count (an error if the bytes are not valid UTF-8) and one byte.\n- `read_file(path)`, `write_file(path, text)` — only if the caller was granted\n  a directory, otherwise a runtime error.\n\n## Operators\n\n`+ - * / %` (arithmetic, `/` truncates toward zero, `%` keeps the sign of the\nleft operand), `< <= > >= == !=`, `! && ||`. Precedence from tightest:\nunary, `* / %`, `+ -`, comparisons, `== !=`, `&&`, `||`. `&&` and `||`\nshort-circuit; operands are evaluated left to right. Strings compare with\n`==`/`!=` only and cannot be concatenated.\n\n## Modules and the standard library\n\nA project may hold several files: `import name` before the first `fn` makes\n`name::function(...)` available, resolved as `name.nv` next to the entry file.\n\n```nava\nimport math\n\nfn main() {\n    print(math::abs(-7))\n    print(math::gcd(48, 18))\n}\n```\n\n- `math` — `math::abs`, `math::min`, `math::max`, `math::sign`, `math::gcd`,\n  `math::sum`.\n- `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.\n- `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,\n  `text::is_continuation`, `text::sequence_width`.\n\nFor a single-file answer, do not write imports; use the built-ins above.\n\n## Rules that most often cost a round trip\n\n1. `main` takes no parameters and returns `void` or `i64`.\n2. A function that returns a value must `return` on every path.\n3. Types never convert implicitly; annotate with `to_i64(1.9)`, not `1.9` as an\n   `i64`.\n4. `a.length` does not exist; use `len(a)`.\n5. Only a call may stand alone as a statement.\n6. Integer literals fit in `i64`; `-9223372036854775808` is the one allowed\n   negative literal of that magnitude.\n7. `f64` prints with the shortest exact round-trip form, so `print(1.0)` writes\n   `1.0`.\n8. Division or overflow errors stop the program with a non-zero status; do not\n   \"fix\" them with wrapping arithmetic.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nYour previous answer did not parse. Feedback (nava-feedback/1, stage parse):\n{\"diagnostics\": [{\"code\": \"E0201\", \"column\": 1, \"end_column\": 4, \"hint\": null, \"line\": 1, \"message\": \"expected 'fn', got 'let'\", \"severity\": \"error\"}], \"elided\": 0, \"failures\": [], \"schema\": \"nava-feedback/1\", \"stage\": \"parse\"}\n\nPrevious answer:\nlet a = 1.9;\nlet b = 2;\nlet c = 1;\n\nif (a == b && a == c) {\n    print(\"a = b = c\");\n} else if (a == b) {\n    print(\"a = b\");\n} else if (a == c) {\n    print(\"a = c\");\n} else {\n    print(\"a = b\");\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```nava\nlet a = 1.9;\nlet b = 2;\nlet c = 1;\n\nif (a == b && a == c) {\n    print(\"a = b = c\");\n} else if (a == b) {\n    print(\"a = b\");\n} else if (a == c) {\n    print(\"a = c\");\n} else {\n    print(\"a = b\");\n}\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 1975,
+            "completion_tokens": 99,
+            "ttft_ms": null,
+            "wall_ms": 8320.358,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "ab383bfe2d1b0b5aa7074ae7494b8f087442b50af8e069ee70da4f8377bb1d23",
+          "response_bytes": 208,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 1975,
+          "completion_tokens": 99,
+          "ttft_ms": null,
+          "wall_ms": 8320.358,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": null,
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 1,
+            "tag": "nava"
+          },
+          "code": "let a = 1.9;\nlet b = 2;\nlet c = 1;\n\nif (a == b && a == c) {\n    print(\"a = b = c\");\n} else if (a == b) {\n    print(\"a = b\");\n} else if (a == c) {\n    print(\"a = c\");\n} else {\n    print(\"a = b\");\n}\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 15804.855,
+      "prompt_tokens": 3736,
+      "completion_tokens": 198,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": true
+    },
+    {
+      "task": "triangle_kind",
+      "language": "c",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "713afc25d4217070fa978758cf05ee085fcee4d1171209a9253dafe0042bb0b4",
+          "prompt_bytes": 543,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```c\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {\n        printf(\"The three sides are congruent.\\n\");\n    } else {\n        printf(\"The three sides are non-degenerate.\\n\");\n    }\n\n    return 0;\n}\n```\n\nOutput:\n\n```\nEnter the lengths of the three sides of a non-degenerate triangle: 1 1 1\nThe three sides are equilateral.\nThe three sides are congruent.\nThe three sides are non-degenerate.\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 171,
+            "completion_tokens": 242,
+            "ttft_ms": null,
+            "wall_ms": 9949.572,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "e34ca3a27faf4da6440b5923dfa441ca758386c51ff2c50c02f034a64d54fb91",
+          "response_bytes": 736,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 171,
+          "completion_tokens": 242,
+          "ttft_ms": null,
+          "wall_ms": 9949.572,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "tests",
+            "codes": [],
+            "diagnostics": 0,
+            "failures": 3,
+            "elided": 4,
+            "bytes": 691,
+            "sha256": "14f18c48b4c72178f91b9a11bfda8d6397ea8a78eac490cb6ff1453771e1b9a0"
+          },
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 2,
+            "tag": "c"
+          },
+          "code": "#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {\n        printf(\"The three sides are congruent.\\n\");\n    } else {\n        printf(\"The three sides are non-degenerate.\\n\");\n    }\n\n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "c7c8fd578441a9ea547240e193747589af423c18b2c1acc6b0f808982d9f9d0b",
+          "prompt_bytes": 1903,
+          "prompt": "Language: C11.\nOutput a complete program with int main(void). Use standard input and standard output. Use int64_t where necessary and include the headers you need.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nYour previous answer failed 7 of 7 tests. Feedback (nava-feedback/1, stage tests):\n{\"diagnostics\": [], \"elided\": 4, \"failures\": [{\"actual\": \"Enter the lengths of the three sides of a non-degenerate triangle: The three sides are equilateral.\\n\", \"case\": 1, \"exit_code\": 0, \"expected\": \"3\\n\", \"reason\": null, \"stdin\": \"5 5 5\\n\"}, {\"actual\": \"Enter the lengths of the three sides of a non-degenerate triangle: The three sides are congruent.\\n\", \"case\": 2, \"exit_code\": 0, \"expected\": \"2\\n\", \"reason\": null, \"stdin\": \"5 5 8\\n\"}, {\"actual\": \"Enter the lengths of the three sides of a non-degenerate triangle: The three sides are non-degenerate.\\n\", \"case\": 3, \"exit_code\": 0, \"expected\": \"1\\n\", \"reason\": null, \"stdin\": \"3 4 5\\n\"}], \"schema\": \"nava-feedback/1\", \"stage\": \"tests\"}\n\nPrevious answer:\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {\n        printf(\"The three sides are congruent.\\n\");\n    } else {\n        printf(\"The three sides are non-degenerate.\\n\");\n    }\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {\n        printf(\"The three sides are congruent.\\n\");\n    } else {\n        printf(\"The three sides are non-degenerate.\\n\");\n    }\n\n    return 0;\n}\n\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 628,
+            "completion_tokens": 320,
+            "ttft_ms": null,
+            "wall_ms": 14947.706,
+            "finish_reason": "length",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "65bb94920250b684cd0ff805afcc15f30d9d91888ace6e82f627e8465e6a90ef",
+          "response_bytes": 930,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 628,
+          "completion_tokens": 320,
+          "ttft_ms": null,
+          "wall_ms": 14947.706,
+          "finish_reason": "length",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {\n        printf(\"The three sides are congruent.\\n\");\n    } else {\n        printf(\"The three sides are non-degenerate.\\n\");\n    }\n\n    return 0;\n}\n\n#include <stdio.h>\n#include <stdlib.h>\n#include <math.h>\n\nint main() {\n    int a, b, c;\n\n    printf(\"Enter the lengths of the three sides of a non-degenerate triangle: \");\n    scanf(\"%d %d %d\", &a, &b, &c);\n\n    if (a == b && a == c) {\n        printf(\"The three sides are equilateral.\\n\");\n    } else if (a == b) {\n        printf(\"The three sides are congruent.\\n\");\n    } else if (a == c) {",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 24897.278,
+      "prompt_tokens": 799,
+      "completion_tokens": 562,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": true
+    },
+    {
+      "task": "triangle_kind",
+      "language": "cpp",
+      "attempt": 0,
+      "rounds": [
+        {
+          "round": 0,
+          "prompt_sha256": "2e6b351fe68261ab66e9403e94978d9ea99c930472791a19348e122d83d52d67",
+          "prompt_bytes": 523,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nPrint only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "```cpp\n#include <iostream>\n#include <cmath>\n\nint main() {\n    int a, b, c;\n\n    std::cout << \"Enter the side lengths of a triangle: \";\n    std::cin >> a >> b >> c;\n\n    if (a == b && a == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else if (b == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else {\n        std::cout << \"Triangle: Side lengths are not equal.\" << std::endl;\n    }\n\n    return 0;\n}\n```\n\nOutput:\n```\nEnter the side lengths of a triangle: 1 1 1\nTriangle: Side lengths are equal.\nEnter the side lengths of a triangle: 1 1 1\nTriangle: Side lengths are equal.\nEnter the side lengths of a triangle: 1 1 1\nTriangle: Side lengths are not equal.\n```",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 166,
+            "completion_tokens": 243,
+            "ttft_ms": null,
+            "wall_ms": 9521.037,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "8aa1dc86e5db816cab14a110b645c7383ce2e9a6a762f625f1edc5726636a385",
+          "response_bytes": 729,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 166,
+          "completion_tokens": 243,
+          "ttft_ms": null,
+          "wall_ms": 9521.037,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": true,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": {
+            "schema": "nava-feedback/1",
+            "stage": "tests",
+            "codes": [],
+            "diagnostics": 0,
+            "failures": 3,
+            "elided": 4,
+            "bytes": 614,
+            "sha256": "e4374ac1a78c8273973b7f926792ab48d4170924f2b3d79f825d3ba01ac69674"
+          },
+          "extraction": {
+            "method": "tagged-fence",
+            "blocks": 2,
+            "tag": "cpp"
+          },
+          "code": "#include <iostream>\n#include <cmath>\n\nint main() {\n    int a, b, c;\n\n    std::cout << \"Enter the side lengths of a triangle: \";\n    std::cin >> a >> b >> c;\n\n    if (a == b && a == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else if (b == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else {\n        std::cout << \"Triangle: Side lengths are not equal.\" << std::endl;\n    }\n\n    return 0;\n}\n",
+          "evaluator_exit_code": 1
+        },
+        {
+          "round": 1,
+          "prompt_sha256": "88a85d1c3de06eb14398defd90477c3b691849653fee1c5cf5f6dc5249b2af8a",
+          "prompt_bytes": 1733,
+          "prompt": "Language: C++17.\nOutput a complete program with int main(). Use standard input and standard output. Use signed 64-bit integers where necessary.\n\nTask: Read three decimal integers a, b and c, each between 1 and 1000. If they are the side lengths of a non-degenerate triangle, print 3 when it is equilateral, 2 when exactly two sides are equal, and 1 when all three sides differ. If they are not a triangle, print 0.\n\nYour previous answer failed 7 of 7 tests. Feedback (nava-feedback/1, stage tests):\n{\"diagnostics\": [], \"elided\": 4, \"failures\": [{\"actual\": \"Enter the side lengths of a triangle: Triangle: Side lengths are equal.\\n\", \"case\": 1, \"exit_code\": 0, \"expected\": \"3\\n\", \"reason\": null, \"stdin\": \"5 5 5\\n\"}, {\"actual\": \"Enter the side lengths of a triangle: Triangle: Side lengths are not equal.\\n\", \"case\": 2, \"exit_code\": 0, \"expected\": \"2\\n\", \"reason\": null, \"stdin\": \"5 5 8\\n\"}, {\"actual\": \"Enter the side lengths of a triangle: Triangle: Side lengths are not equal.\\n\", \"case\": 3, \"exit_code\": 0, \"expected\": \"1\\n\", \"reason\": null, \"stdin\": \"3 4 5\\n\"}], \"schema\": \"nava-feedback/1\", \"stage\": \"tests\"}\n\nPrevious answer:\n#include <iostream>\n#include <cmath>\n\nint main() {\n    int a, b, c;\n\n    std::cout << \"Enter the side lengths of a triangle: \";\n    std::cin >> a >> b >> c;\n\n    if (a == b && a == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else if (b == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else {\n        std::cout << \"Triangle: Side lengths are not equal.\" << std::endl;\n    }\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "response": {
+            "text": "\n#include <iostream>\n#include <cmath>\n\nint main() {\n    int a, b, c;\n\n    std::cout << \"Enter the side lengths of a triangle: \";\n    std::cin >> a >> b >> c;\n\n    if (a == b && a == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else if (b == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else {\n        std::cout << \"Triangle: Side lengths are not equal.\" << std::endl;\n    }\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+            "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+            "prompt_tokens": 579,
+            "completion_tokens": 188,
+            "ttft_ms": null,
+            "wall_ms": 8395.403,
+            "finish_reason": "stop",
+            "error": null,
+            "error_class": null,
+            "attempts": 1,
+            "ok": true,
+            "prompt_tokens_reported": true,
+            "completion_tokens_reported": true
+          },
+          "response_sha256": "c8b84f40707f7cdbc406bff39ebce31b7d42f33876eba13f0fda53eddd6bd428",
+          "response_bytes": 602,
+          "model": "HuggingFaceTB/SmolLM2-135M-Instruct@12fd25f77366fa6b3b4b768ec3050bf629380bac",
+          "prompt_tokens": 579,
+          "completion_tokens": 188,
+          "ttft_ms": null,
+          "wall_ms": 8395.403,
+          "finish_reason": "stop",
+          "error": null,
+          "error_class": null,
+          "compile_ok": false,
+          "passed": false,
+          "tests_passed": 0,
+          "tests_total": 7,
+          "isolation_backend": "namespaces",
+          "syntax_accepted": null,
+          "feedback": null,
+          "extraction": {
+            "method": "whole-text",
+            "blocks": 0,
+            "tag": null
+          },
+          "code": "\n#include <iostream>\n#include <cmath>\n\nint main() {\n    int a, b, c;\n\n    std::cout << \"Enter the side lengths of a triangle: \";\n    std::cin >> a >> b >> c;\n\n    if (a == b && a == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else if (b == c) {\n        std::cout << \"Triangle: Side lengths are equal.\" << std::endl;\n    } else {\n        std::cout << \"Triangle: Side lengths are not equal.\" << std::endl;\n    }\n\n    return 0;\n}\n\n\nReturn a corrected program. Print only the requested result, with a newline. Output source code only, without Markdown or explanation.\n",
+          "evaluator_exit_code": 1
+        }
+      ],
+      "first_attempt_passed": false,
+      "final_passed": false,
+      "repaired": false,
+      "rounds_used": 2,
+      "time_to_correct_ms": null,
+      "total_wall_ms": 17916.44,
+      "prompt_tokens": 745,
+      "completion_tokens": 431,
+      "provider_error": null,
+      "code": null,
+      "extraction": null,
+      "codes": null,
+      "held_out": true
+    }
+  ],
+  "aggregates": {
+    "gcd/nava": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 41899.418,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 3917.0,
+      "median_completion_tokens": 640.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "triangle_kind/nava": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 15804.855,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 3736.0,
+      "median_completion_tokens": 198.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "gcd/c": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 13218.58,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 534.0,
+      "median_completion_tokens": 317.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "triangle_kind/c": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 24897.278,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 799.0,
+      "median_completion_tokens": 562.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "gcd/cpp": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 13241.848,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 520.0,
+      "median_completion_tokens": 325.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "triangle_kind/cpp": {
+      "attempts": 1,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 1.0,
+        "low": 1.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 17916.44,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 745.0,
+      "median_completion_tokens": 431.0,
+      "tokens_reported": {
+        "prompt": 1,
+        "completion": 1,
+        "of_attempts": 1
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "all/nava": {
+      "attempts": 2,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 28852.137,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 3826.5,
+      "median_completion_tokens": 419.0,
+      "tokens_reported": {
+        "prompt": 2,
+        "completion": 2,
+        "of_attempts": 2
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "all/c": {
+      "attempts": 2,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.5,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 19057.929,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 666.5,
+      "median_completion_tokens": 439.5,
+      "tokens_reported": {
+        "prompt": 2,
+        "completion": 2,
+        "of_attempts": 2
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "all/cpp": {
+      "attempts": 2,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.5,
+        "low": 0.0,
+        "high": 1.0,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 15579.144,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 632.5,
+      "median_completion_tokens": 378.0,
+      "tokens_reported": {
+        "prompt": 2,
+        "completion": 2,
+        "of_attempts": 2
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    },
+    "all/all": {
+      "attempts": 6,
+      "pass_at_1": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "final_pass": {
+        "point": 0.0,
+        "low": 0.0,
+        "high": 0.0,
+        "resamples": 2000
+      },
+      "compile_rate": {
+        "point": 0.3333,
+        "low": 0.0,
+        "high": 0.6667,
+        "resamples": 2000
+      },
+      "repair_rate": 0.0,
+      "provider_errors": 0,
+      "median_wall_ms": 16860.647,
+      "median_time_to_correct_ms": null,
+      "median_first_token_ms": null,
+      "median_prompt_tokens": 772.0,
+      "median_completion_tokens": 378.0,
+      "tokens_reported": {
+        "prompt": 6,
+        "completion": 6,
+        "of_attempts": 6
+      },
+      "median_rounds_used": 2.0,
+      "successes": 0
+    }
+  },
+  "notes": [
+    "exploratory study: 2 tasks < 10 required; 1 attempts per task and language < 30 required"
+  ],
+  "duration_s": 132.029,
+  "model_measurements": {
+    "status": "measured",
+    "reason": "every attempt produced a compile and test result",
+    "evaluated_attempts": 6,
+    "provider": "openai",
+    "model": "HuggingFaceTB/SmolLM2-135M-Instruct",
+    "pass_at_1": 0.0,
+    "final_pass": 0.0,
+    "median_wall_ms": 16860.647,
+    "median_completion_tokens": 378.0
+  }
+}

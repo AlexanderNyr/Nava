@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+Phase N3 of `PLAN.md` follow-up: the study now runs against a hosted,
+rate-limited provider as well as a local model, and the results are recorded.
+
+- A rate limit is no longer recorded as a model failure. The client retries a
+  429 or a transient 5xx after the delay the server asks for (`retry-after`,
+  `x-ratelimit-reset-tokens`, parsed from `1.5`, `690ms`, `12s`, `1m26.4s`), with
+  exponential backoff otherwise, up to `--retries`; every round records
+  `http_attempts`. A daily cap (`DailyQuotaExceeded`) and a request larger than a
+  whole per-minute output budget (`RequestTooLarge`) are reported immediately
+  instead of being retried for an hour.
+- Requests carry `User-Agent: nava-study/1.0`: Groq rejects the default
+  `Python-urllib/3.13` with HTTP 403 and Cloudflare's `error code: 1010`. Extra
+  headers go through `--header 'Name: value'`; only the names are recorded, and
+  `Authorization` cannot be set that way.
+- The summary line no longer says "no model was called" when a real run ends
+  `not-measured` for another reason; it prints the reason.
+- Hosted run: `qwen/qwen3.8-27b` on Groq, 10 tasks (6 public + 4 held out) ×
+  `nava`/`c`/`cpp` × 6 attempts — 180 attempts, 138,078 tokens, 26 min,
+  `pass@1` Nava 0.90 [0.82, 0.97], C 0.90 [0.82, 0.97], C++ 0.87 [0.77, 0.95].
+  A second run (`openai/gpt-oss-20b`) hit the provider's 200,000 token/day cap
+  and was correctly marked `not-measured` with exit 1; its aggregates are not
+  quoted. Report: `bench/results/2026-10-28-n3-groq-report.md`.
+- Tests: `RateLimitTests` (10) and `HeaderOptionTests` (3) pin the retry policy,
+  the error classification, the user agent and the header handling; registry
+  307 → 322.
+
+Phase N3 of `PLAN.md` (real model evaluation). The result is marked
+exploratory by the harness itself, and nothing in the record is estimated.
+
+- `tools/local_model_server.py`: an OpenAI-compatible chat-completions server
+  for a model on the same machine — no key, no egress, `usage` counts taken from
+  the tokenizer that produced them, the model revision echoed in every answer,
+  streaming refused with HTTP 400 rather than faked, and `transformers`/`torch`
+  imported lazily so importing or testing the shim needs no ML stack.
+- Held-out task sets work end to end: `eval/evaluate.py --task-file` evaluates a
+  task from a file other than `eval/tasks.json` (before this, a held-out id was
+  rejected before it could run), `eval/study.py` passes each task's own file to
+  the evaluator, refuses a `--held-out` path inside the repository, and pins
+  every task file by SHA-256 in `plan.task_files`.
+- A real run: `HuggingFaceTB/SmolLM2-135M-Instruct` at revision
+  `12fd25f7…`, 15 tasks (11 public + 4 held out) × `nava`/`c`/`cpp` × 2 attempts
+  with 1 repair round — 90 attempts, 180 calls, 187,367 tokens, 33 minutes,
+  `pass@1 0.00 [0.00, 0.00]` in all three languages, compile rate 0.00 Nava /
+  0.53 C / 0.70 C++, and all 37 compiling answers failed every test case.
+- `bench/results/2026-10-27-n3-report.md` is the model-specific report, including
+  what the run does **not** establish: at 2 attempts per task and language the
+  result is exploratory, a uniform 0.00 cannot order the languages, and reaching
+  the plan's 30-attempt threshold on this machine would take about 10.4 hours.
+  The records are `…-n3-study-smollm2-135m.json` and `…-n3-samples-…json`.
+- Tests: `tests/test_local_model_server.py` (17) and four held-out-set tests in
+  `tests/test_study.py`; registry 286 → 307, suite 381 → 402.
+
 Phase N9 of `PLAN.md` (packaging, CI and release readiness).
 
 - The project is now licensed under **Apache-2.0** (`LICENSE`, `NOTICE`,

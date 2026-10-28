@@ -31,6 +31,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -179,22 +180,46 @@ class ReplayProvider(Provider):
         return {"provider": self.name, "path": str(self.path), "entries": len(self.answers)}
 
 
+#: A gateway may reject the default urllib User-Agent outright: Groq answers
+#: `Python-urllib/3.13` with HTTP 403 and Cloudflare's `error code: 1010`.
+DEFAULT_USER_AGENT = "nava-study/1.0"
+
+#: Status codes worth retrying: rate limits and transient server-side failures.
+RETRYABLE_STATUS = frozenset({408, 429, 500, 502, 503, 504, 529})
+
+
 class OpenAICompatibleProvider(Provider):
     """Chat-completions client for any OpenAI-compatible endpoint.
 
     The API key is read from the environment at call time. It is never stored on
     the instance, never returned in a record and redacted from error messages.
+
+    A rate limit is not a model failure. When the server answers 429 (or a
+    transient 5xx) the call is retried after the delay the server asks for —
+    `retry-after` or `x-ratelimit-reset-tokens` when present, exponential
+    backoff otherwise — and the number of HTTP attempts is recorded on the
+    response. Without this a token-per-minute limit would silently turn every
+    attempt into a provider error and the aggregates would be meaningless.
     """
 
     name = "openai-compatible"
 
     def __init__(self, base_url: str, model: str, api_key_env: str = "OPENAI_API_KEY",
-                 extra_headers: Optional[dict] = None, organisation: Optional[str] = None):
+                 extra_headers: Optional[dict] = None, organisation: Optional[str] = None,
+                 user_agent: str = DEFAULT_USER_AGENT, max_retries: int = 5,
+                 max_retry_wait: float = 300.0, timeout: float = 120.0, sleep=time.sleep):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.api_key_env = api_key_env
         self.extra_headers = dict(extra_headers or {})
         self.organisation = organisation
+        self.user_agent = user_agent
+        self.max_retries = max_retries
+        self.max_retry_wait = max_retry_wait
+        self.timeout = timeout
+        self._sleep = sleep
+        #: Redacted durations of the waits this provider performed (for the record).
+        self.waits: list[float] = []
 
     def _headers(self) -> dict:
         key = os.environ.get(self.api_key_env)
@@ -203,6 +228,7 @@ class OpenAICompatibleProvider(Provider):
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
+            "User-Agent": self.user_agent,
         }
         if self.organisation:
             headers["OpenAI-Organization"] = self.organisation
@@ -236,20 +262,54 @@ class OpenAICompatibleProvider(Provider):
         http_request = urllib.request.Request(
             target, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
         start = time.perf_counter()
-        try:
-            with urllib.request.urlopen(http_request, timeout=120) as handle:
-                if request.stream:
-                    return self._read_stream(handle, start)
-                body = json.loads(handle.read().decode("utf-8"))
-        except urllib.error.HTTPError as error:
-            detail = _redact(error.read().decode("utf-8", "replace")[:500], headers)
-            return Response(error=f"HTTP {error.code}: {detail}", error_class="HTTPError",
-                            wall_ms=round((time.perf_counter() - start) * 1000, 3))
-        except (urllib.error.URLError, TimeoutError, OSError) as error:
-            return Response(error=_redact(str(error), headers), error_class=type(error).__name__,
-                            wall_ms=round((time.perf_counter() - start) * 1000, 3))
-        wall_ms = round((time.perf_counter() - start) * 1000, 3)
-        return self._from_body(body, wall_ms)
+        http_attempts = 0
+        delay = 1.0
+        while True:
+            http_attempts += 1
+            try:
+                with urllib.request.urlopen(http_request, timeout=self.timeout) as handle:
+                    if request.stream:
+                        response = self._read_stream(handle, start)
+                        response.attempts = http_attempts
+                        return response
+                    body = json.loads(handle.read().decode("utf-8"))
+                wall_ms = round((time.perf_counter() - start) * 1000, 3)
+                response = self._from_body(body, wall_ms)
+                response.attempts = http_attempts
+                return response
+            except urllib.error.HTTPError as error:
+                detail = _redact(error.read().decode("utf-8", "replace")[:500], headers)
+                # A daily cap is not a transient limit: the server says when it
+                # resets (hours), and retrying would burn the whole run while
+                # every attempt turns into a provider error anyway.
+                blocking = _blocking_class(detail, error.headers)
+                if blocking:
+                    # Retrying cannot fix a daily cap or a request that asks for
+                    # more output than the whole per-minute budget allows.
+                    return Response(error=f"HTTP {error.code}: {detail}",
+                                    error_class=blocking,
+                                    wall_ms=round((time.perf_counter() - start) * 1000, 3),
+                                    attempts=http_attempts)
+                if error.code in RETRYABLE_STATUS and http_attempts <= self.max_retries:
+                    wait = _retry_delay(error.headers, delay, self.max_retry_wait)
+                    self.waits.append(wait)
+                    self._sleep(wait)
+                    delay = min(delay * 2, self.max_retry_wait)
+                    continue
+                return Response(error=f"HTTP {error.code}: {detail}", error_class="HTTPError",
+                                wall_ms=round((time.perf_counter() - start) * 1000, 3),
+                                attempts=http_attempts)
+            except (urllib.error.URLError, TimeoutError, OSError) as error:
+                if http_attempts <= self.max_retries:
+                    wait = min(delay, self.max_retry_wait)
+                    self.waits.append(wait)
+                    self._sleep(wait)
+                    delay = min(delay * 2, self.max_retry_wait)
+                    continue
+                return Response(error=_redact(str(error), headers),
+                                error_class=type(error).__name__,
+                                wall_ms=round((time.perf_counter() - start) * 1000, 3),
+                                attempts=http_attempts)
 
     def _from_body(self, body: dict, wall_ms: Optional[float]) -> Response:
         try:
@@ -309,7 +369,73 @@ class OpenAICompatibleProvider(Provider):
 
     def describe(self) -> dict:
         return {"provider": self.name, "base_url": self.base_url, "model": self.model,
-                "api_key_env": self.api_key_env}
+                "api_key_env": self.api_key_env,
+                "user_agent": self.user_agent,
+                "max_retries": self.max_retries,
+                # Names only: a header value may be a credential.
+                "extra_header_names": sorted(self.extra_headers)}
+
+
+def _blocking_class(detail: str, headers) -> Optional[str]:
+    """The error class for a 429 that no retry can resolve, else ``None``.
+
+    Two shapes matter, and confusing them makes a record lie:
+
+    * a daily cap — Groq says `tokens per day (TPD)` and the reset is hours
+      away, so retrying would turn every attempt into a provider error after a
+      long stall (`DailyQuotaExceeded`);
+    * a request larger than an entire per-minute budget — Groq says "Request
+      too large ... on output tokens per minute (OTPM)"; waiting cannot help
+      either, because the *request* is the problem, not the current usage
+      (`RequestTooLarge`). The fix is a smaller `--max-tokens`.
+    """
+    text = (detail or "").lower()
+    if "per day" in text or "(tpd)" in text:
+        return "DailyQuotaExceeded"
+    # "Request too large ... expected output tokens exceed the enforced limit"
+    # means no retry can succeed: the request itself is above the ceiling. An
+    # OTPM message that instead says "Used 285, Requested 900, try again in
+    # 11.1s" is a *transient* per-minute limit and must be retried.
+    if "request too large" in text and "exceed the enforced limit" in text:
+        return "RequestTooLarge"
+    # `x-should-retry: false` is deliberately ignored: Groq sets it on the
+    # transient OTPM message too ("Used 285, Requested 900, try again in 11.1s").
+    # The bound that protects a run from a retry storm is `--retries`.
+    return None
+
+
+def _retry_delay(headers, fallback: float, cap: float) -> float:
+    """How long to wait before retrying, preferring what the server asked for."""
+    for name in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        value = headers.get(name) if headers is not None else None
+        if not value:
+            continue
+        seconds = _seconds(value)
+        if seconds is not None:
+            return max(0.0, min(seconds, cap))
+    return max(0.0, min(fallback, cap))
+
+
+def _seconds(value: str) -> Optional[float]:
+    """Parse `1.5`, `690ms`, `12.015s`, `1m26.4s` — the shapes Groq returns."""
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    parts = re.findall(r"(\d+(?:\.\d+)?)\s*(ms|s|m)", text)
+    if not parts:
+        return None
+    total, seen = 0.0, 0
+    for number, unit in parts:
+        seen += len(number) + len(unit)
+        total += float(number) * {"ms": 0.001, "s": 1.0, "m": 60.0}[unit]
+    # Refuse to guess at text that is not made of those pieces.
+    if seen < len(re.sub(r"\s", "", text)):
+        return None
+    return total
 
 
 def _redact(text: str, headers: dict) -> str:
@@ -325,7 +451,8 @@ def _redact(text: str, headers: dict) -> str:
 
 def build_provider(name: str, *, model: Optional[str] = None, base_url: Optional[str] = None,
                    api_key_env: str = "OPENAI_API_KEY", replay_path: Optional[Path] = None,
-                   script=None) -> Provider:
+                   script=None, headers: Optional[dict] = None,
+                   max_retries: int = 5) -> Provider:
     if name == "mock":
         return MockProvider(script or ["fn main() { print(0) }\n"], label="mock")
     if name == "replay":
@@ -335,5 +462,6 @@ def build_provider(name: str, *, model: Optional[str] = None, base_url: Optional
     if name == "openai":
         if not base_url or not model:
             raise ValueError("the openai provider needs --base-url and --model")
-        return OpenAICompatibleProvider(base_url, model, api_key_env=api_key_env)
+        return OpenAICompatibleProvider(base_url, model, api_key_env=api_key_env,
+                                        extra_headers=headers, max_retries=max_retries)
     raise ValueError(f"unknown provider {name!r}; use mock, replay or openai")

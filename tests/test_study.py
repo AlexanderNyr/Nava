@@ -8,7 +8,9 @@ provider error is recorded instead of being mistaken for an answer.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import statistics
 import subprocess
 import sys
@@ -338,3 +340,271 @@ class StudyRunTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeldOutSetTests(unittest.TestCase):
+    """A hidden set is only hidden if it lives outside the repository."""
+
+    def _task_file(self, directory: Path) -> Path:
+        path = directory / "held-out.json"
+        path.write_text(json.dumps([{
+            "id": "triple_sum",
+            "description": "Read three decimal integers and print their sum.",
+            "tests": [{"stdin": "1 2 3\n", "stdout": "6\n"},
+                      {"stdin": "-5 0 5\n", "stdout": "0\n"}],
+        }]), encoding="utf-8")
+        return path
+
+    def test_a_held_out_file_inside_the_repository_is_refused(self):
+        result = run_study("--plan-only", "--provider", "mock",
+                           "--held-out", str(ROOT / "eval" / "tasks.json"))
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("inside the repository", result.stderr)
+
+    def test_the_plan_records_the_digest_of_every_task_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            held_out = self._task_file(Path(temp))
+            result = run_study("--plan-only", "--provider", "mock", "--held-out", str(held_out))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            plan = json.loads(result.stdout)
+            expected = hashlib.sha256(held_out.read_bytes()).hexdigest()
+        files = {entry["name"]: entry for entry in plan["task_files"]}
+        self.assertTrue(files["tasks.json"]["held_out"] is False)
+        self.assertEqual(files["held-out set"]["held_out"], True)
+        self.assertEqual(files["held-out set"]["tasks"], 1)
+        self.assertEqual(files["held-out set"]["sha256"], expected)
+        self.assertEqual(len(files["tasks.json"]["sha256"]), 64)
+
+    def test_a_held_out_task_is_evaluated_against_its_own_file(self):
+        # The evaluator only knew `eval/tasks.json`, so a held-out task id was
+        # rejected before it could be run: the hidden set has to travel with
+        # the attempt.
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            held_out = self._task_file(directory)
+            source = directory / "answer.nv"
+            source.write_text("fn main() {\n    let a = read_i64()\n    let b = read_i64()\n"
+                              "    let c = read_i64()\n    print(a + b + c)\n}\n",
+                              encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "eval" / "evaluate.py"), "--task", "triple_sum",
+                 "--task-file", str(held_out), "--language", "nava", "--source", str(source)],
+                capture_output=True, text=True, timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            expected = hashlib.sha256(held_out.read_bytes()).hexdigest()
+        self.assertTrue(report["summary"]["all_passed"])
+        self.assertEqual(report["summary"]["total"], 2)
+        self.assertEqual(report["task_file"]["sha256"], expected)
+
+    def test_an_unknown_task_id_lists_what_the_file_holds(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            held_out = self._task_file(directory)
+            source = directory / "answer.nv"
+            source.write_text("fn main() { print(0) }\n", encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "eval" / "evaluate.py"), "--task", "gcd",
+                 "--task-file", str(held_out), "--language", "nava", "--source", str(source)],
+                capture_output=True, text=True, timeout=300)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("triple_sum", result.stderr)
+
+
+class RateLimitTests(unittest.TestCase):
+    """A gateway limit must not be recorded as a model failure (N3, Groq)."""
+
+    def make_provider(self, responses, **kwargs):
+        """A provider whose transport is a scripted list of outcomes."""
+        calls = {"count": 0, "requests": []}
+        waits: list[float] = []
+
+        class FakeHandle:
+            def __init__(self, body):
+                self._body = body
+
+            def read(self):
+                return self._body
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            calls["count"] += 1
+            calls["requests"].append(request)
+            outcome = responses[min(calls["count"] - 1, len(responses) - 1)]
+            if isinstance(outcome, Exception):
+                raise outcome
+            return FakeHandle(json.dumps(outcome).encode("utf-8"))
+
+        provider = providers.OpenAICompatibleProvider(
+            "https://api.example.invalid/v1", "m", api_key_env="NAVA_TEST_KEY",
+            sleep=waits.append, **kwargs)
+        original = providers.urllib.request.urlopen
+        providers.urllib.request.urlopen = fake_urlopen
+        self.addCleanup(setattr, providers.urllib.request, "urlopen", original)
+        return provider, calls, waits
+
+    def http_error(self, status, headers=None, message_text="rate limited"):
+        import email.message
+        import io
+        message = email.message.Message()
+        for name, value in (headers or {}).items():
+            message[name] = value
+        body = json.dumps({"error": {"message": message_text}}).encode("utf-8")
+        return providers.urllib.error.HTTPError(
+            "https://api.example.invalid/v1/chat/completions", status, "error",
+            message, io.BytesIO(body))
+
+    def test_seconds_parses_the_shapes_groq_returns(self):
+        for text, expected in (("1.5", 1.5), ("690ms", 0.69), ("12.015s", 12.015),
+                               ("1m26.4s", 86.4), ("2m", 120.0), ("7", 7.0)):
+            with self.subTest(text=text):
+                self.assertAlmostEqual(providers._seconds(text), expected, places=6)
+
+    def test_seconds_refuses_to_guess(self):
+        for text in ("", "soon", "later today"):
+            with self.subTest(text=text):
+                self.assertIsNone(providers._seconds(text))
+
+    def test_the_delay_prefers_what_the_server_asked_for(self):
+        headers = {"retry-after": "3.5"}
+        self.assertEqual(providers._retry_delay(headers, fallback=1.0, cap=300), 3.5)
+        self.assertEqual(providers._retry_delay({"retry-after": "999"}, fallback=1.0, cap=30), 30)
+        self.assertEqual(providers._retry_delay({}, fallback=2.0, cap=300), 2.0)
+
+    def test_a_rate_limited_call_is_retried_and_succeeds(self):
+        ok = {"choices": [{"message": {"content": "fine"}, "finish_reason": "stop"}],
+              "usage": {"prompt_tokens": 10, "completion_tokens": 3}, "model": "m"}
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        provider, calls, waits = self.make_provider(
+            [self.http_error(429, {"retry-after": "2"}), self.http_error(429), ok])
+        response = provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertTrue(response.ok, response.error)
+        self.assertEqual(response.text, "fine")
+        self.assertEqual(response.attempts, 3)
+        self.assertEqual(calls["count"], 3)
+        self.assertEqual(waits[0], 2.0, "the server's retry-after is honoured")
+        self.assertGreaterEqual(waits[1], 1.0, "then exponential backoff")
+
+    def test_retries_are_bounded_and_then_reported_as_an_error(self):
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        provider, calls, waits = self.make_provider(
+            [self.http_error(429, {"retry-after": "0"})], max_retries=2, max_retry_wait=0)
+        response = provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertFalse(response.ok)
+        self.assertEqual(response.error_class, "HTTPError")
+        self.assertEqual(response.attempts, 3, "one call plus two retries")
+        self.assertEqual(calls["count"], 3)
+
+    def test_a_permanent_error_is_not_retried(self):
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        provider, calls, waits = self.make_provider(
+            [self.http_error(401), {"choices": []}])
+        response = provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertEqual(response.error_class, "HTTPError")
+        self.assertEqual(calls["count"], 1)
+        self.assertEqual(waits, [])
+
+    def test_the_request_carries_a_real_user_agent(self):
+        # Groq answers the default `Python-urllib/3.13` with HTTP 403 and
+        # Cloudflare's `error code: 1010`; a study must not depend on that.
+        ok = {"choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+              "usage": {"prompt_tokens": 1, "completion_tokens": 1}, "model": "m"}
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        provider, calls, waits = self.make_provider([ok])
+        provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertEqual(calls["requests"][0].get_header("User-agent"),
+                         providers.DEFAULT_USER_AGENT)
+        self.assertNotIn("Python-urllib", providers.DEFAULT_USER_AGENT)
+
+    def test_extra_headers_are_sent_but_only_their_names_are_recorded(self):
+        ok = {"choices": [{"message": {"content": "x"}, "finish_reason": "stop"}],
+              "usage": {"prompt_tokens": 1, "completion_tokens": 1}, "model": "m"}
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        provider, calls, waits = self.make_provider(
+            [ok], extra_headers={"X-Tenant": "secret-tenant-id"})
+        provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertEqual(calls["requests"][0].get_header("X-tenant"), "secret-tenant-id")
+        described = json.dumps(provider.describe())
+        self.assertIn("X-Tenant", described)
+        self.assertNotIn("secret-tenant-id", described)
+
+    def test_a_daily_quota_is_not_retried(self):
+        # Groq: "Rate limit reached ... on tokens per day (TPD): Limit 200000",
+        # with `x-should-retry: false`. The reset is hours away; retrying only
+        # converts every attempt into a provider error after a long stall.
+        os.environ["NAVA_TEST_KEY"] = "local"
+        self.addCleanup(os.environ.pop, "NAVA_TEST_KEY", None)
+        daily = ("Rate limit reached for model x on tokens per day (TPD): "
+                 "Limit 200000, Used 198689. Please try again in 3m58s.")
+        provider, calls, waits = self.make_provider(
+            [self.http_error(429, {"retry-after": "239", "x-should-retry": "false"}, daily)],
+            max_retries=8)
+        response = provider.complete(providers.Request(prompt="p", model="m"))
+        self.assertEqual(calls["count"], 1, "a daily cap must be reported at once")
+        self.assertEqual(waits, [])
+        self.assertEqual(response.error_class, "DailyQuotaExceeded")
+        self.assertIn("tokens per day", response.error)
+
+    def test_a_daily_limit_is_recognised_from_the_message_alone(self):
+        import email.message
+        message = email.message.Message()
+        message["retry-after"] = "239"
+        self.assertEqual(providers._blocking_class(
+            "Rate limit reached for model x on tokens per day (TPD): Limit 200000", message),
+            "DailyQuotaExceeded")
+        self.assertIsNone(providers._blocking_class("anything", {"x-should-retry": "false"}),
+                          "x-should-retry alone is not evidence of a daily cap")
+        self.assertIsNone(providers._blocking_class("rate limited", {"retry-after": "3"}))
+
+    def test_a_requests_own_size_is_not_a_daily_quota(self):
+        # Groq: "Request too large ... on output tokens per minute (OTPM):
+        # Limit 1000, Requested 1200" -- retrying cannot help, but calling it a
+        # daily quota would be a lie about the cause.
+        import email.message
+        message = email.message.Message()
+        message["x-should-retry"] = "false"
+        detail = ("Rate limit reached for model `qwen/qwen3.8-27b` ... Request too large "
+                  "on output tokens per minute (OTPM): Limit 1000, Requested 1200. The "
+                  "request's expected output tokens exceed the enforced limit; reduce "
+                  "max_tokens (or the request's expected output) and try again.")
+        self.assertEqual(providers._blocking_class(detail, message), "RequestTooLarge")
+
+    def test_a_transient_output_limit_is_retried_not_blocked(self):
+        # Groq answers "Limit 1000, Used 285, Requested 900. Please try again in
+        # 11.1s" with `x-should-retry: false`, and it *is* worth retrying.
+        import email.message
+        message = email.message.Message()
+        message["x-should-retry"] = "false"
+        detail = ('{"error":{"message":"Rate limit reached for model `qwen/qwen3.8-27b` ... '
+                  'on output tokens per minute (OTPM): Limit 1000, Used 285, Requested 900. '
+                  'Please try again in 11.1s."}}')
+        self.assertIsNone(providers._blocking_class(detail, message))
+
+
+class HeaderOptionTests(unittest.TestCase):
+    def test_headers_are_parsed_in_both_shapes(self):
+        headers, problem = study._parse_headers(["X-One: 1", "X-Two=2"])
+        self.assertIsNone(problem)
+        self.assertEqual(headers, {"X-One": "1", "X-Two": "2"})
+
+    def test_a_malformed_header_is_refused_before_anything_is_called(self):
+        for item in ("X-One", ": 1", "X-One: "):
+            with self.subTest(item=item):
+                headers, problem = study._parse_headers([item])
+                self.assertEqual(headers, {})
+                self.assertIn("Name: value", problem)
+
+    def test_the_key_cannot_be_smuggled_through_a_header(self):
+        headers, problem = study._parse_headers(["Authorization: Bearer other-key"])
+        self.assertEqual(headers, {})
+        self.assertIn("--api-key-env", problem)

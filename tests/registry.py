@@ -320,6 +320,59 @@ REGISTERED_TESTS = {
         "test_the_boundary_holds_inside_the_namespace_jail",
         "test_the_isolated_runner_allows_a_granted_file_and_denies_another",
     },
+    # --- N3: local model server and held-out task sets ------------------------
+    "RateLimitTests": {
+        "test_seconds_parses_the_shapes_groq_returns",
+        "test_seconds_refuses_to_guess",
+        "test_the_delay_prefers_what_the_server_asked_for",
+        "test_a_rate_limited_call_is_retried_and_succeeds",
+        "test_retries_are_bounded_and_then_reported_as_an_error",
+        "test_a_permanent_error_is_not_retried",
+        "test_the_request_carries_a_real_user_agent",
+        "test_extra_headers_are_sent_but_only_their_names_are_recorded",
+        "test_a_daily_quota_is_not_retried",
+        "test_a_daily_limit_is_recognised_from_the_message_alone",
+        "test_a_requests_own_size_is_not_a_daily_quota",
+        "test_a_transient_output_limit_is_retried_not_blocked",
+    },
+    "HeaderOptionTests": {
+        "test_headers_are_parsed_in_both_shapes",
+        "test_a_malformed_header_is_refused_before_anything_is_called",
+        "test_the_key_cannot_be_smuggled_through_a_header",
+    },
+    "HeldOutSetTests": {
+        "test_a_held_out_file_inside_the_repository_is_refused",
+        "test_the_plan_records_the_digest_of_every_task_file",
+        "test_a_held_out_task_is_evaluated_against_its_own_file",
+        "test_an_unknown_task_id_lists_what_the_file_holds",
+    },
+    "RequestValidationTests": {
+        "test_a_valid_request_is_normalised",
+        "test_streaming_is_refused_rather_than_faked",
+        "test_messages_are_required",
+        "test_an_unsupported_role_is_named_in_the_error",
+        "test_impossible_sampling_settings_are_refused",
+        "test_a_non_object_body_is_refused",
+        "test_stop_sequences_are_ignored_not_silently_honoured",
+    },
+    "ResponseSchemaTests": {
+        "test_the_body_matches_the_openai_shape",
+        "test_usage_is_the_sum_of_what_was_processed",
+        "test_each_response_gets_its_own_id",
+    },
+    "HttpTests": {
+        "test_a_completion_round_trips",
+        "test_a_streaming_request_gets_a_400_with_a_reason",
+        "test_malformed_json_gets_a_400",
+        "test_an_unknown_path_gets_a_404",
+        "test_the_models_endpoint_describes_the_weights",
+    },
+    "LazinessTests": {
+        "test_importing_the_server_does_not_import_an_ml_stack",
+    },
+    "StudyAgainstTheShimTests": {
+        "test_a_correct_answer_through_the_shim_is_a_measured_result",
+    },
     # --- N7: model-facing guide, grammar conformance, A/B and feedback ---------
     "GuideManifestTests": {
         "test_an_edited_guide_without_a_manifest_update_is_reported",
@@ -508,6 +561,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_float  # noqa: PLC0415
     import test_grammar  # noqa: PLC0415
     import test_guides  # noqa: PLC0415
+    import test_local_model_server  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
@@ -518,8 +572,9 @@ def discovered_tests() -> dict[str, set[str]]:
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_files, test_float,
-                   test_grammar, test_guides, test_modules, test_nava, test_registry,
-                   test_sandbox, test_spec, test_stdlib, test_study):
+                   test_grammar, test_guides, test_local_model_server, test_modules,
+                   test_nava, test_registry, test_sandbox, test_spec, test_stdlib,
+                   test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
