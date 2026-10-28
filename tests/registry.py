@@ -427,6 +427,30 @@ REGISTERED_TESTS = {
         "test_strict_mode_fails_when_namespaces_are_missing",
         "test_the_ok_line_names_the_isolation_backend",
     },
+    # --- N10d: arrays of structs and slices ----------------------------------
+    "SliceFrontendTests": {
+        "test_a_slice_cannot_become_a_mutable_borrow",
+        "test_a_slice_composes",
+        "test_a_slice_is_read_only",
+        "test_a_slice_needs_edition_two",
+        "test_an_array_of_enums_is_refused_for_now",
+        "test_an_unknown_element_name_is_reported_as_an_unknown_type",
+        "test_only_an_array_can_be_sliced",
+        "test_struct_arrays_keep_the_array_rules",
+        "test_the_bounds_must_be_i64",
+    },
+    "SliceRuntimeTests": {
+        "test_a_bad_slice_end_is_reported_as_an_end",
+        "test_a_bad_slice_start_is_reported_as_a_start",
+        "test_a_slice_does_not_release_the_storage_it_views",
+        "test_a_for_loop_can_iterate_a_slice",
+        "test_a_slice_is_a_view_and_not_a_copy",
+        "test_a_view_sees_a_write_through_the_owning_array",
+        "test_a_struct_element_read_is_a_copy",
+        "test_an_element_write_replaces_the_whole_struct",
+        "test_the_bounds_are_evaluated_left_to_right",
+        "test_zeroed_struct_arrays_are_all_zero",
+    },
     # --- N10c: Option, Result and ? ------------------------------------------
     "ResultFrontendTests": {
         "test_a_pattern_must_name_the_same_instantiation",
@@ -629,8 +653,8 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 115,
-    "tests/fixtures/positive": 25,
+    "tests/fixtures/negative": 120,
+    "tests/fixtures/positive": 27,
     "tests/fixtures/warnings": 2,
 }
 
@@ -700,6 +724,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_registry  # noqa: PLC0415
     import test_release  # noqa: PLC0415
     import test_results  # noqa: PLC0415
+    import test_slices  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
     import test_structs  # noqa: PLC0415
@@ -710,7 +735,7 @@ def discovered_tests() -> dict[str, set[str]]:
     for module in (test_ab, test_arrays, test_control, test_enums, test_files,
                    test_float, test_grammar, test_guides, test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
-                   test_results, test_sandbox, test_spec, test_structs, test_stdlib, test_study):
+                   test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

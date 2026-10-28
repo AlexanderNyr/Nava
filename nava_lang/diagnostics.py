@@ -146,6 +146,11 @@ CODES: dict[str, tuple[str, str]] = {
     "E0413": (Severity.ERROR, "`?` is only allowed in a `let` initializer"),
     "E0414": (Severity.ERROR, "a user type cannot take type arguments yet"),
     "E0415": (Severity.ERROR, "a type argument is not a type"),
+    "E0420": (Severity.ERROR, "a slice bound must be i64"),
+    "E0421": (Severity.ERROR, "only an array can be sliced"),
+    "E0422": (Severity.ERROR, "a slice is a read-only view"),
+    "E0423": (Severity.ERROR, "a slice cannot be passed as a `mut` parameter"),
+    "E0424": (Severity.ERROR, "an array element type must be a scalar or a struct"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

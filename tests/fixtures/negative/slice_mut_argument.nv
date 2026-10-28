@@ -1,0 +1,15 @@
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn move_first(points: mut [Point]) {
+    points[0] = Point(x: 1, y: 2)
+}
+
+fn main() {
+    let origin = Point(x: 0, y: 0)
+    let points: [Point] = [origin]
+    let view = points[0..1]
+    move_first(view)
+    print(points[0].x)
+}

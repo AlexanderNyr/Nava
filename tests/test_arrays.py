@@ -145,8 +145,9 @@ class ArrayFrontendTests(unittest.TestCase):
         self.assert_code("E0334", "fn main() { let a = [1, true] }",
                          "must all have the same type")
         self.assert_code("E0335", "fn main() { let a = [] }", "needs a type annotation")
+        # N10d: a struct became an element type, so the message names it.
         self.assert_code("E0334", "fn f() {}\nfn main() { let a = [f()] }",
-                         "i64, bool, or str")
+                         "i64, bool, str or a struct")
         compile_source("fn main() { let a: [i64] = [] }")
         compile_source("fn main() { let a: [str] = [\"x\", \"y\"] }")
 
@@ -170,7 +171,7 @@ class ArrayFrontendTests(unittest.TestCase):
         self.assert_code("E0206", "fn main() { let a: [[i64]] = [] }",
                          "cannot contain another array")
         self.assert_code("E0206", "fn main() { let a: [void] = [] }",
-                         "must be i64, bool, or str")
+                         "must be i64, bool, str or a declared struct")
         self.assert_code("E0330", "fn f(a: [i64], b: [i64]) -> [i64] { return a } fn main() {}",
                          "cannot return an array")
 

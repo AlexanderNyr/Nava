@@ -457,7 +457,7 @@
       "line": 2,
       "column": 13,
       "end_column": 17,
-      "message": "an array element type must be i64, bool, or str, got 'void'",
+      "message": "an array element type must be i64, bool, str or a declared struct, got 'void'",
       "hint": null
     },
     {
@@ -736,7 +736,7 @@
       "line": 2,
       "column": 13,
       "end_column": 16,
-      "message": "an array element type must be i64, bool, or str, got 'f64'",
+      "message": "an array element type must be i64, bool, str or a declared struct, got 'f64'",
       "hint": null
     },
     {
@@ -1035,6 +1035,51 @@
       "end_column": 15,
       "message": "this arm matches Result(bool, str), but the value is Result(i64, str)",
       "hint": "instantiate the pattern with the same type arguments as the value"
+    },
+    {
+      "file": "slice_bound_type.nv",
+      "code": "E0420",
+      "line": 5,
+      "column": 26,
+      "end_column": null,
+      "message": "the end of a slice must be i64, got bool",
+      "hint": "integers are not converted; use i64 arithmetic"
+    },
+    {
+      "file": "slice_not_an_array.nv",
+      "code": "E0421",
+      "line": 5,
+      "column": 16,
+      "end_column": 21,
+      "message": "only an array can be sliced, but 'count' is i64",
+      "hint": null
+    },
+    {
+      "file": "slice_read_only.nv",
+      "code": "E0422",
+      "line": 6,
+      "column": 5,
+      "end_column": 9,
+      "message": "'view' is a slice: a view of an array is read-only",
+      "hint": "write through the array that owns the storage, or copy the elements into a new array"
+    },
+    {
+      "file": "slice_mut_argument.nv",
+      "code": "E0423",
+      "line": 13,
+      "column": 16,
+      "end_column": null,
+      "message": "argument 1 of move_first is `mut [Point]`, but 'view' is a slice: a borrow cannot be handed on as a mutable borrow",
+      "hint": "pass the array that owns the storage"
+    },
+    {
+      "file": "array_of_enum.nv",
+      "code": "E0424",
+      "line": 6,
+      "column": 9,
+      "end_column": null,
+      "message": "an array element type must be i64, bool, str or a struct, got Shape",
+      "hint": "an enum has no storage of its own until the memory work (N11)"
     }
   ]
 }

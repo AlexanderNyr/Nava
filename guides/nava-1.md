@@ -235,6 +235,47 @@ may differ — `let flag = check()?` where `check()` returns `Result(bool, str)`
 and the caller returns `Result(i64, str)` is fine. A failure is forwarded
 unchanged, never converted, and the rest of the function does not run.
 
+## Edition 2: arrays of structs and slices
+
+An array element may be `i64`, `bool`, `str` or a **struct**. `array_zeros(n)`
+zeroes every field, `for point in points` copies each element, and
+`points[i].x` reads a field of an element.
+
+`a[i..j]` is a **slice**: a read-only view of `j - i` elements, not a copy. The
+bounds are checked when the slice is made — `0 <= i <= j <= len`, otherwise
+`nava runtime error: slice start …` or `slice end …` and exit status 1. A slice
+has the type of the array it views, so it can be passed to a `[T]` parameter and
+measured with `len`; it cannot be passed to a `mut [T]` parameter (`E0423`) and
+its elements cannot be written (`E0422`). A view sees the owner's writes, and
+`for p in points[1..3]` iterates a slice (the bounds are evaluated once).
+
+```nava
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn total(points: [Point]) -> i64 {
+    let sum = 0
+    for point in points {
+        sum = sum + point.x + point.y
+    }
+    return sum
+}
+
+fn main() {
+    let points: [Point] = [Point(x: 1, y: 2), Point(x: 3, y: 4)]
+    print(total(points))
+    print(points[1].y)
+    let head = points[0..1]
+    print(len(head))
+    print(head[0].x)
+}
+```
+
+An element is a value: `let p = points[0]` copies it, and `points[i] = p`
+replaces the whole element. To change one field, copy the element, change the
+copy and write it back with `points[i] = p`.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -256,3 +297,5 @@ unchanged, never converted, and the rest of the function does not run.
 11. `?` goes after a call inside a `let`, and only when the function returns the
     same `Result`/`Option`; type arguments are written `Option(i64)`, never
     `Option<i64>`.
+12. A slice `a[i..j]` is read-only and borrowed: bind it with `let`, pass it to a
+    `[T]` parameter, never write through it and never hand it to `mut [T]`.

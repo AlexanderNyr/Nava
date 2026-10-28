@@ -4,11 +4,10 @@ from .diagnostics import make
 from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
-    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl,
-    Expr, ExprStmt, Field, Float, For, Function, If, Import, Index, IndexAssign,
-    Let, Match, Member, MemberAssign, Number, Param, Program, Range, Return,
-    String, Struct, StructLiteral, Token, Try, Unary, Variable, Variant,
-    VariantValue, While,
+    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl, Expr,
+    ExprStmt, Field, Float, For, Function, If, Import, Index, IndexAssign, Let, Match,
+    Member, MemberAssign, Number, Param, Program, Range, Return, Slice, String,
+    Struct, StructLiteral, Token, Try, Unary, Variable, Variant, VariantValue, While,
 )
 from .model import NavaError
 
@@ -124,9 +123,17 @@ class Parser:
                            self.current.loc, self.current.loc.advance("["),
                            "nested collections are not part of Nava 0.1")
             element = self.expect("IDENT", "an element type (i64, bool, or str)")
-            if element.value not in ELEMENT_TYPES:
+            if element.value not in ELEMENT_TYPES and element.value not in TYPES \
+                    and self.edition >= STRUCT_EDITION and not self.at("("):
+                # Edition 2: any other name is a candidate element type, and the
+                # checker resolves it (a struct, or E0203/E0424). A reserved type
+                # word such as `f64` stays a shape error, because no symbol table
+                # could make it a struct.
+                pass
+            elif element.value not in ELEMENT_TYPES:
                 raise make("E0206",
-                           f"an array element type must be i64, bool, or str, got {element.value!r}",
+                           f"an array element type must be i64, bool, str or a declared "
+                           f"struct, got {element.value!r}",
                            element.loc, element.loc.advance(str(element.value)))
             self.expect("]", "']'")
             return f"[{element.value}]"
@@ -722,6 +729,13 @@ class Parser:
                 return Call(token.loc, str(target.value), args, module=name)
             if self.take("["):
                 index = self.expression()
+                if self.at(".."):
+                    mark = self.current
+                    self.require_edition(mark.loc, "a slice")
+                    self.i += 1
+                    end = self.expression()
+                    self.expect("]", "']'")
+                    return Slice(token.loc, Variable(token.loc, name), index, end)
                 self.expect("]", "']'")
                 return Index(token.loc, Variable(token.loc, name), index)
             if self.take("("):

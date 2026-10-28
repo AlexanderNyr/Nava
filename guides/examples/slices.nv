@@ -1,0 +1,24 @@
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn total(points: [Point]) -> i64 {
+    let sum = 0
+    for point in points {
+        sum = sum + point.x + point.y
+    }
+    return sum
+}
+
+fn main() {
+    let points: [Point] = [Point(x: 1, y: 2), Point(x: 3, y: 4)]
+    print(total(points))
+    print(points[1].y)
+    let head = points[0..1]
+    print(len(head))
+    print(head[0].x)
+    let scores: [i64] = [10, 20, 30, 40]
+    let middle = scores[1..3]
+    print(len(middle))
+    print(middle[1])
+}

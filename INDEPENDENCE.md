@@ -5,8 +5,8 @@ language in its own right, and that its toolchain stands on its own — no Pytho
 no C compiler, no libc.
 
 **Status: N10 in progress — N10a (editions and structs), N10b (enums and
-`match`) and N10c (`Option`/`Result` and `?`) delivered; N10d–N10e and N11–N18
-specified, not started.** The
+`match`), N10c (`Option`/`Result` and `?`) and N10d (arrays of structs and
+slices) delivered; N10e and N11–N18 specified, not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -42,25 +42,25 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 5 783 lines,
-13 modules and 184 functions under `nava_lang/`, which is the program Nava must be able to
+The requirement list below is not a wish list: it is an audit of the 6 064 lines,
+13 modules and 192 functions under `nava_lang/`, which is the program Nava must be able to
 express. Counts are of AST nodes in the current tree, re-measured at the last delivery
-(N10c); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
+(N10d); the method reproduces with `ast.walk` over `nava_lang/*.py`, and
 `tests/test_plan.py` recomputes the size and function count so this paragraph
 cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
-| `class` (AST nodes, diagnostics, module records, type descriptors) | 54 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 222 / 48 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 58 / 32 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort` | 91 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add` | 11 / 7 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 314 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 85 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 19 | slice values `[T]` with bounds checks | N10 |
+| `class` (AST nodes, diagnostics, module records, type descriptors) | 55 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
+| `raise` / `try` | 228 / 48 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault` | 58 / 36 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort` | 92 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add` | 12 / 7 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 335 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `replace`, `encode`, `decode` | 94 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 21 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(..., key=...)` | 3 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 38 / 21 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| generator expressions, list/set comprehensions | 39 / 24 / 4 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 1 | function pointers | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
 | generators, `await`, threads, metaclasses, dynamic attribute lookup | 0 | nothing; Nava is not asked to acquire them | — |
@@ -121,7 +121,7 @@ the guard, and the two implementations must agree on every entry.
 
 | Phase | Subject | Dependencies | Gate criterion | State |
 |---|---|---|---|---|
-| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a, N10b and N10c delivered, N10d–N10e open |
+| N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **In progress** — N10a, N10b, N10c and N10d delivered, N10e open |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
@@ -188,8 +188,8 @@ when the whole gate has run.
 | N10a | `edition 2;`, `struct`, named construction, field read and write, copy semantics | **Delivered** (record below) |
 | N10b | `enum` with data-carrying variants, `match`, exhaustiveness | **Delivered** (record below) |
 | N10c | `Option(T)`, `Result(T, E)`, `?` | **Delivered** (record below) |
-| N10d | Slices `[T]` and range slicing, arrays of structs | Open (next) |
-| N10e | Monomorphised generics, function pointers, `defer`, labelled loops, `pub` | Open |
+| N10d | Slices `[T]` and range slicing, arrays of structs | **Delivered** (record below) |
+| N10e | Monomorphised generics, function pointers, `defer`, labelled loops, `pub` | Open (next) |
 
 #### Delivery record N10a (2026-10-28)
 
@@ -253,6 +253,39 @@ its own code, location and message. The one that carries the language claim is
 `propagate_failure_mismatch.nv`: a `Result` whose failure type differs is
 rejected at compile time, so the caller can never receive an error it did not
 declare.
+
+#### Delivery record N10d (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| An array of structs copies values | `tests/test_slices.py`: `test_a_struct_element_read_is_a_copy`, `test_an_element_write_replaces_the_whole_struct`, `test_zeroed_struct_arrays_are_all_zero` | `let p = points[0]; p.x = 99` prints `99` then `1` — the element is untouched; `points[1] = p` prints `7` and `8`; `array_zeros(3)` of a struct prints `3`, `0`, `0` |
+| A slice is a view, not a copy | `test_a_slice_is_a_view_and_not_a_copy`, `test_a_slice_composes` | `points[0..2]` has `len` 2 while the array still has `len` 2, and `a[1..3][1..2]` (written as two bindings) reads the original element |
+| The bounds are checked, and the two failures are distinguishable | `test_a_bad_slice_start_is_reported_as_a_start`, `test_a_bad_slice_end_is_reported_as_an_end` | `slice start -1 is out of range for length 3` and `slice start 4 …`; `slice end 1 is out of range for start 2 and length 3`, `slice end 4 …`, and `slice end 1 … length 0` for an empty array — all exit 1 with no value printed |
+| The bounds are evaluated left to right | `test_the_bounds_are_evaluated_left_to_right` | A program that prints from both bound expressions prints `1`, then `2`: the generated C materialises both into temporaries instead of leaving the order to the compiler |
+| A borrowed view owns nothing | `test_a_slice_does_not_release_the_storage_it_views` | A `-DNAVA_TRACK_ALLOCS` build of a program with a live slice reports `nava: live arrays at exit: 0`: the array was released once and the view was not released at all |
+| A view sees the owner's write, and a slice can be iterated | `test_a_view_sees_a_write_through_the_owning_array`, `test_a_for_loop_can_iterate_a_slice` | Writing `points[1] = changed` after binding a view makes `view[1].x` print `99`; `for point in points[mark(1)..mark(3)]` prints the two bounds once and then `8`, so the header is evaluated once and not per turn |
+| The read-only rules are checked | `test_a_slice_is_read_only`, `test_a_slice_cannot_become_a_mutable_borrow`, `test_a_slice_needs_edition_two` | Writing through a slice is `E0422`, passing one to a `mut [T]` parameter is `E0423`, and a slice in an edition-1 file is `E0372` with the edition named |
+| The element-type rule is split where it can be decided | `test_an_array_of_enums_is_refused_for_now`, `test_an_unknown_element_name_is_reported_as_an_unknown_type`, `tests/test_grammar.py` | `[Shape]` is `E0424` (an enum has no storage until N11), `[Missing]` is `E0203`, and `[f64]`, `[void]`, `[[i64]]` stay `E0206` — a shape no symbol table could allow. The grammar's element terminal excludes the reserved type words, so the syntax-versus-semantics boundary is the same in `eval/grammar.py` and in the compiler |
+| The grammar artefact agrees | `eval/grammar.py`, `python3 -m unittest tests.test_grammar` | `[Point]` (an element name) and `a[i..j]` (an element access with a range) are in both the token grammar and the GBNF; `E0420`–`E0424` are classified as semantic, so the corpus conformance test still proves both layers agree on every fixture |
+| The specification moved with the code | `LANGUAGE.md` edition-2 section "Arrays of structs and slices" | Element types, value semantics, the two runtime messages, the four slice rules and the non-goals are normative; five new diagnostic rows (`E0420`–`E0424`) are documented; the stale sentence that said `Option`/`Result` did not exist (left over from N10b) is corrected |
+| The guide and its measurements moved | `guides/nava-1.md` (digest `dd35c0c9…`, 9 778 bytes), `guides/examples/slices.nv`, `eval/measurements/overhead-*.json` | New canonical example compiled and run (`10`, `4`, `1`, `1`, `2`, `30`); overhead re-measured with `tiktoken`, not estimated: `cl100k_base` 3 038 and `o200k_base` 3 045 prompt tokens for the `gcd` task; `guides/examples.json` gained the `slices` case |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m unittest discover -s tests -q` | registry `OK: 432 registered tests, 11 tasks with 76 cases, 157 spec fixtures, 126 diagnostic codes`; suite **502 tests OK**; the allocation instrumentation test builds its own binary instead of skipping when a flag is unavailable |
+
+Negative controls: five new fixtures — `slice_bound_type.nv` (`E0420`),
+`slice_not_an_array.nv` (`E0421`), `slice_read_only.nv` (`E0422`),
+`slice_mut_argument.nv` (`E0423`) and `array_of_enum.nv` (`E0424`) — each
+asserts its own code, location and message, plus two runtime controls that
+assert the exact `slice start`/`slice end` messages and that a failed slice
+prints nothing. The one that carries the language claim is
+`slice_mut_argument.nv`: a view can be read through and passed on, but it can
+never become the writable borrower, so the exclusivity rule from N4 survives
+the first construct that hands out a view.
+
+Deliberately not done in N10d: arrays of enums (their payloads have no ownership
+story until N11), a field write straight into an array element, slices as values
+of a struct field or a return type (an array still cannot be returned), string
+slicing by character, generic containers, function pointers, `defer`, labelled
+loops and `pub`. Those are N10e and later.
 
 Deliberately not done in N10c: `match` as an expression, guards, generic
 declarations of the user's own (`Option`/`Result` are two fixed templates, not a

@@ -47,9 +47,11 @@ TYPE_PATTERN = '"i64" | "bool" | "str" | "f64" | "void"'
 ELEMENT_PATTERN = '"i64" | "bool" | "str"'
 
 
-def _terminal(kinds: set[str], pattern: str, values: set[str] | None = None) -> dict:
+def _terminal(kinds: set[str], pattern: str, values: set[str] | None = None,
+              exclude: set[str] | None = None) -> dict:
     return {"kinds": frozenset(kinds), "values": None if values is None
-            else frozenset(values), "pattern": pattern}
+            else frozenset(values), "exclude": frozenset(exclude or ()),
+            "pattern": pattern}
 
 
 #: name -> how to match it as a token, and how to spell it in GBNF.
@@ -65,6 +67,12 @@ TERMINALS: dict[str, dict] = {
     "TYPE": _terminal({"IDENT"}, TYPE_PATTERN, {"i64", "bool", "str", "f64", "void"}),
     "QUESTION": _terminal({"?"}, '"?"'),
     "ELEM": _terminal({"IDENT"}, ELEMENT_PATTERN, {"i64", "bool", "str"}),
+    #: An array element name that is not a reserved type word: a struct in
+    #: edition 2, or a name the checker will reject. `f64` and `void` stay out
+    #: on purpose, because `[f64]` is a shape error (E0206) and not a name the
+    #: compiler has to look up.
+    "NAME": _terminal({"IDENT"}, "[a-zA-Z_] [a-zA-Z0-9_]*", None,
+                      {"i64", "bool", "str", "f64", "void"}),
     "FN": _terminal({"FN"}, '"fn"'),
     "LET": _terminal({"LET"}, '"let"'),
     "IF": _terminal({"IF"}, '"if"'),
@@ -154,7 +162,10 @@ CORE: dict[str, list[list[tuple]]] = {
     "param": [[T("IDENT"), T("COLON"), N("mut_opt"), N("type")]],
     "mut_opt": [[T("MUT")], []],
     "type": [[T("TYPE")], [T("IDENT")], [N("generic_type")],
-             [T("LBRACKET"), T("ELEM"), T("RBRACKET")]],
+             [T("LBRACKET"), T("ELEM"), T("RBRACKET")],
+             # An array of structs (edition 2): the element is a name the front
+             # end has to resolve, so the grammar cannot tell it from a typo.
+             [T("LBRACKET"), T("NAME"), T("RBRACKET")]],
     #: `Option(i64)` / `Result(i64, str)`: the arguments are types, not values.
     "generic_type": [[T("IDENT"), T("LPAREN"), N("types_opt"), T("RPAREN")]],
 
@@ -245,7 +256,9 @@ CORE: dict[str, list[list[tuple]]] = {
     "qualified_value": [[T("IDENT"), T("COLONCOLON"), T("IDENT")],
                         [N("generic_type"), T("COLONCOLON"), T("IDENT")]],
     "call": [[T("IDENT"), T("LPAREN"), N("args_opt"), T("RPAREN")]],
-    "element": [[T("IDENT"), T("LBRACKET"), N("expr"), T("RBRACKET")]],
+    "element": [[T("IDENT"), T("LBRACKET"), N("expr"), T("RBRACKET")],
+                [T("IDENT"), T("LBRACKET"), N("expr"), T("RANGE"), N("expr"),
+                 T("RBRACKET")]],
     "array_literal": [[T("LBRACKET"), N("args_opt"), T("RBRACKET")]],
     "construction": [[T("IDENT"), T("LPAREN"), N("named_args"), T("RPAREN")]],
     "named_args": [[T("IDENT"), T("COLON"), N("expr"), N("named_args_tail")]],
@@ -309,6 +322,8 @@ class TokenMatcher:
         if token.kind not in spec["kinds"]:
             return 0
         if spec["values"] is not None and str(token.value) not in spec["values"]:
+            return 0
+        if spec["exclude"] and str(token.value) in spec["exclude"]:
             return 0
         return position + 1
 

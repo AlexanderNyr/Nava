@@ -6,7 +6,7 @@ from .model import (
     Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue,
     Diagnostic, EnumDecl, Expr, ExprStmt, Float, For, Function, If, Import,
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Program, Range,
-    Return, String, Struct, StructLiteral, Symbol, Try, Unary, Variable,
+    Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary, Variable,
     Variant, VariantValue, While,
 )
 
@@ -66,6 +66,12 @@ def is_array(typ: str | None) -> bool:
 
 def element_of(typ: str) -> str:
     return typ[1:-1]
+
+
+#: Element types an array may hold. A struct is allowed in edition 2 because it
+#: is a value with no owning fields; an enum is not, because its payloads have no
+#: ownership story until N11.
+SCALAR_ELEMENTS = {"i64", "bool", "str"}
 
 
 #: Which expressions create a new owned array. Anything else with an array type
@@ -148,6 +154,7 @@ class Checker:
                     )
                 param.symbol = self.declare(param.name, param.typ, param.loc)
                 if is_array(param.typ):
+                    self.check_element_type(param.typ, param.loc)
                     # A parameter is a borrow: it owns no storage and its
                     # lifetime is the call, which no Nava program can extend.
                     param.symbol.owned = False
@@ -580,6 +587,53 @@ class Checker:
                 statement.value.loc,
             )
 
+    def check_element_type(self, typ: str, loc) -> None:
+        """Only a scalar or a struct may be an array element (E0424)."""
+        if not is_array(typ):
+            return
+        element = element_of(typ)
+        if element in SCALAR_ELEMENTS or self.is_struct(element):
+            return
+        if not self.is_enum(element) and element not in VALUE_TYPES:
+            raise make(
+                "E0203",
+                f"unknown type {element!r}; use i64, bool, str, or a declared struct",
+                loc,
+            )
+        raise make(
+            "E0424",
+            f"an array element type must be i64, bool, str or a struct, got {element}",
+            loc,
+            hint="an enum has no storage of its own until the memory work (N11)",
+        )
+
+    def slice(self, expr: Slice) -> str:
+        """`a[i..j]`: a read-only view of `a`, bounds checked at run time.
+
+        The bounds are not required to be constants, so the checker proves only
+        that they are `i64`; the range itself is checked when the slice is
+        created (`0 <= i <= j <= len`), which is why a slice cannot be used
+        without running the program.
+        """
+        base = self.expression(expr.array)
+        if not is_array(base):
+            raise make(
+                "E0421",
+                f"only an array can be sliced, but {expr.array.name!r} is {base}",
+                expr.loc, expr.loc.advance(expr.array.name),
+            )
+        self.check_element_type(base, expr.loc)
+        for bound, label in ((expr.start, "start"), (expr.end, "end")):
+            actual = self.expression(bound)
+            if actual != "i64":
+                raise make(
+                    "E0420",
+                    f"the {label} of a slice must be i64, got {actual}",
+                    bound.loc,
+                    hint="integers are not converted; use i64 arithmetic",
+                )
+        return base
+
     def unused_imports(self) -> None:
         """W0002: an import that no qualified call in its module uses."""
         for module, imports in self.imports.items():
@@ -786,7 +840,9 @@ class Checker:
                     raise make("E0311", f"expected {statement.annotation}, got {typ}",
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
-            if is_array(typ) and not owns_new_array(statement.value):
+            self.check_element_type(typ, name_loc)
+            borrowed = isinstance(statement.value, Slice)
+            if is_array(typ) and not owns_new_array(statement.value) and not borrowed:
                 raise make(
                     "E0331",
                     f"arrays cannot be copied; {statement.name!r} would share storage with another array",
@@ -795,6 +851,10 @@ class Checker:
                     "one to a parameter",
                 )
             statement.symbol = self.declare(statement.name, typ, name_loc)
+            if borrowed:
+                # A slice owns nothing: the array it views stays the owner, and
+                # the block that declared that array releases the storage.
+                statement.symbol.borrowed = True
         elif isinstance(statement, Match):
             self.match_statement(statement)
         elif isinstance(statement, MemberAssign):
@@ -806,6 +866,14 @@ class Checker:
                     "E0329",
                     f"only an array can be indexed, but {statement.name!r} is {statement.symbol.typ}",
                     statement.loc, statement.loc.advance(statement.name),
+                )
+            if statement.symbol.borrowed:
+                raise make(
+                    "E0422",
+                    f"{statement.name!r} is a slice: a view of an array is read-only",
+                    statement.loc, statement.loc.advance(statement.name),
+                    "write through the array that owns the storage, or copy the "
+                    "elements into a new array",
                 )
             if not statement.symbol.mutable:
                 raise make(
@@ -956,9 +1024,11 @@ class Checker:
                     iterable.loc,
                     hint="write `for x in values` for an array or `for i in 0..n` for a count",
                 )
-            if not isinstance(iterable, (Variable, ArrayLiteral)):
-                # Array literals are allowed: the array is a statement temporary.
-                raise make("E0350", "a for loop iterates over an array variable or a literal",
+            if not isinstance(iterable, (Variable, ArrayLiteral, Slice)):
+                # Array literals and slices are allowed: both are values whose
+                # storage outlives the loop (a literal is a statement temporary,
+                # a slice borrows an array that is still in scope).
+                raise make("E0350", "a for loop iterates over an array, a slice or a literal",
                            iterable.loc)
             element = element_of(iterable_type)
         name_loc = statement.name_loc or statement.loc
@@ -1024,8 +1094,10 @@ class Checker:
                            expr.index.loc,
                            hint="integers are not converted; use i64 arithmetic")
             typ = element_of(base)
+        elif isinstance(expr, Slice):
+            typ = self.slice(expr)
         elif isinstance(expr, Call):
-            typ = self.call(expr)
+            typ = self.call(expr, expected)
         elif isinstance(expr, Unary):
             actual = self.expression(expr.operand)
             if expr.op == "-":
@@ -1077,9 +1149,14 @@ class Checker:
         element = None
         for item in expr.items:
             actual = self.expression(item)
-            if actual not in VALUE_TYPES:
+            # A struct is an element type in edition 2 either way; an array, a
+            # str-owning value or an enum is still refused, and says so with the
+            # element-type rule rather than as a generic mismatch.
+            if actual not in VALUE_TYPES and not self.is_struct(actual) \
+                    and not self.is_enum(actual):
                 raise make("E0334",
-                           f"array literal elements must be i64, bool, or str, got {actual}",
+                           f"array literal elements must be i64, bool, str or a struct, "
+                           f"got {actual}",
                            item.loc)
             if element is None:
                 element = actual
@@ -1096,7 +1173,7 @@ class Checker:
                        hint="annotate the literal or make every element the same type")
         return result
 
-    def call(self, expr: Call) -> str:
+    def call(self, expr: Call, expected: str | None = None) -> str:
         if expr.module is None and self.is_struct(expr.name):
             raise make(
                 "E0381",
@@ -1142,7 +1219,9 @@ class Checker:
             if actual != "i64":
                 raise make("E0340", f"array_zeros expects an i64 length, got {actual}",
                            expr.args[0].loc)
-            return "[i64]"
+            # Zeroed storage is defined for every element type: `0`, `false`, an
+            # empty string, or a struct whose every field is zeroed.
+            return expected if is_array(expected) else "[i64]"
         if expr.module is None and expr.name in ("bytes_len", "chars_len"):
             if len(expr.args) != 1:
                 raise make("E0326", f"{expr.name} expects exactly one argument", expr.loc)
@@ -1208,6 +1287,14 @@ class Checker:
                 continue
             # A mutable borrow must be exclusive and must come from an owner:
             # a borrow of a borrow could alias another live mutable view.
+            if isinstance(arg, Variable) and arg.symbol.borrowed:
+                raise make(
+                    "E0423",
+                    f"argument {index} of {expr.name} is `mut {param.typ}`, but {arg.name!r} "
+                    f"is a slice: a borrow cannot be handed on as a mutable borrow",
+                    arg.loc,
+                    hint="pass the array that owns the storage",
+                )
             if not isinstance(arg, Variable) or not arg.symbol.owned:
                 raise make(
                     "E0333",

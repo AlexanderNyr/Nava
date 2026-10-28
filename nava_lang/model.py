@@ -91,6 +91,9 @@ class Symbol:
     #: True for a loop variable: it is rebound by the loop, so assigning to it
     #: is rejected instead of silently desynchronising the iteration.
     readonly: bool = False
+    #: True for a slice: a view into an array that somebody else owns. It is
+    #: never freed, never written through, and never handed on as a `mut` borrow.
+    borrowed: bool = False
 
 
 @record()
@@ -134,6 +137,20 @@ class Index(Expr):
 
     array: "Variable"
     index: Expr
+
+
+@record()
+class Slice(Expr):
+    """`a[i..j]`: a read-only view of part of an array (edition 2).
+
+    The base is a variable by construction, not by a rule: the parser accepts
+    `[` after a name only, so a slice of a temporary cannot be written down and
+    cannot outlive the storage it points at.
+    """
+
+    array: "Variable"
+    start: Expr
+    end: Expr
 
 
 @record()

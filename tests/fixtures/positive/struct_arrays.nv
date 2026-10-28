@@ -1,0 +1,20 @@
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn total(points: [Point]) -> i64 {
+    let sum = 0
+    for point in points {
+        sum = sum + point.x + point.y
+    }
+    return sum
+}
+
+fn main() {
+    let points: [Point] = [Point(x: 1, y: 2), Point(x: 3, y: 4), Point(x: 5, y: 6)]
+    print(total(points))
+    print(len(points))
+    print(points[1].y)
+    let zeros: [Point] = array_zeros(2)
+    print(zeros[0].x)
+}

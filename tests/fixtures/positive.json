@@ -153,6 +153,18 @@
       "stdin": "",
       "stdout": "3\n-1\n-1\n3\n",
       "exit_code": 0
+    },
+    {
+      "file": "struct_arrays.nv",
+      "stdout": "21\n3\n4\n0\n",
+      "stdin": "",
+      "exit_code": 0
+    },
+    {
+      "file": "slices_basic.nv",
+      "stdout": "2\n20\n30\n30\n1\n9\nb\n",
+      "stdin": "",
+      "exit_code": 0
     }
   ]
 }

@@ -1,0 +1,24 @@
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn first_x(points: [Point]) -> i64 {
+    return points[0].x
+}
+
+fn main() {
+    let values: [i64] = [10, 20, 30, 40]
+    let middle = values[1..3]
+    print(len(middle))
+    print(middle[0])
+    print(middle[1])
+    let inner = middle[1..2]
+    print(inner[0])
+    let points: [Point] = [Point(x: 7, y: 8), Point(x: 9, y: 10)]
+    let tail = points[1..2]
+    print(len(tail))
+    print(first_x(tail))
+    let names: [str] = ["a", "b", "c"]
+    let letters = names[0..2]
+    print(letters[1])
+}

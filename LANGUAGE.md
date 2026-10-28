@@ -930,9 +930,9 @@ Semantics, stated because they are observable:
 * an arm that matches nothing observable is still an arm: `Shape::Dot => { }`
   leaves the program unchanged.
 
-`match` is not an expression in edition 2. There is no `Option`/`Result` and no
-`?`, no guards, no literal or range patterns and no matching on `i64` values:
-those are N10c and later, and nothing above claims otherwise.
+`match` is not an expression in edition 2. Guards, literal and range patterns
+and matching on `i64` values do not exist yet; `Option`, `Result` and `?` are
+described in the next section.
 
 ### `Option`, `Result` and `?`
 
@@ -981,6 +981,81 @@ value (`E0395` otherwise).
 `?` is not an expression, there is no `try`/`catch`, and a failing `Option` is
 not an error: it propagates `None` like a `Result` propagates `Err`. Nothing is
 converted; nothing is swallowed.
+
+### Arrays of structs and slices
+
+Edition 2 widens what an array may hold and adds a way to look at part of one.
+
+```text
+type           = ... | "[" type_name "]" ;      # edition 2: a struct element
+slice          = IDENT "[" expression ".." expression "]" ;
+```
+
+An array element is `i64`, `bool`, `str` or a **struct**; `f64`, `void`, another
+array and an enum are refused (`E0206` for the shapes no symbol table could
+allow, `E0424` for an enum, `E0203` for a name that is not declared). Zeroed
+storage is defined for every element type, so `array_zeros(n)` also works for a
+struct array: every field is its zero.
+
+```nava
+edition 2;
+
+struct Point { x: i64, y: i64 }
+
+fn total(points: [Point]) -> i64 {
+    let sum = 0
+    for point in points {
+        sum = sum + point.x + point.y
+    }
+    return sum
+}
+
+fn main() {
+    let points: [Point] = [Point(x: 1, y: 2), Point(x: 3, y: 4)]
+    print(total(points))
+    print(points[1].y)
+    let first_end = points[0..1]
+    print(len(first_end))
+    print(first_end[0].x)
+}
+```
+
+Output: `10`, `4`, `1`, `1`. An element is a **value**: `let p = points[0]`
+copies it (writing `p.x` does not touch the array), and `points[i] = p` replaces
+the whole element. A field of an element may be read (`points[i].x`); to change
+one, copy the element, change the copy and write it back — a field write
+straight into an element is not part of edition 2.
+
+`a[i..j]` creates a **slice**: a read-only view of `j - i` elements of `a`,
+starting at `i`. A slice is not a copy and owns nothing.
+
+* the bounds are checked when the slice is created, not when it is used:
+  `0 <= i <= j <= len` (`nava runtime error: slice start -1 is out of range for
+  length 3`, `nava runtime error: slice end 4 is out of range for start 0 and
+  length 3`, exit status 1). The two messages are distinct on purpose: a start
+  that is too large and an end that crosses the length are different mistakes.
+* a slice has the same type as the array it views, `[T]`, so it can be passed to
+  a parameter of that type and measured with `len`. It cannot be passed to a
+  `mut [T]` parameter (`E0423`): a borrowed view must not become a writable one.
+* the elements cannot be written through a slice (`E0422`) — the array that owns
+  the storage stays the only writer.
+* a slice is never released by the block that binds it; the array it views
+  releases the storage, at the end of the array's own block, as before;
+* a view sees the owner's writes: `let view = a[0..3]` followed by `a[1] = x`
+  makes `view[1]` read `x`. Reading through a view is a read of the array, which
+  is what "view" means and why it cannot be written through.
+* a slice of a slice is allowed and composes: `a[1..4][1..2]` cannot be written
+  because a slice is not an expression, but `let inner = a[1..4]` followed by
+  `let tail = inner[1..2]` is a view of two elements of the original array.
+* a `for` loop may iterate a slice (`for p in points[1..3]`); the bounds are
+  evaluated once, before the first turn, like every other iterable;
+* the syntax names a **variable** after `[` and nothing else, so a slice of a
+  temporary cannot be written down at all, and a view can never outlive the
+  storage it points at: an array cannot be returned from a function, cannot be a
+  struct field and cannot be reassigned.
+
+Bounds are evaluated left to right, like every other expression in Nava, so a
+program that prints inside the bounds sees the start printed before the end.
 
 ## Diagnostics
 
@@ -1076,6 +1151,11 @@ never changes meaning; a new condition gets a new code.
 | `E0413` | error | `?` outside a `let` initializer | `tests/fixtures/negative/propagate_outside_let.nv` |
 | `E0414` | error | a user type cannot take type arguments yet | `tests/fixtures/negative/generic_user_type.nv` |
 | `E0415` | error | a type argument is not a type | `tests/fixtures/negative/result_not_a_type_arg.nv` |
+| `E0420` | error | a slice bound is not `i64` | `tests/fixtures/negative/slice_bound_type.nv` |
+| `E0421` | error | only an array can be sliced | `tests/fixtures/negative/slice_not_an_array.nv` |
+| `E0422` | error | a slice is read-only | `tests/fixtures/negative/slice_read_only.nv` |
+| `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
+| `E0424` | error | an array element may not be an enum | `tests/fixtures/negative/array_of_enum.nv` |
 
 **Types and semantics**
 
@@ -1241,12 +1321,12 @@ indexing, string concatenation, string input, mathematical functions such as
 module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
-Edition 2 adds structs, enums, `match`, `Option`/`Result` and `?`; it does not
-add generic declarations of your own, `match` as an expression, generic
-containers, string fields, arrays of structs, struct or
-enum equality, printing a struct or an enum, or module visibility keywords.
-Those are N10d and later in `INDEPENDENCE.md`, and nothing here is a promise
-that they exist today.
+Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs
+and slices; it does not add generic declarations of your own, `match` as an
+expression, generic containers, string or array fields, arrays of enums, struct
+or enum equality, printing a struct or an enum, function pointers, `defer`,
+labelled loops or module visibility keywords. Those are N10e and later in
+`INDEPENDENCE.md`, and nothing here is a promise that they exist today.
 
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated

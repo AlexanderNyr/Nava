@@ -79,6 +79,13 @@
       "stdin": "",
       "stdout": "8\nnot positive\n",
       "shows": "Option/Result with type arguments and `?` propagation"
+    },
+    {
+      "id": "slices",
+      "entry": "slices.nv",
+      "stdin": "",
+      "stdout": "10\n4\n1\n1\n2\n30\n",
+      "shows": "arrays of structs and read-only range slices"
     }
   ]
 }

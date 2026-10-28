@@ -6,8 +6,8 @@ from . import limits, runtime
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
-    Number, Program, Range, Return, String, StructLiteral, Try, Unary, Variable,
-    VariantValue, While,
+    Number, Program, Range, Return, Slice, String, StructLiteral, Try, Unary,
+    Variable, VariantValue, While,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -358,6 +358,23 @@ static void *nv_array_alloc(int64_t count, size_t element_size) {
     return data;
 }
 
+static void nv_check_slice(int64_t start, int64_t end, int64_t length) {
+    if (start < 0 || start > length) {
+        fprintf(stderr,
+                "nava runtime error: slice start %" PRId64
+                " is out of range for length %" PRId64 "\n",
+                start, length);
+        exit(1);
+    }
+    if (end < start || end > length) {
+        fprintf(stderr,
+                "nava runtime error: slice end %" PRId64
+                " is out of range for start %" PRId64 " and length %" PRId64 "\n",
+                end, start, length);
+        exit(1);
+    }
+}
+
 static int64_t nv_check_index(int64_t index, int64_t length) {
     if (index < 0 || index >= length) {
         fprintf(stderr,
@@ -590,11 +607,34 @@ C_TYPES = {"i64": "int64_t", "bool": "bool", "str": "const char *", "void": "voi
            "f64": "double",
            "[i64]": "nv_arr_i64", "[bool]": "nv_arr_bool", "[str]": "nv_arr_str"}
 #: Runtime name suffix per array type.
-ARRAY_TAG = {"[i64]": "i64", "[bool]": "bool", "[str]": "str"}
+#: Runtime name suffix per array type. The three scalar names are spelled out in
+#: the runtime; an array of a struct gets its helpers generated (`emit_arrays`),
+#: so the suffix is derived from the element type by the same rule in both cases.
+SCALAR_ARRAY_TAG = {"[i64]": "i64", "[bool]": "bool", "[str]": "str"}
+
+
+def array_tag(typ: str) -> str:
+    """`[i64]` -> `i64`, `[Point]` -> `Point`: the suffix of the helper names."""
+    suffix = SCALAR_ARRAY_TAG.get(typ)
+    if suffix is not None:
+        return suffix
+    assert typ.startswith("[") and typ.endswith("]"), f"not an array type: {typ!r}"
+    return "".join(character if character.isalnum() else "_"
+                   for character in typ[1:-1]).replace("__", "_").strip("_")
 #: C type of the compound literal that carries an array literal's items.
 ARRAY_LITERAL = {"[i64]": "const int64_t", "[bool]": "const bool",
                  "[str]": "const char *const"}
+#: Element type an array literal is copied from; a struct array reuses the struct
+#: C type, because `memcpy` of a value type is exactly a copy.
 ARITHMETIC = {"+": "nv_add", "-": "nv_sub", "*": "nv_mul", "/": "nv_div", "%": "nv_rem"}
+
+
+def is_array(typ: object) -> bool:
+    return isinstance(typ, str) and typ.startswith("[") and typ.endswith("]")
+
+
+def element_of(typ: str) -> str:
+    return typ[1:-1]
 
 
 def c_string(value: str) -> str:
@@ -636,6 +676,8 @@ class CGenerator:
         """The C type of a Nava type: a scalar, an array handle or a struct."""
         if typ in C_TYPES:
             return C_TYPES[typ]
+        if typ.startswith("[") and typ.endswith("]"):
+            return f"nv_arr_{array_tag(typ)}"
         struct = self.structs.get(typ)
         if struct is not None:
             return struct.cname
@@ -742,8 +784,112 @@ class CGenerator:
         self.indent -= 1
         self.line(f"}} {decl.cname};")
 
+    def array_types(self) -> list[str]:
+        """Every array type the checked program mentions, in discovery order.
+
+        The checker has already put a type on every expression, binding and
+        parameter, so one walk over the tree is enough. The helpers are emitted
+        per type instead of per element type because a slice of `[i64]` and a
+        slice of `[Point]` differ only in the C type they carry.
+        """
+        found: list[str] = []
+
+        def note(value, depth=0) -> None:
+            if is_array(value):
+                if value not in found:
+                    found.append(value)
+                return
+            if depth > 40:
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    note(item, depth + 1)
+                return
+            fields = getattr(value, "__dict__", None)
+            if fields is None:
+                return
+            for item in list(fields.values()):
+                note(item, depth + 1)
+
+        for declaration in list(self.program.structs) + list(self.program.enums):
+            note([field.typ for field in getattr(declaration, "fields", [])])
+        for name, decl in self.program.instances.items():
+            note(name)
+            note([typ for choice in decl.variants for typ in choice.types])
+        note(self.program.functions)
+        return found
+
+    def emit_arrays(self) -> None:
+        """Per-type helpers for arrays of structs, and one slice of every type.
+
+        An array of structs reuses the scalar layout: a length and a pointer to
+        storage the binding owns. `memcpy` of a value type is a copy, so the
+        only thing that differs is the element C type. A slice returns the same
+        handle pointing into somebody else's storage, which is why every bound
+        is checked before the pointer moves.
+        """
+        types = self.array_types()
+        struct_arrays = [typ for typ in types if element_of(typ) in self.structs]
+        if not types:
+            return
+        self.line("/* --- arrays of structs and slices ------------------------------- */")
+        for typ in struct_arrays:
+            tag = array_tag(typ)
+            element = self.ctype(element_of(typ))
+            self.line(f"typedef struct {{ {element} *data; int64_t len; }} nv_arr_{tag};")
+            self.line()
+            self.line(f"static nv_arr_{tag} nv_arr_{tag}_new(int64_t len) {{")
+            self.indent += 1
+            self.line(f"nv_arr_{tag} result;")
+            self.line("result.len = len;")
+            self.line(f"result.data = ({element} *)nv_array_alloc(len, sizeof({element}));")
+            self.line("return result;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static nv_arr_{tag} nv_arr_{tag}_init(int64_t len, const {element} *items) {{")
+            self.indent += 1
+            self.line(f"nv_arr_{tag} result = nv_arr_{tag}_new(len);")
+            self.line(f"if (len > 0) memcpy(result.data, items, (size_t)len * sizeof({element}));")
+            self.line("return result;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static inline {element} nv_arr_{tag}_get(nv_arr_{tag} array, int64_t index) {{")
+            self.indent += 1
+            self.line("return array.data[nv_check_index(index, array.len)];")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static inline void nv_arr_{tag}_set(nv_arr_{tag} *array, int64_t index, "
+                      f"{element} value) {{")
+            self.indent += 1
+            self.line("array->data[nv_check_index(index, array->len)] = value;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static void nv_arr_{tag}_free(nv_arr_{tag} *array) {{")
+            self.indent += 1
+            self.line("if (array->data != NULL) { free(array->data); nv_note_array_free(); }")
+            self.line("array->data = NULL;")
+            self.line("array->len = 0;")
+            self.indent -= 1
+            self.line("}")
+            self.line()
+        for typ in types:
+            tag = array_tag(typ)
+            self.line(f"static nv_arr_{tag} nv_arr_{tag}_slice(nv_arr_{tag} array, "
+                      f"int64_t start, int64_t end) {{")
+            self.indent += 1
+            self.line("nv_check_slice(start, end, array.len);")
+            self.line(f"nv_arr_{tag} view;")
+            self.line("view.data = start == 0 ? array.data : array.data + start;")
+            self.line("view.len = end - start;")
+            self.line("return view;")
+            self.indent -= 1
+            self.line("}")
+            self.line()
+        self.line()
+
     def generate(self) -> str:
         self.emit_structs()
+        self.emit_arrays()
         for function in self.program.functions:
             self.line(self.signature(function) + ";")
         self.line()
@@ -793,35 +939,36 @@ class CGenerator:
         """Emit one `free` per owned array, innermost block and binding last-first."""
         for frame in reversed(self.owned[since:]):
             for cname, typ in reversed(frame):
-                self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
 
     def release_temporaries(self) -> None:
         for cname, typ in reversed(self.temporaries):
-            self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
         self.temporaries = []
 
     def new_array(self, expr) -> str:
         """An array initializer that binds storage directly, with no temporary."""
         if isinstance(expr, ArrayLiteral):
             values = [self.expression(item) for item in expr.items]
-            tag = ARRAY_TAG[expr.typ]
+            tag = array_tag(expr.typ)
             if not values:
                 return f"nv_arr_{tag}_init(INT64_C(0), NULL)"
             items = ", ".join(values)
+            element_c = ARRAY_LITERAL.get(expr.typ, self.ctype(element_of(expr.typ)))
             return (f"nv_arr_{tag}_init(INT64_C({len(values)}), "
-                    f"({ARRAY_LITERAL[expr.typ]}[]){{{items}}})")
+                    f"({element_c}[]){{{items}}})")
         assert isinstance(expr, Call) and expr.name == "array_zeros", (
             "the checker must reject an array initializer that is neither a literal "
             "nor array_zeros (E0331); reaching this point is a compiler bug")
         length = self.expression(expr.args[0])
-        return f"nv_arr_i64_new({length})"
+        return f"nv_arr_{array_tag(expr.typ)}_new({length})"
 
     def block(self, statements) -> None:
         """A nested block owns the arrays declared directly in it."""
         self.owned.append([])
         self.statements(statements)
         for cname, typ in reversed(self.owned[-1]):
-            self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
         self.owned.pop()
 
     def loop_body(self, statements) -> None:
@@ -831,7 +978,7 @@ class CGenerator:
         try:
             self.statements(statements)
             for cname, typ in reversed(self.owned[-1]):
-                self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
         finally:
             self.loops.pop()
             self.owned.pop()
@@ -842,7 +989,7 @@ class CGenerator:
         depth = self.loops[-1]
         for frame in reversed(self.owned[depth:]):
             for cname, typ in reversed(frame):
-                self.line(f"nv_arr_{ARRAY_TAG[typ]}_free(&{cname});")
+                self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
 
     def statements(self, statements) -> None:
         for statement in statements:
@@ -856,17 +1003,18 @@ class CGenerator:
             if isinstance(statement, Let) and isinstance(statement.value, Try):
                 self.propagate_let(statement)
             elif isinstance(statement, Let):
+                owns = is_array(statement.symbol.typ) and not statement.symbol.borrowed
                 value = (self.new_array(statement.value)
-                         if statement.symbol.typ in ARRAY_TAG else self.expression(statement.value))
+                         if owns else self.expression(statement.value))
                 self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = {value};")
-                if statement.symbol.typ in ARRAY_TAG:
+                if owns:
                     self.owned[-1].append((statement.symbol.cname, statement.symbol.typ))
             elif isinstance(statement, IndexAssign):
                 # The index is checked before the value is evaluated, so a failed
                 # write has no observable side effect, matching the documented
                 # "a runtime error stops the program immediately".
                 index = self.expression(statement.index)
-                tag = ARRAY_TAG[statement.symbol.typ]
+                tag = array_tag(statement.symbol.typ)
                 checked = self.temp("i64", f"nv_check_index({index}, {statement.symbol.cname}.len)")
                 value = self.expression(statement.value)
                 self.line(f"nv_arr_{tag}_set(&{statement.symbol.cname}, {checked}, {value});")
@@ -959,10 +1107,12 @@ class CGenerator:
                 self.indent -= 1
                 self.line("}")
             else:
-                source = self.expression(iterable)
+                # The iterable is materialised once: a slice in the header must
+                # not be rebuilt (and its bounds re-evaluated) on every turn.
+                source = self.temp(iterable.typ, self.expression(iterable))
                 end_name = self.temp("i64", f"({source}).len")
                 index_name = self.temp("i64", "INT64_C(0)")
-                tag = ARRAY_TAG[iterable.typ]
+                tag = array_tag(iterable.typ)
                 self.line(f"for (; {index_name} < {end_name}; "
                           f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
                 self.indent += 1
@@ -1111,10 +1261,18 @@ class CGenerator:
             name = self.temp(expr.typ, self.new_array(expr))
             self.temporaries.append((name, expr.typ))
             return name
+        if isinstance(expr, Slice):
+            # The bounds are evaluated left to right into temporaries: a C
+            # initializer or argument list would leave their order unspecified.
+            start = self.temp("i64", self.expression(expr.start))
+            end = self.temp("i64", self.expression(expr.end))
+            base = self.expression(expr.array)
+            tag = array_tag(expr.array.typ)
+            return f"nv_arr_{tag}_slice({base}, {start}, {end})"
         if isinstance(expr, Index):
             base = self.expression(expr.array)
             index = self.expression(expr.index)
-            tag = ARRAY_TAG[expr.array.typ]
+            tag = array_tag(expr.array.typ)
             return self.temp(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
         if isinstance(expr, Call):
             # Materialize calls as statements, ensuring left-to-right evaluation.

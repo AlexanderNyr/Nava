@@ -72,7 +72,10 @@ GRAMMAR_ACCEPTS = frozenset(
      # the checker decides what they mean.
      | {f"E041{index}" for index in range(0, 5)}
      # A type argument that is a value, not a type, is a shape error.
-     | {"E0415"})
+     | {"E0415"}
+     # Slices and arrays of structs: the shape is fine, the types and the
+     # ownership rules are not, so the checker is the authority.
+     | {f"E042{index}" for index in range(0, 5)})
     - GRAMMAR_REJECTS
 )
 

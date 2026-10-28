@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+N10d: arrays of structs and slices — the first construct that hands out a view
+of storage somebody else owns, so the ownership rules are the point.
+
+- An array element may be a struct: `let points: [Point] = [Point(x: 1, y: 2)]`,
+  `array_zeros(n)` zeroes every field, `for point in points` and `points[i]`
+  copy the element, and `points[i] = point` replaces it whole. A field of an
+  element is readable (`points[i].x`); a field write into an element is not part
+  of edition 2 — copy, change, write back.
+- `a[i..j]` is a **slice**: a read-only view of `j - i` elements. The bounds are
+  checked when the slice is created — `0 <= i <= j <= len` — with two distinct
+  runtime messages for a bad start and a bad end, and exit status 1.
+- A slice has the type of the array it views, so `len`, `[i]` and passing it to
+  a `[T]` parameter work; a slice is never passed to `mut [T]` (`E0423`), never
+  written through (`E0422`) and never released by the block that binds it. The
+  syntax names a variable after `[`, so a view of a temporary cannot be written.
+- An array element may not be an enum yet (`E0424`), and `f64`, `void` or a
+  nested array stay shape errors (`E0206`); an unknown element name is `E0203`.
+  The array-literal and element-type messages now name structs, because they are
+  element types.
+- Guide, grammar artefact and measurements moved with the language: new guide
+  section, canonical `slices.nv` example, re-pinned digest, overhead re-measured
+  rather than estimated.
+- Not in this increment: arrays of enums, slices of `str` text, field writes
+  through an index, generic containers, function pointers, `defer`, labelled
+  loops and `pub`.
+
 N10c: `Option`, `Result` and `?` — the first construct in the language whose
 meaning is a control-flow promise, so the promise is the thing that is tested.
 

@@ -1,0 +1,7 @@
+edition 2;
+
+fn main() {
+    let count = 5
+    let view = count[0..1]
+    print(len(view))
+}
