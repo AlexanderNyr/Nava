@@ -124,7 +124,6 @@ CODES: dict[str, tuple[str, str]] = {
     "E0375": (Severity.ERROR, "duplicate field"),
     "E0376": (Severity.ERROR, "missing field in a struct construction"),
     "E0377": (Severity.ERROR, "a struct contains itself"),
-    "E0378": (Severity.ERROR, "unsupported struct field type"),
     "E0379": (Severity.ERROR, "member access on a non-struct value"),
     "E0380": (Severity.ERROR, "duplicate struct"),
     "E0381": (Severity.ERROR, "named fields used where they are not allowed"),
@@ -138,7 +137,6 @@ CODES: dict[str, tuple[str, str]] = {
     "E0396": (Severity.ERROR, "match is not exhaustive"),
     "E0397": (Severity.ERROR, "duplicate match arm"),
     "E0398": (Severity.ERROR, "unreachable match arm"),
-    "E0399": (Severity.ERROR, "unsupported enum variant field type"),
 
     "E0410": (Severity.ERROR, "`?` expects an Option or a Result"),
     "E0411": (Severity.ERROR, "`?` cannot propagate into this function's return type"),
@@ -151,6 +149,7 @@ CODES: dict[str, tuple[str, str]] = {
     "E0422": (Severity.ERROR, "a slice is a read-only view"),
     "E0423": (Severity.ERROR, "a slice cannot be passed as a `mut` parameter"),
     "E0425": (Severity.ERROR, "array_zeros needs a zero value"),
+    "E0426": (Severity.ERROR, "an array element cannot own storage"),
     "E0430": (Severity.ERROR, "a deferred block cannot leave the function"),
     "E0431": (Severity.ERROR, "no loop carries this label"),
     "E0432": (Severity.ERROR, "a label must name the loop it is written on"),

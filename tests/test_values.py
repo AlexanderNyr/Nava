@@ -75,13 +75,16 @@ class ValueFrontendTests(unittest.TestCase):
                                        "    print(1)\n"
                                        "}\n").code)
 
-    def test_an_array_field_and_an_array_payload_are_still_refused(self):
+    def test_an_array_field_and_an_array_payload_are_refused_as_elements(self):
+        """A value may own an array; an *array element* may not (N11b)."""
+        self.assertTrue(compile_source("edition 2;\nstruct Bag {\n    items: [i64]\n}\n"
+                                       "fn main() {\n    print(1)\n}\n").code)
+        self.assertTrue(compile_source("edition 2;\nenum Slot {\n    Items([i64])\n}\n"
+                                       "fn main() {\n    print(1)\n}\n").code)
         self.assert_code("edition 2;\nstruct Bag {\n    items: [i64]\n}\n"
-                         "fn main() {\n    print(1)\n}\n",
-                         "E0378", "cannot have type [i64]")
-        self.assert_code("edition 2;\nenum Slot {\n    Items([i64])\n}\n"
-                         "fn main() {\n    print(1)\n}\n",
-                         "E0399", "cannot be [i64]")
+                         "fn main() {\n    let bags: [Bag] = []\n"
+                         "    print(len(bags))\n}\n",
+                         "E0426", "Bag holds an array")
 
     def test_an_enum_is_an_array_element(self):
         self.assertTrue(compile_source("edition 2;\n" + SHAPE +

@@ -401,6 +401,11 @@ static nv_arr_i64 nv_arr_i64_init(int64_t len, const int64_t *items) {
     if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(int64_t));
     return result;
 }
+static nv_arr_i64 nv_arr_i64_copy(nv_arr_i64 array) {
+    nv_arr_i64 result = nv_arr_i64_new(array.len);
+    if (array.len > 0) memcpy(result.data, array.data, (size_t)array.len * sizeof(int64_t));
+    return result;
+}
 static inline int64_t nv_arr_i64_get(nv_arr_i64 array, int64_t index) {
     return array.data[nv_check_index(index, array.len)];
 }
@@ -424,6 +429,11 @@ static nv_arr_bool nv_arr_bool_init(int64_t len, const bool *items) {
     if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(bool));
     return result;
 }
+static nv_arr_bool nv_arr_bool_copy(nv_arr_bool array) {
+    nv_arr_bool result = nv_arr_bool_new(array.len);
+    if (array.len > 0) memcpy(result.data, array.data, (size_t)array.len * sizeof(bool));
+    return result;
+}
 static inline bool nv_arr_bool_get(nv_arr_bool array, int64_t index) {
     return array.data[nv_check_index(index, array.len)];
 }
@@ -445,6 +455,11 @@ static nv_arr_str nv_arr_str_new(int64_t len) {
 static nv_arr_str nv_arr_str_init(int64_t len, const char *const *items) {
     nv_arr_str result = nv_arr_str_new(len);
     if (len > 0) memcpy(result.data, items, (size_t)len * sizeof(const char *));
+    return result;
+}
+static nv_arr_str nv_arr_str_copy(nv_arr_str array) {
+    nv_arr_str result = nv_arr_str_new(array.len);
+    if (array.len > 0) memcpy(result.data, array.data, (size_t)array.len * sizeof(const char *));
     return result;
 }
 static inline const char *nv_arr_str_get(nv_arr_str array, int64_t index) {
@@ -730,6 +745,8 @@ class CGenerator:
         #: Prelude instantiations, keyed by their written type. They are enums
         #: too: the only difference is that their name contains arguments.
         self.enums.update(program.instances)
+        #: Memo for `owns_storage`: a type either owns array storage or it does not.
+        self.owning: dict[str, bool] = {}
 
     def ctype(self, typ: str) -> str:
         """The C type of a Nava type: a scalar, an array handle or a struct."""
@@ -762,6 +779,73 @@ class CGenerator:
                            for p in function.params) or "void"
         return f"static {self.ctype(function.returns)} {function.cname}({params})"
 
+    def owns_storage(self, typ: str | None) -> bool:
+        """Does a value of `typ` hold array storage of its own?
+
+        A `str` does not: a string is immutable and lives for the whole run. An
+        array does, and so does any struct or enum containing one, however
+        deeply — which is exactly the set of types that need a copy and a
+        release helper. The walk terminates because the checker refuses a
+        declaration that contains itself (`E0376`).
+        """
+        if typ is None:
+            return False
+        if is_array(typ):
+            return True
+        if typ in self.owning:
+            return self.owning[typ]
+        self.owning[typ] = False  # a cycle would be a checker bug; stop anyway
+        struct = self.structs.get(typ)
+        decl = self.enums.get(typ)
+        if struct is not None:
+            answer = any(self.owns_storage(item.typ) for item in struct.fields)
+        elif decl is not None:
+            answer = any(self.owns_storage(item)
+                         for choice in decl.variants for item in choice.types)
+        else:
+            answer = False
+        self.owning[typ] = answer
+        return answer
+
+    def copy_helper(self, typ: str) -> str:
+        return f"nv_copy_{self.ctype(typ)}"
+
+    def release_helper(self, typ: str) -> str:
+        return f"nv_release_{self.ctype(typ)}"
+
+    def copy_code(self, typ: str, code: str) -> str:
+        """A C expression that gives a value its own storage."""
+        if is_array(typ):
+            return f"nv_arr_{array_tag(typ)}_copy({code})"
+        if self.owns_storage(typ):
+            return f"{self.copy_helper(typ)}({code})"
+        return code
+
+    def owned_here(self, place: str) -> bool:
+        """Does one of the open blocks own this local?"""
+        return any(entry == place for frame in self.owned for entry, _ in frame)
+
+    @staticmethod
+    def root_name(target: Member) -> str:
+        """The C name of the binding a field path starts at: `(p).q.r` -> `p`."""
+        expr: Expr = target
+        while isinstance(expr, Member):
+            expr = expr.base
+        return expr.symbol.cname
+
+    def take_ownership(self, place: str, typ: str) -> None:
+        """Record that the current block now owns what `place` holds."""
+        if not self.owned_here(place):
+            self.owned[-1].append((place, typ))
+
+    def release_statement(self, typ: str, place: str) -> str:
+        """The C statement that frees the storage a value at `place` owns."""
+        if is_array(typ):
+            return f"nv_arr_{array_tag(typ)}_free(&{place});"
+        if self.owns_storage(typ):
+            return f"{self.release_helper(typ)}(&{place});"
+        return ""
+
     def dependencies(self, name: str) -> list[str]:
         """Declared types this declaration needs complete, in source order."""
         struct = self.structs.get(name)
@@ -776,6 +860,63 @@ class CGenerator:
         return "nv_enum_" + "".join(
             character if character.isalnum() else "_" for character in typ).replace("__", "_").strip("_")
 
+    def ordered_types(self) -> list[str]:
+        """Every generated struct and enum name, dependencies first."""
+        ordered: list[str] = []
+        seen: set[str] = set()
+
+        def visit(name: str) -> None:
+            if name in seen or name not in self.structs and name not in self.enums:
+                return
+            seen.add(name)
+            for dependency in self.dependencies(name):
+                visit(dependency)
+            ordered.append(name)
+
+        for declaration in list(self.program.structs) + list(self.program.enums):
+            if declaration.type_params:
+                continue
+            visit(declaration.name)
+        for name in list(self.program.instances) + list(self.program.struct_instances):
+            visit(name)
+        return ordered
+
+    def emit_forward_types(self) -> None:
+        """Declare the generated type names before any of them is named.
+
+        An array handle and a struct can name each other — `struct Bag { xs:
+        [Point] }` needs the handle, and the handle holds a `Point *` — so the
+        names come first and the definitions follow. In C11 a typedef may be
+        repeated for the same type, which is what makes the pair legal.
+        """
+        names = [self.ctype(name) for name in self.ordered_types()]
+        names += [f"nv_arr_{array_tag(typ)}" for typ in self.value_array_types()]
+        if not names:
+            return
+        for name in names:
+            self.line(f"typedef struct {name} {name};")
+        self.line()
+
+    def value_array_types(self) -> list[str]:
+        """Array types whose helpers are generated here rather than in the runtime."""
+        return [typ for typ in self.array_types() if typ not in SCALAR_ARRAY_TAG]
+
+    def emit_array_types(self) -> None:
+        """The handle type of every generated array: a length and a pointer.
+
+        Only the type is emitted here — the helpers need the element type to be
+        complete, and the element may be a struct declared after this point.
+        """
+        types = self.value_array_types()
+        if not types:
+            return
+        for typ in types:
+            tag = array_tag(typ)
+            element = self.ctype(element_of(typ))
+            self.line(f"typedef struct nv_arr_{tag} {{ {element} *data; int64_t len; }} "
+                      f"nv_arr_{tag};")
+        self.line()
+
     def emit_structs(self) -> None:
         """Every declaration, dependencies first.
 
@@ -785,25 +926,11 @@ class CGenerator:
         `enum Item { TaggedItem(Tagged), Empty }`. The checker has already
         rejected a cycle, which is what makes this ordering terminate.
         """
-        emitted: set[str] = set()
-
-        def emit_type(name: str) -> None:
-            if name in emitted or name not in self.structs and name not in self.enums:
-                return
-            for dependency in self.dependencies(name):
-                emit_type(dependency)
-            emitted.add(name)
+        for name in self.ordered_types():
             if name in self.enums:
                 self.emit_enum(self.enums[name])
             else:
                 self.emit_struct(self.structs[name])
-
-        for declaration in list(self.program.structs) + list(self.program.enums):
-            if declaration.type_params:
-                continue
-            emit_type(declaration.name)
-        for name in list(self.program.instances) + list(self.program.struct_instances):
-            emit_type(name)
         if self.program.structs or self.program.enums or self.program.instances:
             self.line()
 
@@ -897,16 +1024,15 @@ class CGenerator:
         """
         types = self.array_types()
         # The three scalar element types take their helpers from the runtime;
-        # every other element type — a struct or an enum — gets them here.
-        value_arrays = [typ for typ in types if typ not in SCALAR_ARRAY_TAG]
+        # every other element type — a struct or an enum — gets them here. The
+        # handle type itself was declared by `emit_array_types`.
+        value_arrays = self.value_array_types()
         if not types:
             return
         self.line("/* --- arrays of values and slices -------------------------------- */")
         for typ in value_arrays:
             tag = array_tag(typ)
             element = self.ctype(element_of(typ))
-            self.line(f"typedef struct {{ {element} *data; int64_t len; }} nv_arr_{tag};")
-            self.line()
             self.line(f"static nv_arr_{tag} nv_arr_{tag}_new(int64_t len) {{")
             self.indent += 1
             self.line(f"nv_arr_{tag} result;")
@@ -919,6 +1045,14 @@ class CGenerator:
             self.indent += 1
             self.line(f"nv_arr_{tag} result = nv_arr_{tag}_new(len);")
             self.line(f"if (len > 0) memcpy(result.data, items, (size_t)len * sizeof({element}));")
+            self.line("return result;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static nv_arr_{tag} nv_arr_{tag}_copy(nv_arr_{tag} array) {{")
+            self.indent += 1
+            self.line(f"nv_arr_{tag} result = nv_arr_{tag}_new(array.len);")
+            self.line(f"if (array.len > 0) memcpy(result.data, array.data, "
+                      f"(size_t)array.len * sizeof({element}));")
             self.line("return result;")
             self.indent -= 1
             self.line("}")
@@ -956,6 +1090,79 @@ class CGenerator:
             self.line()
         self.line()
 
+    def emit_value_helpers(self) -> None:
+        """A copy and a release for every type that owns array storage.
+
+        In C, copying a struct copies the handle inside it, which would leave two
+        owners for one buffer: the first release would free storage the second
+        one still reads. These helpers are what every copy site calls instead,
+        so a value written into another binding, field, payload or returned
+        result always owns its own storage. Only the types that need them get
+        them, and dependencies come first, because copying an outer value copies
+        the values inside it.
+        """
+        owners = [name for name in self.ordered_types() if self.owns_storage(name)]
+        if not owners:
+            return
+        self.line("/* --- copies and releases of values that own storage ------------- */")
+        for name in owners:
+            if name in self.enums:
+                self.emit_enum_helpers(self.enums[name])
+            else:
+                self.emit_struct_helpers(self.structs[name])
+            self.line()
+
+    def emit_struct_helpers(self, struct) -> None:
+        cname = self.ctype(struct.name)
+        owning = [item for item in struct.fields if self.owns_storage(item.typ)]
+        self.line(f"static {cname} {self.copy_helper(struct.name)}({cname} value) {{")
+        self.indent += 1
+        for item in owning:
+            place = f"value.{item.name}"
+            self.line(f"{place} = {self.copy_code(item.typ, place)};")
+        self.line("return value;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {self.release_helper(struct.name)}({cname} *value) {{")
+        self.indent += 1
+        for item in owning:
+            self.line(self.release_statement(item.typ, f"value->{item.name}"))
+        self.indent -= 1
+        self.line("}")
+
+    def emit_enum_helpers(self, decl) -> None:
+        """A switch on the tag: only the live payload has storage to copy."""
+        cname = self.ctype(decl.name)
+        owning = [(choice, index, typ) for choice in decl.variants
+                  for index, typ in enumerate(choice.types) if self.owns_storage(typ)]
+        self.line(f"static {cname} {self.copy_helper(decl.name)}({cname} value) {{")
+        self.indent += 1
+        if owning:
+            self.line("switch (value._tag) {")
+            self.indent += 1
+            for choice, index, typ in owning:
+                place = f"value._payload._v_{choice.name}._f{index}"
+                self.line(f"case {choice.tag}: {place} = {self.copy_code(typ, place)}; break;")
+            self.indent -= 1
+            self.line("default: break;")
+            self.line("}")
+        self.line("return value;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {self.release_helper(decl.name)}({cname} *value) {{")
+        self.indent += 1
+        if owning:
+            self.line("switch (value->_tag) {")
+            self.indent += 1
+            for choice, index, typ in owning:
+                place = f"value->_payload._v_{choice.name}._f{index}"
+                self.line(f"case {choice.tag}: {self.release_statement(typ, place)} break;")
+            self.indent -= 1
+            self.line("default: break;")
+            self.line("}")
+        self.indent -= 1
+        self.line("}")
+
     def emit_function_types(self) -> None:
         """One typedef per reachable function type, the nested ones first."""
         if not self.fnptr:
@@ -969,9 +1176,12 @@ class CGenerator:
         self.line()
 
     def generate(self) -> str:
+        self.emit_forward_types()
         self.emit_function_types()
+        self.emit_array_types()
         self.emit_structs()
         self.emit_arrays()
+        self.emit_value_helpers()
         # A template function has no C type until a call fixes its parameters, so
         # only the instantiations the checker built are emitted.
         concrete = [function for function in self.program.functions if not function.type_params]
@@ -1032,7 +1242,7 @@ class CGenerator:
         for body in reversed(self.defers[frame]):
             self.block(body)
         for cname, typ in reversed(self.owned[frame]):
-            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+            self.line(self.release_statement(typ, cname))
 
     def release(self, since: int = 0) -> None:
         """Leave every block from the innermost down to `since`."""
@@ -1041,8 +1251,22 @@ class CGenerator:
 
     def release_temporaries(self) -> None:
         for cname, typ in reversed(self.temporaries):
-            self.line(f"nv_arr_{array_tag(typ)}_free(&{cname});")
+            self.line(self.release_statement(typ, cname))
         self.temporaries = []
+
+    def owned_value(self, typ: str, value) -> str:
+        """The initializer of a binding that becomes the owner of `typ`.
+
+        A constructor builds a value nobody else holds, so it is taken as written.
+        Anything else — a binding, a field, an element, or a call result that
+        lives only until the end of the statement — is copied, because the
+        binding must outlive it and releasing one owner must not free what the
+        other one reads. The compiler does not yet elide that copy.
+        """
+        code = self.expression(value)
+        if isinstance(value, (StructLiteral, VariantValue)):
+            return code
+        return self.copy_code(typ, code)
 
     def new_array(self, expr) -> str:
         """An array initializer that binds storage directly, with no temporary."""
@@ -1064,6 +1288,15 @@ class CGenerator:
     def block(self, statements) -> None:
         """A nested block owns the arrays and the `defer`s declared directly in it."""
         self.owned.append([])
+        self.defers.append([])
+        self.statements(statements)
+        self.frame_exit(len(self.owned) - 1)
+        self.owned.pop()
+        self.defers.pop()
+
+    def owned_block(self, statements, bindings) -> None:
+        """A block that also owns the bindings a `match` arm introduced."""
+        self.owned.append(list(bindings))
         self.defers.append([])
         self.statements(statements)
         self.frame_exit(len(self.owned) - 1)
@@ -1120,12 +1353,21 @@ class CGenerator:
             if isinstance(statement, Let) and isinstance(statement.value, Try):
                 self.propagate_let(statement)
             elif isinstance(statement, Let):
-                owns = is_array(statement.symbol.typ) and not statement.symbol.borrowed
-                value = (self.new_array(statement.value)
-                         if owns else self.expression(statement.value))
-                self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = {value};")
-                if owns:
-                    self.owned[-1].append((statement.symbol.cname, statement.symbol.typ))
+                typ = statement.symbol.typ
+                borrowed = statement.symbol.borrowed
+                owns_array = is_array(typ) and not borrowed
+                # A struct or an enum that holds an array owns that array too, so
+                # the binding is an owner and gets its own copy.
+                owns_value = self.owns_storage(typ) and not is_array(typ) and not borrowed
+                if owns_array:
+                    value = self.new_array(statement.value)
+                elif owns_value:
+                    value = self.owned_value(typ, statement.value)
+                else:
+                    value = self.expression(statement.value)
+                self.line(f"{self.ctype(typ)} {statement.symbol.cname} = {value};")
+                if owns_array or owns_value:
+                    self.owned[-1].append((statement.symbol.cname, typ))
             elif isinstance(statement, IndexAssign):
                 # The index is checked before the value is evaluated, so a failed
                 # write has no observable side effect, matching the documented
@@ -1136,14 +1378,45 @@ class CGenerator:
                 value = self.expression(statement.value)
                 self.line(f"nv_arr_{tag}_set(&{statement.symbol.cname}, {checked}, {value});")
             elif isinstance(statement, Assign):
-                value = self.expression(statement.value)
-                self.line(f"{statement.symbol.cname} = {value};")
+                typ = statement.symbol.typ
+                name = statement.symbol.cname
+                if self.owns_storage(typ) and not is_array(typ):
+                    # The new value is computed before the old one is released:
+                    # the initializer may read the binding it replaces.
+                    material = self.temp(typ, self.owned_value(typ, statement.value))
+                    if self.owned_here(name):
+                        self.line(self.release_statement(typ, name))
+                    else:
+                        # A parameter is a borrow: what it holds belongs to the
+                        # caller, so it is not released here — but what the
+                        # assignment puts in its place is this block's to free.
+                        self.take_ownership(name, typ)
+                    self.line(f"{name} = {material};")
+                else:
+                    value = self.expression(statement.value)
+                    self.line(f"{name} = {value};")
             elif isinstance(statement, Match):
                 self.match_statement(statement)
             elif isinstance(statement, MemberAssign):
                 target = self.member_path(statement.target)
-                value = self.expression(statement.value)
-                self.line(f"{target} = {value};")
+                typ = statement.target.typ
+                if self.owns_storage(typ):
+                    # Same order as `Assign`: value first, then the release of the
+                    # storage the field held, then the write. A field written
+                    # through a borrowed value — a parameter — is the same case as
+                    # the borrowed binding itself: the old storage is the
+                    # caller's, and the new one belongs to this block.
+                    material = self.temp(typ, self.owned_value(typ, statement.value))
+                    # A field of an owned value is owned with it; a field of a
+                    # borrowed one belongs to the caller.
+                    if self.owned_here(self.root_name(statement.target)):
+                        self.line(self.release_statement(typ, target))
+                    else:
+                        self.take_ownership(target, typ)
+                    self.line(f"{target} = {material};")
+                else:
+                    value = self.expression(statement.value)
+                    self.line(f"{target} = {value};")
             elif isinstance(statement, ExprStmt):
                 self.expression(statement.expr)
             elif isinstance(statement, Return):
@@ -1154,7 +1427,16 @@ class CGenerator:
                 else:
                     # The result is materialised before the arrays are released,
                     # so no released storage can appear in the returned value.
-                    value = self.expression(statement.value)
+                    typ = self.current_return_type
+                    if self.owns_storage(typ) and not is_array(typ) \
+                            and not isinstance(statement.value, (StructLiteral, VariantValue)):
+                        # A returned value is a copy: the local it came from is
+                        # released here, and the caller becomes the owner of the
+                        # copy. The copy survives the release because it is never
+                        # registered as a temporary of the statement.
+                        value = self.temp(typ, self.owned_value(typ, statement.value))
+                    else:
+                        value = self.expression(statement.value)
                     self.release_temporaries()
                     self.release()
                     self.line(f"return {value};")
@@ -1314,7 +1596,8 @@ class CGenerator:
         because the callee's instance may carry a different success type:
         `Result(bool, str)` forwards its `Err` into a `Result(i64, str)`. The
         failure type is identical by the checker's rule, so the payload is a
-        straight copy. Nothing is released here: edition 2 enums own no storage.
+        straight copy. The payload is moved out of the temporary rather than
+        copied: the temporary itself owns nothing else and is never released.
         """
         call = self.expression(statement.value.inner)
         inner_type = statement.value.inner.typ
@@ -1337,6 +1620,10 @@ class CGenerator:
         success = decl.variants[0]
         self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = "
                   f"{temporary}._payload._v_{success.name}._f0;")
+        if self.owns_storage(statement.symbol.typ) and not is_array(statement.symbol.typ):
+            # The payload is moved out of the temporary, so the binding is its
+            # owner and the block releases it.
+            self.owned[-1].append((statement.symbol.cname, statement.symbol.typ))
 
     def match_statement(self, statement: Match) -> None:
         """A chain of `if` tests on the tag, one branch per arm.
@@ -1371,10 +1658,16 @@ class CGenerator:
                 self.line(f"}} else if ({condition}) {{")
                 self.indent += 1
             self.indent += 1
+            bindings: list[tuple[str, str]] = []
             for index, (symbol, typ) in enumerate(zip(arm.symbols, choice.types)):
-                self.line(f"{self.ctype(typ)} {symbol.cname} = {subject}._payload."
-                          f"_v_{choice.name}._f{index};")
-            self.block(arm.body)
+                place = f"{subject}._payload._v_{choice.name}._f{index}"
+                # A binding is a copy of the payload field. When the field owns
+                # storage the copy owns its own, and the arm releases it.
+                code = self.copy_code(typ, place) if self.owns_storage(typ) else place
+                self.line(f"{self.ctype(typ)} {symbol.cname} = {code};")
+                if self.owns_storage(typ):
+                    bindings.append((symbol.cname, typ))
+            self.owned_block(arm.body, bindings)
             self.indent -= 1
         if opened:
             self.indent -= 1
@@ -1394,8 +1687,10 @@ class CGenerator:
         decl = expr.declared
         choice = expr.choice
         assert decl is not None and choice is not None
-        values = [self.temp(typ, self.expression(argument))
-                  for argument, typ in zip(expr.args, choice.types)]
+        values = []
+        for argument, typ in zip(expr.args, choice.types):
+            code = self.owned_value(typ, argument)
+            values.append(self.temp(typ, code))
         fields = ", ".join(f"._f{index} = {value}" for index, value in enumerate(values))
         payload = f" ._payload = {{ ._v_{choice.name} = {{ {fields} }} }}," if values else ""
         return f"({decl.cname}){{ ._tag = {choice.tag},{payload} }}"
@@ -1412,7 +1707,13 @@ class CGenerator:
         values = []
         for name, value in expr.fields:
             declared = next(item.typ for item in struct.fields if item.name == name)
-            values.append((name, self.temp(declared, self.expression(value))))
+            # A field that owns storage takes a copy, because the source
+            # temporary is released at the end of the statement and the struct
+            # must not keep a pointer into storage that dies with it. A nested
+            # construction is the exception: nobody else holds it, so it is
+            # taken as written instead of copied twice.
+            code = self.owned_value(declared, value)
+            values.append((name, self.temp(declared, code)))
         fields = ", ".join(f".{name} = {temporary}" for name, temporary in values)
         return f"({struct.cname}){{ {fields} }}"
 
@@ -1498,7 +1799,14 @@ class CGenerator:
             if expr.typ == "void":
                 self.line(call + ";")
                 return None
-            return self.temp(expr.typ, call)
+            name = self.temp(expr.typ, call)
+            if self.owns_storage(expr.typ) and not is_array(expr.typ):
+                # A returned value owns the storage it carries, and nobody else
+                # holds it: the statement is its owner until it ends. A binding
+                # that keeps it copies it (`owned_value`), so this temporary is
+                # released like any other.
+                self.temporaries.append((name, expr.typ))
+            return name
         if isinstance(expr, Unary):
             value = self.expression(expr.operand)
             if expr.op == "-":

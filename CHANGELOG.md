@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+N11b: fields and payloads that own array storage.
+
+- A struct field and a variant payload may now be an array. The value owns that
+  storage: copying the value copies the array, so `let b = a` gives `b` its own
+  buffer and a write through one value is never seen through the other. The
+  compiler emits one copy and one release helper per type that needs them and
+  calls them at every ownership boundary — a `let`, an assignment, a field
+  write, a `match` binding and a `return` — and the block that owns a value
+  releases it when it ends. No copy is elided yet.
+- `b.items[1]`, `len(b.items)`, `b.items[1..3]`, `for x in b.items` and
+  `b.items = [...]` all work: an array field is an array in every position.
+- A value that owns an array may not be an **array element** (`E0426`). An
+  element is copied on every read and every write, so an owning element needs
+  deep copies inside the storage itself — the arena work of N11c. The retired
+  `E0378` and `E0399` go with the walls they carried.
+- `tests/test_ownership.py` checks the copy rule through observable values and
+  the release rule through the runtime's live-array counter: seven runtime
+  programs, every one reporting zero arrays at exit, including a `return` out of
+  a loop and a `defer` that reads an owning value.
+
 N11a: strings and enums as values, and arrays of every value.
 
 - A `str` is now allowed as a struct field and as a variant payload. A string

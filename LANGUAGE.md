@@ -809,16 +809,24 @@ struct Point {
 ```
 
 A struct is a value with named fields. A field type is `i64`, `bool`, `f64`,
-`str`, a function type, or another struct or enum. A `str` field is allowed
-because a string value is immutable and lives for the whole run: copying the
-struct copies the pointer to a string nobody writes and nobody frees. An **array
-field** is refused with `E0378`, because an array owns storage with exactly one
-owner and a copied struct would give it two — owning fields arrive with the
-memory work (N11b), not by accident. A struct name is shared by every module of
-the program (`E0380` for a duplicate), and a struct may not contain itself
-directly or through another struct (`E0377`), because a struct is stored inline
-and a recursive type would have no finite size. A variant payload follows the
-same rule: a value is allowed, an array is `E0399`.
+`str`, a function type, an array, or another struct or enum. A `str` field is
+allowed because a string value is immutable and lives for the whole run:
+copying the struct copies the pointer to a string nobody writes and nobody
+frees. An **array field owns storage**, so the struct is copied by copying that
+array: `let b = a` gives `b` its own buffer, writing through one value can never
+be seen through the other, and the block that owns a value releases its storage
+when it ends. The compiler emits one copy and one release helper per type that
+needs them; the copy happens at every ownership boundary — a `let`, an
+assignment, a field write, a `match` binding and a `return` — and is not elided.
+
+A value that owns an array may not be an **array element** (`E0426`): an element
+is copied on every read and every write, so `[Bag]` would need those copies to be
+deep, which is the arena work of the next increment. A struct name is shared by
+every module of the program (`E0380` for a duplicate), and a struct may not
+contain itself directly or through another struct (`E0377`), because a struct is
+stored inline and a recursive type would have no finite size. A variant payload
+follows the same rules: a value, a `str` or an array, and an instance of it may
+not be an array element either.
 
 ```nava
 edition 2;
@@ -878,8 +886,8 @@ let b = a
 b.value = 99       # a.value is still 1
 ```
 
-Nothing is shared and nothing is freed: a struct field cannot own storage until
-the owning types arrive (see `E0378`). This is why a struct is not printable
+A struct that owns an array shares nothing with its copy, and the block that
+declares it releases the storage. This is why a struct is not printable
 (`print` accepts `i64`, `bool`, `f64` and `str`, so `E0323` applies) and cannot
 be compared with `==` (`E0320`): both would need a definition of equality or a
 format that edition 2 does not have. They are the next edition's business, and
@@ -919,9 +927,9 @@ pattern        = "_" | IDENT "::" IDENT [ "(" IDENT { "," IDENT } ")" ] ;
 ```
 
 An enum is a type whose values are exactly its variants. A variant carries a
-fixed, positional list of fields, each `i64`, `bool`, `f64`, a struct or another
-enum (`E0399` for `str` and arrays, which wait for the memory work, and `E0203`
-for an unknown name). Variant names are unique inside their enum (`E0391`) and
+fixed, positional list of fields, each `i64`, `bool`, `f64`, `str`, an array, a
+struct or another enum (`E0203` for an unknown name). A payload that owns an
+array is copied and released exactly as a struct field is. Variant names are unique inside their enum (`E0391`) and
 `struct`, `enum` and builtin type names share one namespace (`E0390`).
 
 A value is built with its variants, always qualified: `Shape::Circle(2)`. All
@@ -1017,10 +1025,13 @@ slice          = IDENT "[" expression ".." expression "]" ;
 ```
 
 An array element is a **value with no owner**: `i64`, `bool`, `str`, a struct or
-an enum. `f64`, `void` and another array are refused (`E0206` for the shapes no
-symbol table could allow, `E0203` for a name that is not declared). An enum is a
-value like a struct — its payload is stored inline — so `[Shape]` is an array of
-plain values and the array stays the single owner.
+an enum that owns nothing itself. `f64`, `void` and another array are refused
+(`E0206` for the shapes no symbol table could allow, `E0203` for a name that is
+not declared), and a struct or enum that holds an array is refused with `E0426`:
+an element is copied on every read and every write, so an owning element would
+need deep copies in the storage itself, which the arena work of N11c brings. An
+enum is a value like a struct — its payload is stored inline — so `[Shape]` is
+an array of plain values and the array stays the single owner.
 
 `array_zeros(n)` gives every element its **zero value**, which exists only when
 all-zero bits are a value of the element type: `0`, `false`, `0.0`, a struct
@@ -1218,9 +1229,9 @@ Restrictions, all edition 2 and all stated rather than implied:
 
 * a type parameter is a type inside its own declaration only — the body may write
   `Pair(T)`, and nothing outside may write `T`;
-* an instance may not be an array element type (`[Pair(i64)]` is `E0206`), and a
-  struct instance may not have a `str` field or a payload of type `str`, for the
-  same reason a non-generic struct may not (`E0378`, `E0399`);
+* an instance may not be an array element type (`[Pair(i64)]` is `E0206`), and
+  an instance that owns an array is refused as an element like any other
+  (`E0426`);
 * a template that would have to contain itself — `struct Node<T> { next:
   Node(Node(T)) }` instantiated at `Node(i64)` — is `E0377`, because a struct is
   stored inline and there is no indirection to break the cycle;
@@ -1399,7 +1410,6 @@ never changes meaning; a new condition gets a new code.
 | `E0375` | error | duplicate field | `tests/fixtures/negative/struct_duplicate_field.nv` |
 | `E0376` | error | missing field in a construction | `tests/fixtures/negative/struct_missing_field.nv` |
 | `E0377` | error | a struct contains itself | `tests/fixtures/negative/struct_recursive.nv` |
-| `E0378` | error | unsupported struct field type | `tests/fixtures/negative/struct_field_array.nv` |
 | `E0379` | error | member access on a non-struct value | `tests/fixtures/negative/struct_member_scalar.nv` |
 | `E0380` | error | duplicate struct | `tests/fixtures/negative/struct_duplicate.nv` |
 | `E0381` | error | named fields where they are not allowed | `tests/fixtures/negative/struct_positional.nv`, `struct_named_function.nv` |
@@ -1412,7 +1422,6 @@ never changes meaning; a new condition gets a new code.
 | `E0396` | error | `match` is not exhaustive, or has no arms | `tests/fixtures/negative/match_not_exhaustive.nv` |
 | `E0397` | error | duplicate match arm | `tests/fixtures/negative/match_duplicate_arm.nv` |
 | `E0398` | error | unreachable match arm after `_` | `tests/fixtures/negative/match_arm_after_wildcard.nv` |
-| `E0399` | error | unsupported enum variant field type | `tests/fixtures/negative/enum_variant_array.nv` |
 | `E0410` | error | `?` expects an Option or a Result | `tests/fixtures/negative/propagate_not_option.nv` |
 | `E0411` | error | `?` cannot propagate into this function's return type | `tests/fixtures/negative/propagate_in_void.nv`, `propagate_failure_mismatch.nv` |
 | `E0412` | error | wrong number of type arguments | `tests/fixtures/negative/result_wrong_arity.nv` |
@@ -1424,6 +1433,7 @@ never changes meaning; a new condition gets a new code.
 | `E0422` | error | a slice is read-only | `tests/fixtures/negative/slice_read_only.nv` |
 | `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
+| `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
 | `E0432` | error | a label must name the loop it is written on | `tests/fixtures/negative/label_not_a_loop.nv` |

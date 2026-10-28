@@ -278,25 +278,21 @@ class Checker:
             self.check_field_types(struct)
 
     def check_field_types(self, struct: Struct) -> None:
-        """One struct's fields: a value, or `str`, but nothing that owns storage.
+        """One struct's fields: a value, `str`, or an array the value owns.
 
         A `str` field is safe because a string value in this compiler is
         immutable and lives for the whole run: copying a struct that holds one
-        aliases a pointer that nobody frees and nobody writes. An array field is
-        different — the array has an owner and a release — so it waits for the
-        memory work (N11b).
+        aliases a pointer that nobody frees and nobody writes. An array field
+        owns storage, so a struct that has one is copied by copying that storage
+        — the code generator emits the copy and release helpers per type, and
+        nothing here has to know their names.
         """
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
             if is_array(item.typ):
-                raise make(
-                    "E0378",
-                    f"a field of {struct.name} cannot have type {item.typ} yet",
-                    item.loc, item.loc.advance(item.name),
-                    "a field is a value and an array owns storage with a single owner; "
-                    "an owning field arrives with the memory work (N11b)",
-                )
+                self.check_element_type(item.typ, item.loc)
+                continue
             if self.is_template(item.typ):
                 raise make(
                     "E0437",
@@ -445,7 +441,7 @@ class Checker:
                     self.check_variant_types(decl.name, variant)
 
     def check_variant_types(self, enum_name: str, variant: Variant) -> None:
-        """One variant's payload: a scalar, a struct or an enum, nothing owning.
+        """One variant's payload: a scalar, a `str`, an array, a struct or an enum.
 
         An instantiated variant has no location of its own — the type it came
         from was written at the instantiation — so the diagnostic carries none.
@@ -453,13 +449,8 @@ class Checker:
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
             if is_array(item):
-                raise make(
-                    "E0399",
-                    f"a variant field of {enum_name}::{variant.name} cannot be {item} yet",
-                    *span,
-                    hint="a payload is a value and an array owns storage with a single "
-                         "owner; an owning payload arrives with the memory work (N11b)",
-                )
+                self.check_element_type(item, variant.loc)
+                continue
             if self.is_template(item):
                 raise make(
                     "E0437",
@@ -834,6 +825,19 @@ class Checker:
             if struct.fields else "the struct has no fields",
         )
 
+    def describe(self, expr: Expr) -> str:
+        """How a diagnostic names an expression: a binding, a path, or a phrase."""
+        steps: list[str] = []
+        base = expr
+        while isinstance(base, Member):
+            steps.append(base.field)
+            base = base.base
+        if isinstance(base, Variable) and steps:
+            return repr(".".join([base.name] + list(reversed(steps))))
+        if isinstance(base, Variable):
+            return repr(base.name)
+        return "this expression"
+
     def root_variable(self, expr: Expr) -> Variable | None:
         while isinstance(expr, Member):
             expr = expr.base
@@ -841,6 +845,9 @@ class Checker:
 
     def member_assign(self, statement: MemberAssign) -> None:
         target_type = self.member(statement.target)
+        # The path is checked here rather than through `expression`, so it gets
+        # its type here too: the code generator asks the node, not the field.
+        statement.target.typ = target_type
         root = self.root_variable(statement.target)
         if root is not None and root.symbol is not None and root.symbol.readonly:
             raise make(
@@ -892,7 +899,30 @@ class Checker:
             return None
         return f"{path} is {typ}, which has no zero value"
 
-    def check_element_type(self, typ: str, loc) -> None:
+    def owns_storage(self, typ: str | None, seen: frozenset[str] = frozenset()) -> bool:
+        """Does a value of `typ` hold array storage of its own?
+
+        A `str` does not: strings are immutable and live for the whole run. An
+        array does, and so does any struct or enum that contains one, however
+        deeply. The walk is finite because a struct cannot contain itself
+        (`E0376`) and an instantiation is a finite written type.
+        """
+        if typ is None or typ in seen:
+            return False
+        if is_array(typ):
+            return True
+        seen = seen | {typ}
+        struct = self.struct_of(typ)
+        if struct is not None:
+            return any(item.typ == typ or self.owns_storage(item.typ, seen)
+                       for item in struct.fields)
+        decl = self.enum_of(typ)
+        if decl is not None:
+            return any(item == typ or self.owns_storage(item, seen)
+                       for choice in decl.variants for item in choice.types)
+        return False
+
+    def check_element_type(self, typ: str, loc, end=None) -> None:
         """An array element is a value with no owner: a scalar, a struct or an enum.
 
         A struct and an enum are both copied by value and neither owns storage,
@@ -902,6 +932,15 @@ class Checker:
         if not is_array(typ):
             return
         element = element_of(typ)
+        if self.owns_storage(element):
+            raise make(
+                "E0426",
+                f"an array element cannot own storage, but {element} holds an array",
+                *((loc,) if end is None else (loc, end)),
+                hint="an element is copied on every read and every write; making those "
+                     "copies deep is the arena work (N11c), so an array of owning "
+                     "values is refused rather than shared",
+            )
         if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
             return
         # The parser refuses the reserved type words (`f64`, `void`) before this
@@ -924,8 +963,8 @@ class Checker:
         if not is_array(base):
             raise make(
                 "E0421",
-                f"only an array can be sliced, but {expr.array.name!r} is {base}",
-                expr.loc, expr.loc.advance(expr.array.name),
+                f"only an array can be sliced, but {self.describe(expr.array)} is {base}",
+                expr.loc,
             )
         self.check_element_type(base, expr.loc)
         for bound, label in ((expr.start, "start"), (expr.end, "end")):
@@ -1330,6 +1369,13 @@ class Checker:
     def check_statement(self, statement) -> None:
         if isinstance(statement, Let):
             name_loc = statement.name_loc or statement.loc
+            if statement.annotation is not None and is_array(statement.annotation):
+                # The element rule comes first: `[Bag]` is refused as an element
+                # type before the initializer is looked at, so the diagnostic
+                # names the real mistake instead of what the expression happened
+                # to need.
+                self.check_element_type(statement.annotation, name_loc,
+                                        name_loc.advance(statement.name))
             if isinstance(statement.value, Try):
                 if self.defer_depth:
                     raise make(
@@ -1363,7 +1409,7 @@ class Checker:
                     raise make("E0311", f"expected {statement.annotation}, got {typ}",
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
-            self.check_element_type(typ, name_loc)
+            self.check_element_type(typ, name_loc, name_loc.advance(statement.name))
             borrowed = isinstance(statement.value, Slice)
             if is_array(typ) and not owns_new_array(statement.value) and not borrowed:
                 raise make(
@@ -1591,12 +1637,13 @@ class Checker:
                     iterable.loc,
                     hint="write `for x in values` for an array or `for i in 0..n` for a count",
                 )
-            if not isinstance(iterable, (Variable, ArrayLiteral, Slice)):
-                # Array literals and slices are allowed: both are values whose
-                # storage outlives the loop (a literal is a statement temporary,
-                # a slice borrows an array that is still in scope).
-                raise make("E0350", "a for loop iterates over an array, a slice or a literal",
-                           iterable.loc)
+            if not isinstance(iterable, (Variable, ArrayLiteral, Slice, Member)):
+                # Literals, slices and array fields are allowed because the
+                # storage outlives the loop: a literal is a temporary of the
+                # statement, a slice borrows an array in scope, and a field is
+                # storage its owner holds for as long as the loop runs.
+                raise make("E0350", "a for loop iterates over an array, a slice, "
+                                    "a literal or an array field", iterable.loc)
             element = element_of(iterable_type)
         name_loc = statement.name_loc or statement.loc
         self.scopes.append({})
@@ -1676,8 +1723,8 @@ class Checker:
         elif isinstance(expr, Index):
             base = self.expression(expr.array)
             if not is_array(base):
-                raise make("E0329", f"only an array can be indexed, but {expr.array.name!r} "
-                                    f"is {base}", expr.loc, expr.loc.advance(expr.array.name))
+                raise make("E0329", f"only an array can be indexed, but "
+                                    f"{self.describe(expr.array)} is {base}", expr.loc)
             index_type = self.expression(expr.index)
             if index_type != "i64":
                 raise make("E0328", f"an array index must be i64, got {index_type}",

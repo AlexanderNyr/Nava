@@ -8,8 +8,9 @@ no C compiler, no libc.
 `match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices),
 N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
 (function values and pointers) are done. N11 is in progress: N11a (strings and
-enums as values, arrays of every value) is delivered, N11b–N11d are specified,
-and N12–N18 are not started.** The
+enums as values, arrays of every value) and N11b (owning fields, with the copy
+and release rules they need) are delivered, N11c–N11d are specified, and N12–N18
+are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -45,25 +46,25 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 7 324 lines,
-13 modules and 236 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 7 692 lines,
+13 modules and 255 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11a) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11b) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
 | `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 266 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 69 / 59 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 111 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add`, `.discard`, `.update` | 12 / 14 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 418 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 98 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| `raise` / `try` | 265 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 70 / 61 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 122 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add`, `.discard`, `.update` | 13 / 14 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 440 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 99 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
 | slice syntax `a[i:j]` | 22 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(...)`, of which `key=` | 5 / 1 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
-| generator expressions, list/set comprehensions | 52 / 36 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
+| generator expressions, list/set comprehensions | 57 / 40 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 2 | a function used as a value: `fn(i64) -> i64` and a call through a variable (N10g; there is still no closure, and the audit row is closed because a call-back needs no `lambda`) | N10 |
 | file I/O, `argv`, environment | `cli.py`, `modules.py` | `fs`, `args` with the existing capability model | N12 |
 | generators, `await`, async functions | 0 | nothing; Nava is not asked to acquire them | — |
@@ -293,9 +294,37 @@ the checker, the code generator, the specification and the guide.
 | Increment | Scope | State |
 |---|---|---|
 | N11a | `str` as a struct field and a variant payload; arrays of enums; `array_zeros` restricted to element types with a zero value | **Delivered** (record below) |
-| N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | Open (next) |
-| N11c | `Vec<T>` with amortised growth, `pop -> Option<T>`, iteration; the arena allocator and its accounting | Open |
+| N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | **Delivered** (record below) |
+| N11c | `Vec<T>` with amortised growth, `pop -> Option<T>`, iteration; the arena allocator and its accounting | Open (next) |
 | N11d | `String` (growing UTF-8) with the audit's methods, `HashMap<K, V>` and `HashSet<T>` with a deterministic hash | Open |
+
+#### Delivery record N11b (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| An array field and an array payload exist | `tests/test_ownership.py`: `test_an_array_field_and_an_array_payload_are_values` | `struct Bag { items: [i64] }` and `enum Shape { Dot, Poly([i64]) }` compile and run; the retired `E0378`/`E0399` walls are gone with the restriction they carried |
+| A field array is an array like any other | `test_an_array_field_is_read_like_any_other_array`, `test_an_array_field_can_be_replaced` | `b.items[1]`, `len(b.items)`, `b.items[1..3]`, `for x in b.items` and `b.items = [7, 8, 9]` all work; a `for` loop now accepts an array field as its source |
+| A value that owns storage is copied when it is bound | `Value...`→`test_a_constructed_field_copies_the_source_array`, `test_a_copied_value_keeps_its_own_storage` | `let b = Bag(items: src)`, then `src[0] = 99`, leaves `b.items[0]` at `1`; after `let copy = b` and `b.items = [8, 9]`, `copy.items` still holds `1, 2, 3` |
+| … including through an enum payload, a nested struct and a function boundary | `test_an_enum_payload_is_copied_and_replaced`, `test_a_value_travels_through_functions_and_keeps_its_storage`, `test_a_nested_owning_field_is_a_value_too` | `s = Shape::Dot` after `let t = s` leaves `t`'s payload intact; a `Bag` returned from a function and read through a parameter keeps its length; `Outer(inner: Inner(xs: [...]))` copies both levels |
+| Nothing is leaked, on the normal path or on an early exit | `test_nothing_is_leaked_on_the_normal_path`, `test_nothing_is_leaked_when_a_block_is_left_early`, `test_a_defer_can_read_the_array_a_value_owns` | built with `-DNAVA_TRACK_ALLOCS`, every program reports `nava: live arrays at exit: 0`, including a `return` out of a `while` whose body declares an owning value and a `defer` that reads one |
+| Only owning types get helpers | `test_the_generated_c_copies_and_releases_only_where_needed` | `nv_copy_nv_struct_Bag` / `nv_release_nv_struct_Bag` are emitted, `nv_struct_Plain` gets neither |
+| What is still refused is refused once, from one place | `test_an_owning_value_cannot_be_an_array_element`, `test_an_enum_with_an_owning_payload_cannot_be_an_element_either`, fixture `array_of_owning_values.nv` | `[Bag]` as a binding, as a parameter, as a literal and as `array_zeros` are all `E0426` from `check_element_type`, and the message names the type and the arena work; the retired `E0378` and `E0399` are gone from the code table |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### Declaring a struct`, `### Arrays of structs and slices`, the code table), `guides/nava-1.md` | The field rule states what is copied and released, `E0426` replaces the two retired rows, `tests/test_spec.py` and `tests/test_guides.py` are green |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 7 692 lines, 13 modules, 255 functions under `nava_lang/` after this increment (7 324 / 13 / 236 at N11a) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 525 registered tests, 11 tasks with 76 cases, 173 spec fixtures, 139 diagnostic codes`; suite **595 tests OK** (1 135 subtests) |
+
+Negative control: `tests/fixtures/negative/array_of_owning_values.nv` (`E0426`)
+— the one shape a struct with an array cannot take. The controls that carry the
+claim are the two runtime tests that would pass under aliasing by accident and
+fail under copying: `test_a_constructed_field_copies_the_source_array` (write to
+the source afterwards) and `test_a_copied_value_keeps_its_own_storage` (replace
+one binding's array and read the other). The leak counter is the third: a shallow
+copy released twice aborts, and a copy released never leaves a count above zero.
+
+Deliberately not done in N11b: an array of owning values (`E0426`, the arena is
+N11c), freeing on assignment elision — every boundary copy is made, none is
+elided — a struct field or payload assignment from a slice (the checker's array
+rules are unchanged), and `String`/`Vec`/hash collections (N11c, N11d).
 
 #### Delivery record N11a (2026-10-28)
 
@@ -311,7 +340,7 @@ the checker, the code generator, the specification and the guide.
 | The grammar artefact agrees | `eval/grammar.py`, `tests/test_grammar.py` | The element-type production accepts a declared name and refuses the reserved words, unchanged; `E0425` is classified as semantic (the shape is fine, the element type is not), and `E0424` — the retired enum wall — is gone from both the code table and the classification |
 | The specification moved with the code | `LANGUAGE.md`, sections "Declaring a struct" and "Arrays of structs and slices" | The field rule now states why a `str` field is safe (immutable, never freed) and why an array field is not (one owner); a runnable `Person` example prints `36`, `37`, `Ada`; the element rule says "a value with no owner"; `array_zeros` documents the zero-value rule. `E0424` is retired with its reason recorded |
 | No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 509 registered tests, 11 tasks with 76 cases, 174 spec fixtures, 140 diagnostic codes`; suite **579 tests OK** (1135 subtests); 12 new tests in `tests/test_values.py` and three new negative fixtures (two replacing the fixtures whose restriction was lifted) |
-| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 7 324 lines, 13 modules, 236 functions under `nava_lang/` after this increment |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 7 661 lines, 13 modules, 252 functions under `nava_lang/` after this increment |
 
 Negative controls: `array_zeros_str.nv` (`E0425`), `struct_field_array.nv`
 (`E0378`) and `enum_variant_array.nv` (`E0399`). The control that carries the
@@ -772,7 +801,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 7 324 Python lines and 236 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 7 692 Python lines and 255 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

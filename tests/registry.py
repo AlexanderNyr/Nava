@@ -487,7 +487,7 @@ REGISTERED_TESTS = {
     "ValueFrontendTests": {
         "test_a_string_is_a_field_and_a_payload",
         "test_a_zeroable_element_type_still_works",
-        "test_an_array_field_and_an_array_payload_are_still_refused",
+        "test_an_array_field_and_an_array_payload_are_refused_as_elements",
         "test_an_enum_is_an_array_element",
         "test_an_undeclared_element_name_is_an_unknown_type",
         "test_array_zeros_needs_a_zero_value",
@@ -499,6 +499,27 @@ REGISTERED_TESTS = {
         "test_a_struct_with_text_travels_through_functions_and_arrays",
         "test_an_array_of_enums_is_written_and_read",
         "test_an_array_of_enums_slices_and_is_passed",
+    },
+    # --- N11b: fields and payloads that own array storage --------------------
+    "OwningFieldFrontendTests": {
+        "test_a_nested_owning_field_is_a_value_too",
+        "test_an_array_field_and_an_array_payload_are_values",
+        "test_an_array_field_can_be_replaced",
+        "test_an_array_field_is_read_like_any_other_array",
+        "test_an_enum_with_an_owning_payload_cannot_be_an_element_either",
+        "test_an_owning_value_cannot_be_an_array_element",
+        "test_the_generated_c_copies_and_releases_only_where_needed",
+    },
+    "OwningFieldRuntimeTests": {
+        "test_a_constructed_field_copies_the_source_array",
+        "test_a_copied_value_keeps_its_own_storage",
+        "test_a_defer_can_read_the_array_a_value_owns",
+        "test_a_value_travels_through_functions_and_keeps_its_storage",
+        "test_a_write_through_a_parameter_leaves_the_caller_alone",
+        "test_the_copies_are_memory_safe_under_the_sanitizers",
+        "test_an_enum_payload_is_copied_and_replaced",
+        "test_nothing_is_leaked_on_the_normal_path",
+        "test_nothing_is_leaked_when_a_block_is_left_early",
     },
     # --- N10g: function values and function pointers -------------------------
     "FunctionValueFrontendTests": {
@@ -754,7 +775,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 132,
+    "tests/fixtures/negative": 131,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -825,6 +846,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_local_model_server  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_nava  # noqa: PLC0415
+    import test_ownership  # noqa: PLC0415
     import test_plan  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
     import test_release  # noqa: PLC0415
@@ -841,9 +863,9 @@ def discovered_tests() -> dict[str, set[str]]:
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
                    test_float, test_functions, test_generics, test_grammar, test_guides,
                    test_local_model_server,
-                   test_modules, test_nava, test_plan, test_registry, test_release,
-                   test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib,
-                   test_study, test_values):
+                   test_modules, test_nava, test_ownership, test_plan, test_registry,
+                   test_release, test_results, test_sandbox, test_slices, test_spec,
+                   test_structs, test_stdlib, test_study, test_values):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -898,6 +920,7 @@ def check_skip_state() -> list[str]:
     import test_functions  # noqa: PLC0415
     import test_generics  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
+    import test_ownership  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
     import test_values  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
@@ -910,6 +933,7 @@ def check_skip_state() -> list[str]:
                                (test_stdlib, "TextTests"),
                                (test_functions, "FunctionValueRuntimeTests"),
                                (test_values, "ValueRuntimeTests"),
+                               (test_ownership, "OwningFieldRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

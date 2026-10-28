@@ -66,9 +66,10 @@ class EnumFrontendTests(unittest.TestCase):
         self.assert_code("edition 2;\nenum E { A, A }\nfn main() {}\n",
                          "E0391", "twice")
         self.assert_code("edition 2;\nenum E { }\nfn main() {}\n", "E0396", "no variants")
-        # A string payload is a value (N11a); an array payload owns storage.
+        # A string payload is a value and an array payload is storage the value
+        # owns and releases, so both are allowed (N11a, N11b).
         self.assertTrue(compile_source("edition 2;\nenum E { A(str) }\nfn main() {}\n").code)
-        self.assert_code("edition 2;\nenum E { A([i64]) }\nfn main() {}\n", "E0399")
+        self.assertTrue(compile_source("edition 2;\nenum E { A([i64]) }\nfn main() {}\n").code)
         self.assert_code("edition 2;\nenum E { A(Missing) }\nfn main() {}\n", "E0203")
 
     def test_a_struct_and_an_enum_cannot_share_a_name(self):

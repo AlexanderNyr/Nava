@@ -159,13 +159,15 @@ fn main() {
 }
 ```
 
-Fields are `i64`, `bool`, `f64`, `str`, a function type, or another struct or
-enum. A `str` field is fine: a string is immutable and lives for the whole run,
-so copying the struct copies a pointer nobody writes or frees. An **array field**
-does not exist yet (it needs an owner, which is the N11b work), a struct may not
-contain itself, and a struct cannot be printed or compared with `==`: print a
-field, not the struct. Construction names every field exactly once, as in
-`Point(x: 1, y: 2)`; there is no positional form.
+Fields are `i64`, `bool`, `f64`, `str`, a function type, an array, or another
+struct or enum. A `str` field is fine: a string is immutable and lives for the
+whole run, so copying the struct copies a pointer nobody writes or frees. An
+**array field** is fine too, and it is copied: `let b = a` gives `b` its own
+buffer, so `a.items[0] = 9` cannot be seen through `b`, and the block that owns
+a value frees its storage when it ends. A struct may not contain itself, and a
+struct cannot be printed or compared with `==`: print a field, not the struct.
+Construction names every field exactly once, as in `Point(x: 1, y: 2)`; there is
+no positional form.
 
 ## Edition 2: enums and `match`
 
@@ -240,8 +242,10 @@ unchanged, never converted, and the rest of the function does not run.
 
 ## Edition 2: arrays of structs and slices
 
-An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** —
-anything that is a value with no owner. `for point in points` copies each
+An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** that
+owns nothing itself — anything that is a value with no owner. A struct or enum
+holding an array is refused as an element (`E0426`): an element is copied on every
+read and every write, so an owning element waits for the arena (N11c). `for point in points` copies each
 element, and `points[i].x` reads a field of an element. `array_zeros(n)` gives
 every element its zero value, so it needs an element type whose zero bits are a
 value: `i64`, `bool`, `f64`, a struct of those, or an enum whose first variant is
@@ -461,6 +465,8 @@ Output: `42`, `10`, `12`.
 15. A function type is written `fn(i64) -> i64`, with the result always spelled
     out. A call through a value goes through a name only: bind `ops.op` to a
     `let` before calling it (`E0441`).
-16. A struct field or enum payload may be `str`, but not an array yet; and
-    `array_zeros(n)` needs an element type whose zero value is real, so
-    `[str]` and a struct holding a `str` are `E0425`.
+16. A struct field or enum payload may be a `str` or an array, and a value that
+    owns an array is copied wherever it crosses a binding — `let`, assignment,
+    field write, `match` binding, `return`. Such a value may not be an array
+    element (`E0426`), and `array_zeros(n)` needs an element type whose zero
+    value is real, so `[str]` and a struct holding a `str` are `E0425`.

@@ -80,10 +80,10 @@ class StructFrontendTests(unittest.TestCase):
 
     def test_field_rules(self):
         self.assert_code(source("struct P { x: i64, x: bool }\nfn main() {}\n"), "E0375")
-        # A string is an immutable value that nobody frees, so a struct may hold
-        # one; an array owns storage with a single owner, so it may not.
+        # A string is an immutable value that nobody frees, and an array field is
+        # storage the value owns and releases (N11b), so both are allowed.
         self.assertTrue(compile_source(source("struct P { name: str }\nfn main() {}\n")).code)
-        self.assert_code(source("struct P { xs: [i64] }\nfn main() {}\n"), "E0378")
+        self.assertTrue(compile_source(source("struct P { xs: [i64] }\nfn main() {}\n")).code)
         self.assert_code(source("struct P { q: Unknown }\nfn main() {}\n"), "E0203")
 
     def test_a_struct_may_not_contain_itself(self):

@@ -820,6 +820,20 @@ class Parser:
             self.i += 1
             field = self.expect("IDENT", "a field name after '.'")
             expr = Member(dot.loc, expr, str(field.value), field.loc)
+        if isinstance(expr, Member) and self.at("["):
+            # `holder.items[0]`: an array field is read like any other array. The
+            # base is a place, so the index and the slice share one spelling.
+            mark = self.current
+            self.i += 1
+            index = self.expression()
+            if self.at(".."):
+                self.require_edition(mark.loc, "a slice")
+                self.i += 1
+                end = self.expression()
+                self.expect("]", "']'")
+                return Slice(mark.loc, expr, index, end)
+            self.expect("]", "']'")
+            return Index(mark.loc, expr, index)
         if isinstance(expr, Member) and self.at("("):
             # A field can hold a function value, but a call goes through a name,
             # so the field has to be bound first. Saying so beats two errors.

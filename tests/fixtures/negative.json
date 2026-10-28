@@ -1163,22 +1163,13 @@
       "hint": "`mut` belongs to a declared function's array parameter; a function value can take `[i64]`, which is read-only"
     },
     {
-      "file": "struct_field_array.nv",
-      "code": "E0378",
-      "line": 4,
-      "column": 5,
-      "end_column": 10,
-      "message": "a field of Bag cannot have type [i64] yet",
-      "hint": "a field is a value and an array owns storage with a single owner; an owning field arrives with the memory work (N11b)"
-    },
-    {
-      "file": "enum_variant_array.nv",
-      "code": "E0399",
-      "line": 4,
-      "column": 5,
-      "end_column": 10,
-      "message": "a variant field of Slot::Items cannot be [i64] yet",
-      "hint": "a payload is a value and an array owns storage with a single owner; an owning payload arrives with the memory work (N11b)"
+      "file": "array_of_owning_values.nv",
+      "code": "E0426",
+      "line": 8,
+      "column": 9,
+      "end_column": 13,
+      "message": "an array element cannot own storage, but Bag holds an array",
+      "hint": "an element is copied on every read and every write; making those copies deep is the arena work (N11c), so an array of owning values is refused rather than shared"
     },
     {
       "file": "array_zeros_str.nv",
