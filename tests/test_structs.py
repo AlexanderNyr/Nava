@@ -80,7 +80,9 @@ class StructFrontendTests(unittest.TestCase):
 
     def test_field_rules(self):
         self.assert_code(source("struct P { x: i64, x: bool }\nfn main() {}\n"), "E0375")
-        self.assert_code(source("struct P { name: str }\nfn main() {}\n"), "E0378", "str")
+        # A string is an immutable value that nobody frees, so a struct may hold
+        # one; an array owns storage with a single owner, so it may not.
+        self.assertTrue(compile_source(source("struct P { name: str }\nfn main() {}\n")).code)
         self.assert_code(source("struct P { xs: [i64] }\nfn main() {}\n"), "E0378")
         self.assert_code(source("struct P { q: Unknown }\nfn main() {}\n"), "E0203")
 

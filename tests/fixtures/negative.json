@@ -821,15 +821,6 @@
       "hint": "a struct is stored inline, so a recursive type has no finite size; edition 2 has no indirection to put it behind"
     },
     {
-      "file": "struct_field_str.nv",
-      "code": "E0378",
-      "line": 4,
-      "column": 5,
-      "end_column": 9,
-      "message": "a field of Person cannot have type str yet",
-      "hint": "edition 2 struct fields are i64, bool, f64, a struct or an enum; owning types such as str and arrays arrive with the memory work (N11)"
-    },
-    {
       "file": "struct_member_scalar.nv",
       "code": "E0379",
       "line": 5,
@@ -900,15 +891,6 @@
       "end_column": 18,
       "message": "Shape::Circle takes 1 field, got 2",
       "hint": "variant fields are positional"
-    },
-    {
-      "file": "enum_variant_str.nv",
-      "code": "E0399",
-      "line": 4,
-      "column": 5,
-      "end_column": 9,
-      "message": "a variant field of Message::Text cannot be str yet",
-      "hint": "edition 2 variant fields are i64, bool, f64, a struct or an enum; owning types arrive with the memory work (N11)"
     },
     {
       "file": "match_not_an_enum.nv",
@@ -1073,15 +1055,6 @@
       "hint": "pass the array that owns the storage"
     },
     {
-      "file": "array_of_enum.nv",
-      "code": "E0424",
-      "line": 6,
-      "column": 9,
-      "end_column": null,
-      "message": "an array element type must be i64, bool, str or a struct, got Shape",
-      "hint": "an enum has no storage of its own until the memory work (N11)"
-    },
-    {
       "file": "defer_returns.nv",
       "code": "E0430",
       "line": 4,
@@ -1188,6 +1161,33 @@
       "end_column": null,
       "message": "a function type has no `mut` parameter",
       "hint": "`mut` belongs to a declared function's array parameter; a function value can take `[i64]`, which is read-only"
+    },
+    {
+      "file": "struct_field_array.nv",
+      "code": "E0378",
+      "line": 4,
+      "column": 5,
+      "end_column": 10,
+      "message": "a field of Bag cannot have type [i64] yet",
+      "hint": "a field is a value and an array owns storage with a single owner; an owning field arrives with the memory work (N11b)"
+    },
+    {
+      "file": "enum_variant_array.nv",
+      "code": "E0399",
+      "line": 4,
+      "column": 5,
+      "end_column": 10,
+      "message": "a variant field of Slot::Items cannot be [i64] yet",
+      "hint": "a payload is a value and an array owns storage with a single owner; an owning payload arrives with the memory work (N11b)"
+    },
+    {
+      "file": "array_zeros_str.nv",
+      "code": "E0425",
+      "line": 2,
+      "column": 24,
+      "end_column": null,
+      "message": "array_zeros cannot create [str]: an all-zero str is a null pointer, not an empty string",
+      "hint": "write a literal, or use an element type whose zero value is a value: i64, bool, f64, or a struct or enum of those"
     }
   ]
 }

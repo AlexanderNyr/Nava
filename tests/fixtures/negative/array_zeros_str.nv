@@ -1,0 +1,4 @@
+fn main() {
+    let names: [str] = array_zeros(2)
+    print(len(names))
+}

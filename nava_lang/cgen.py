@@ -887,7 +887,7 @@ class CGenerator:
         return found
 
     def emit_arrays(self) -> None:
-        """Per-type helpers for arrays of structs, and one slice of every type.
+        """Per-type helpers for arrays of structs and enums, one slice per type.
 
         An array of structs reuses the scalar layout: a length and a pointer to
         storage the binding owns. `memcpy` of a value type is a copy, so the
@@ -896,11 +896,13 @@ class CGenerator:
         is checked before the pointer moves.
         """
         types = self.array_types()
-        struct_arrays = [typ for typ in types if element_of(typ) in self.structs]
+        # The three scalar element types take their helpers from the runtime;
+        # every other element type — a struct or an enum — gets them here.
+        value_arrays = [typ for typ in types if typ not in SCALAR_ARRAY_TAG]
         if not types:
             return
-        self.line("/* --- arrays of structs and slices ------------------------------- */")
-        for typ in struct_arrays:
+        self.line("/* --- arrays of values and slices -------------------------------- */")
+        for typ in value_arrays:
             tag = array_tag(typ)
             element = self.ctype(element_of(typ))
             self.line(f"typedef struct {{ {element} *data; int64_t len; }} nv_arr_{tag};")

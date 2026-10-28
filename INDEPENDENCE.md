@@ -7,7 +7,9 @@ no C compiler, no libc.
 **Status: N10 delivered — N10a (editions and structs), N10b (enums and
 `match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices),
 N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
-(function values and pointers) are done; N11–N18 are specified, not started.** The
+(function values and pointers) are done. N11 is in progress: N11a (strings and
+enums as values, arrays of every value) is delivered, N11b–N11d are specified,
+and N12–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -43,10 +45,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 7 269 lines,
-13 modules and 235 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 7 324 lines,
+13 modules and 236 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N10g) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11a) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -57,7 +59,7 @@ size and the function count so this paragraph cannot drift from the code.
 | dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 69 / 59 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
 | `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 111 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
 | set literal, `.add`, `.discard`, `.update` | 12 / 14 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 413 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| f-strings and `str.format` | 418 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
 | `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 98 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
 | slice syntax `a[i:j]` | 22 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(...)`, of which `key=` | 5 / 1 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
@@ -283,6 +285,46 @@ prints nothing. The one that carries the language claim is
 `slice_mut_argument.nv`: a view can be read through and passed on, but it can
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
+
+**Increments of N11.** The phase is delivered in four patches, for the same
+reason N10 was: the memory rules, the collections and the string type each change
+the checker, the code generator, the specification and the guide.
+
+| Increment | Scope | State |
+|---|---|---|
+| N11a | `str` as a struct field and a variant payload; arrays of enums; `array_zeros` restricted to element types with a zero value | **Delivered** (record below) |
+| N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | Open (next) |
+| N11c | `Vec<T>` with amortised growth, `pop -> Option<T>`, iteration; the arena allocator and its accounting | Open |
+| N11d | `String` (growing UTF-8) with the audit's methods, `HashMap<K, V>` and `HashSet<T>` with a deterministic hash | Open |
+
+#### Delivery record N11a (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A string is a value that can live inside another value | `tests/test_values.py`: `test_a_string_is_a_field_and_a_payload` | `struct Person { name: str, age: i64 }` and `enum Shape { Label(str) }` are accepted in edition 2 and run: `ada`, `36`, `3`, then `0`, `3`, `hi` |
+| Copying a value copies the container, not the immortal string | `ValueRuntimeTests.test_a_string_field_copies_while_the_string_is_shared` | `copy.age = 37` leaves `ada.age` at `36` while both names point at `Ada`: the struct is copied, the string is shared because nothing writes or frees it |
+| A struct with text travels like any value | `test_a_struct_with_text_travels_through_functions_and_arrays` | Constructed, returned from a function, stored in `[Person]` and iterated; prints `a`, `2`, `b`, `3` |
+| An enum is an array element | `test_an_enum_is_an_array_element`, `ValueRuntimeTests.test_an_array_of_enums_is_written_and_read`, `test_an_array_of_enums_slices_and_is_passed`, `test_a_mutable_array_of_enums_is_written_in_place` | `[Shape]` literal, `array_zeros`, element write, `for`, slice and `mut [Shape]` all work; a `str` payload matches and prints |
+| What still owns storage is still refused | `test_an_array_field_and_an_array_payload_are_still_refused`, fixtures `struct_field_array.nv`, `enum_variant_array.nv` | An array field is `E0378` and an array payload `E0399`, both naming the type and pointing at the memory work |
+| `array_zeros` hands out only values | `test_array_zeros_needs_a_zero_value`, fixture `array_zeros_str.nv` | `[str]`, a struct with a `str` field, a struct with a function field and an enum whose first variant carries `str` are all `E0425`, and the message names the field or the variant; `bool`, a struct of scalars, `Shape` and `Tag { Plain, Named(str) }` still zero |
+| A hole that existed before is closed | `nava check` used to accept `let names: [str] = array_zeros(2)` and the program segfaulted on `print(names[0])` | The same program is now `E0425` at compile time; the fixture is that program |
+| The grammar artefact agrees | `eval/grammar.py`, `tests/test_grammar.py` | The element-type production accepts a declared name and refuses the reserved words, unchanged; `E0425` is classified as semantic (the shape is fine, the element type is not), and `E0424` — the retired enum wall — is gone from both the code table and the classification |
+| The specification moved with the code | `LANGUAGE.md`, sections "Declaring a struct" and "Arrays of structs and slices" | The field rule now states why a `str` field is safe (immutable, never freed) and why an array field is not (one owner); a runnable `Person` example prints `36`, `37`, `Ada`; the element rule says "a value with no owner"; `array_zeros` documents the zero-value rule. `E0424` is retired with its reason recorded |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 509 registered tests, 11 tasks with 76 cases, 174 spec fixtures, 140 diagnostic codes`; suite **579 tests OK** (1135 subtests); 12 new tests in `tests/test_values.py` and three new negative fixtures (two replacing the fixtures whose restriction was lifted) |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 7 324 lines, 13 modules, 236 functions under `nava_lang/` after this increment |
+
+Negative controls: `array_zeros_str.nv` (`E0425`), `struct_field_array.nv`
+(`E0378`) and `enum_variant_array.nv` (`E0399`). The control that carries the
+claim is `array_zeros_str.nv`: it is the program that used to type-check and
+crash, and a compiler that keeps its old zeroing rule fails the test rather than
+the program. `tests/test_values.py::test_array_zeros_needs_a_zero_value` covers
+the four shapes of the same mistake — a bare `str`, a struct containing one, a
+function value, and an enum whose zeroed tag would carry text.
+
+Deliberately not done in N11a: an array field or payload (an owner inside a
+value, N11b), `Vec<T>`, `String` and the hash collections (N11c, N11d), strings
+that are freed at all (every `str` lives for the whole run in this increment,
+which is why a field is safe), and arrays of `f64` or of function values.
 
 #### Delivery record N10g (2026-10-28)
 
@@ -730,7 +772,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 7 269 Python lines and 235 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 7 324 Python lines and 236 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

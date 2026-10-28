@@ -150,7 +150,7 @@ CODES: dict[str, tuple[str, str]] = {
     "E0421": (Severity.ERROR, "only an array can be sliced"),
     "E0422": (Severity.ERROR, "a slice is a read-only view"),
     "E0423": (Severity.ERROR, "a slice cannot be passed as a `mut` parameter"),
-    "E0424": (Severity.ERROR, "an array element type must be a scalar or a struct"),
+    "E0425": (Severity.ERROR, "array_zeros needs a zero value"),
     "E0430": (Severity.ERROR, "a deferred block cannot leave the function"),
     "E0431": (Severity.ERROR, "no loop carries this label"),
     "E0432": (Severity.ERROR, "a label must name the loop it is written on"),

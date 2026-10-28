@@ -278,17 +278,24 @@ class Checker:
             self.check_field_types(struct)
 
     def check_field_types(self, struct: Struct) -> None:
-        """One struct's fields: a scalar, a struct or an enum, nothing owning."""
+        """One struct's fields: a value, or `str`, but nothing that owns storage.
+
+        A `str` field is safe because a string value in this compiler is
+        immutable and lives for the whole run: copying a struct that holds one
+        aliases a pointer that nobody frees and nobody writes. An array field is
+        different — the array has an owner and a release — so it waits for the
+        memory work (N11b).
+        """
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
-            if item.typ in ("str",) or is_array(item.typ):
+            if is_array(item.typ):
                 raise make(
                     "E0378",
                     f"a field of {struct.name} cannot have type {item.typ} yet",
                     item.loc, item.loc.advance(item.name),
-                    "edition 2 struct fields are i64, bool, f64, a struct or an enum; "
-                    "owning types such as str and arrays arrive with the memory work (N11)",
+                    "a field is a value and an array owns storage with a single owner; "
+                    "an owning field arrives with the memory work (N11b)",
                 )
             if self.is_template(item.typ):
                 raise make(
@@ -445,13 +452,13 @@ class Checker:
         """
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
-            if item in ("str",) or is_array(item):
+            if is_array(item):
                 raise make(
                     "E0399",
                     f"a variant field of {enum_name}::{variant.name} cannot be {item} yet",
                     *span,
-                    hint="edition 2 variant fields are i64, bool, f64, a struct or an enum; "
-                         "owning types arrive with the memory work (N11)",
+                    hint="a payload is a value and an array owns storage with a single "
+                         "owner; an owning payload arrives with the memory work (N11b)",
                 )
             if self.is_template(item):
                 raise make(
@@ -851,24 +858,58 @@ class Checker:
                 statement.value.loc,
             )
 
+    def zero_blocker(self, typ: str, path: str) -> str | None:
+        """Why all-zero bits are not a valid `typ`, or None when they are.
+
+        `array_zeros` hands the program elements it never wrote, so the element
+        type decides whether they are values at all. `0`, `false` and `0.0` are;
+        a `str` is not, because an all-zero `str` is a null pointer rather than
+        an empty string, and neither is a function value, because an all-zero
+        function pointer is not callable. A struct or an enum is zeroable when
+        everything inside its first (all-zero) shape is.
+        """
+        if typ in ("i64", "bool", "f64"):
+            return None
+        if typ == "str":
+            reason = "an all-zero str is a null pointer, not an empty string"
+            return reason if path == typ else f"{path} is str: {reason}"
+        if is_function_type(typ):
+            reason = "an all-zero function value is not callable"
+            return reason if path == typ else f"{path} is {typ}: {reason}"
+        struct = self.struct_of(typ)
+        if struct is not None:
+            for item in struct.fields:
+                blocker = self.zero_blocker(item.typ, f"{path}.{item.name}")
+                if blocker is not None:
+                    return blocker
+            return None
+        if self.is_enum(typ):
+            first = self.enum_decl_of(typ).variants[0]
+            for index, item in enumerate(first.types, start=1):
+                blocker = self.zero_blocker(item, f"{path}::{first.name}({index})")
+                if blocker is not None:
+                    return blocker
+            return None
+        return f"{path} is {typ}, which has no zero value"
+
     def check_element_type(self, typ: str, loc) -> None:
-        """Only a scalar or a struct may be an array element (E0424)."""
+        """An array element is a value with no owner: a scalar, a struct or an enum.
+
+        A struct and an enum are both copied by value and neither owns storage,
+        and a `str` inside one is an immortal pointer, so an array of them is an
+        array of plain values with one owner: the array itself.
+        """
         if not is_array(typ):
             return
         element = element_of(typ)
-        if element in SCALAR_ELEMENTS or self.is_struct(element):
+        if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
             return
-        if not self.is_enum(element) and element not in VALUE_TYPES:
-            raise make(
-                "E0203",
-                f"unknown type {element!r}; use i64, bool, str, or a declared struct",
-                loc,
-            )
+        # The parser refuses the reserved type words (`f64`, `void`) before this
+        # runs, so what is left is a name that declares nothing.
         raise make(
-            "E0424",
-            f"an array element type must be i64, bool, str or a struct, got {element}",
+            "E0203",
+            f"unknown type {element!r}; use i64, bool, str, a declared struct or enum",
             loc,
-            hint="an enum has no storage of its own until the memory work (N11)",
         )
 
     def slice(self, expr: Slice) -> str:
@@ -1788,8 +1829,20 @@ class Checker:
             if actual != "i64":
                 raise make("E0340", f"array_zeros expects an i64 length, got {actual}",
                            expr.args[0].loc)
-            # Zeroed storage is defined for every element type: `0`, `false`, an
-            # empty string, or a struct whose every field is zeroed.
+            # Zeroed storage is a value only when the element type says so: an
+            # all-zero `str` is a null pointer, not an empty string, and an
+            # all-zero function value cannot be called.
+            if is_array(expected):
+                blocker = self.zero_blocker(element_of(expected),
+                                            element_of(expected))
+                if blocker is not None:
+                    raise make(
+                        "E0425",
+                        f"array_zeros cannot create {expected}: {blocker}",
+                        expr.loc,
+                        hint="write a literal, or use an element type whose zero value "
+                             "is a value: i64, bool, f64, or a struct or enum of those",
+                    )
             return expected if is_array(expected) else "[i64]"
         if expr.module is None and expr.name in ("bytes_len", "chars_len"):
             if len(expr.args) != 1:

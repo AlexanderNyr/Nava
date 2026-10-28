@@ -66,7 +66,8 @@ class EnumFrontendTests(unittest.TestCase):
         self.assert_code("edition 2;\nenum E { A, A }\nfn main() {}\n",
                          "E0391", "twice")
         self.assert_code("edition 2;\nenum E { }\nfn main() {}\n", "E0396", "no variants")
-        self.assert_code("edition 2;\nenum E { A(str) }\nfn main() {}\n", "E0399", "str")
+        # A string payload is a value (N11a); an array payload owns storage.
+        self.assertTrue(compile_source("edition 2;\nenum E { A(str) }\nfn main() {}\n").code)
         self.assert_code("edition 2;\nenum E { A([i64]) }\nfn main() {}\n", "E0399")
         self.assert_code("edition 2;\nenum E { A(Missing) }\nfn main() {}\n", "E0203")
 

@@ -1,8 +1,0 @@
-edition 2;
-
-enum Shape { Circle(i64), Dot }
-
-fn main() {
-    let shapes: [Shape] = [Shape::Dot]
-    print(len(shapes))
-}

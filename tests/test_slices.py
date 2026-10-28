@@ -90,10 +90,12 @@ fn main() {
 """
         self.assert_code(text, "E0423", "borrow cannot be handed on")
 
-    def test_an_array_of_enums_is_refused_for_now(self):
+    def test_an_array_of_enums_is_a_value_array(self):
+        # N11a: an enum is a value with no owner, so an array of them is an
+        # array of plain values — the array is the only owner.
         text = ("edition 2;\nenum Shape { Circle(i64), Dot }\nfn main() {\n"
                 "    let shapes: [Shape] = [Shape::Dot]\n    print(len(shapes))\n}\n")
-        self.assert_code(text, "E0424", "got Shape")
+        self.assertTrue(compile_source(text).code)
         # `f64` and `void` stay shape errors: no declared name could make them
         # structs, so they are refused before a symbol table exists.
         self.assert_code("fn main() { let a: [f64] = [1.5] }", "E0206", "got 'f64'")

@@ -134,12 +134,15 @@ class GenericFrontendTests(unittest.TestCase):
                          "}\n",
                          "E0311", "expected Pair(bool), got Pair(i64)")
 
-    def test_a_struct_instance_cannot_own_a_string(self):
-        # The restriction is the one every struct has, not one about generics:
-        # a copied struct would share the string's storage.
-        self.assert_code("edition 2;\n" + PAIR +
-                         "fn main() { let p = Pair(str)(first: \"a\", second: \"b\") }\n",
-                         "E0378", "cannot have type str")
+    def test_a_struct_instance_may_hold_a_string(self):
+        # A string is immutable and nobody frees it, so an instance holding one
+        # is a copy like any other (N11a). An array field is still refused.
+        self.assertTrue(compile_source(
+            "edition 2;\n" + PAIR +
+            "fn main() {\n"
+            "    let p = Pair(str)(first: \"a\", second: \"b\")\n"
+            "    print(p.first)\n"
+            "}\n").code)
 
     def test_an_instantiation_cannot_be_an_array_element(self):
         self.assert_code("edition 2;\n" + PAIR +

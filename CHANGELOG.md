@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+N11a: strings and enums as values, and arrays of every value.
+
+- A `str` is now allowed as a struct field and as a variant payload. A string
+  value in this compiler is immutable and lives for the whole run — nothing
+  frees it and nothing writes it — so copying a struct that holds one aliases a
+  pointer that cannot matter, and the old `E0378`/`E0399` walls on `str` are
+  gone. An array field and an array payload stay refused, because an array owns
+  storage with exactly one owner (N11b).
+- An enum is an array element: `[Shape]`, with literals, indexing, element
+  writes, `for`, slices, `mut [Shape]` parameters and `array_zeros`. The retired
+  `E0424` ("an array element may not be an enum") goes with the restriction.
+- `array_zeros(n)` is allowed only when all-zero bits are a *value* of the
+  element type (`E0425`): `0`, `false`, `0.0`, a struct of those, or an enum
+  whose first variant is. This closes a hole that predates the increment —
+  `let names: [str] = array_zeros(2)` used to type-check and then segfault on
+  `print(names[0])`; the case is now a negative fixture.
+- Guide, grammar artefact and measurements moved with the language where the
+  text changed; `INDEPENDENCE.md` records N11a and splits N11 into four
+  increments.
+
 N10g: function values — a function as a value with a checked signature.
 
 - A function type is written `fn(i64) -> i64`, or `fn() -> void` when it returns

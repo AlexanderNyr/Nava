@@ -808,13 +808,38 @@ struct Point {
 }
 ```
 
-A struct is a value with named fields. In edition 2 a field type is `i64`,
-`bool`, `f64`, or another struct; `str` and array fields are refused with
-`E0378` because both carry ownership, which edition 2 does not yet define — they
-arrive with the memory work, not by accident. A struct name is shared by every
-module of the program (`E0380` for a duplicate), and a struct may not contain
-itself directly or through another struct (`E0377`), because a struct is stored
-inline and a recursive type would have no finite size.
+A struct is a value with named fields. A field type is `i64`, `bool`, `f64`,
+`str`, a function type, or another struct or enum. A `str` field is allowed
+because a string value is immutable and lives for the whole run: copying the
+struct copies the pointer to a string nobody writes and nobody frees. An **array
+field** is refused with `E0378`, because an array owns storage with exactly one
+owner and a copied struct would give it two — owning fields arrive with the
+memory work (N11b), not by accident. A struct name is shared by every module of
+the program (`E0380` for a duplicate), and a struct may not contain itself
+directly or through another struct (`E0377`), because a struct is stored inline
+and a recursive type would have no finite size. A variant payload follows the
+same rule: a value is allowed, an array is `E0399`.
+
+```nava
+edition 2;
+
+struct Person {
+    name: str,
+    age: i64
+}
+
+fn main() {
+    let ada: Person = Person(name: "Ada", age: 36)
+    let copy = ada
+    copy.age = 37
+    print(ada.age)
+    print(copy.age)
+    print(copy.name)
+}
+```
+
+Output: `36`, `37`, `Ada`. The copy is a copy of the struct: writing `copy.age`
+does not touch `ada`, and both names point at the same immutable string.
 
 ### Constructing a value
 
@@ -991,11 +1016,18 @@ type           = ... | "[" type_name "]" ;      # edition 2: a struct element
 slice          = IDENT "[" expression ".." expression "]" ;
 ```
 
-An array element is `i64`, `bool`, `str` or a **struct**; `f64`, `void`, another
-array and an enum are refused (`E0206` for the shapes no symbol table could
-allow, `E0424` for an enum, `E0203` for a name that is not declared). Zeroed
-storage is defined for every element type, so `array_zeros(n)` also works for a
-struct array: every field is its zero.
+An array element is a **value with no owner**: `i64`, `bool`, `str`, a struct or
+an enum. `f64`, `void` and another array are refused (`E0206` for the shapes no
+symbol table could allow, `E0203` for a name that is not declared). An enum is a
+value like a struct — its payload is stored inline — so `[Shape]` is an array of
+plain values and the array stays the single owner.
+
+`array_zeros(n)` gives every element its **zero value**, which exists only when
+all-zero bits are a value of the element type: `0`, `false`, `0.0`, a struct
+whose every field is zeroable, or an enum whose first variant is. An all-zero
+`str` is a null pointer rather than an empty string and an all-zero function
+value cannot be called, so `array_zeros` refuses those element types (`E0425`)
+instead of handing the program a value that is not one.
 
 ```nava
 edition 2;
@@ -1367,7 +1399,7 @@ never changes meaning; a new condition gets a new code.
 | `E0375` | error | duplicate field | `tests/fixtures/negative/struct_duplicate_field.nv` |
 | `E0376` | error | missing field in a construction | `tests/fixtures/negative/struct_missing_field.nv` |
 | `E0377` | error | a struct contains itself | `tests/fixtures/negative/struct_recursive.nv` |
-| `E0378` | error | unsupported struct field type | `tests/fixtures/negative/struct_field_str.nv` |
+| `E0378` | error | unsupported struct field type | `tests/fixtures/negative/struct_field_array.nv` |
 | `E0379` | error | member access on a non-struct value | `tests/fixtures/negative/struct_member_scalar.nv` |
 | `E0380` | error | duplicate struct | `tests/fixtures/negative/struct_duplicate.nv` |
 | `E0381` | error | named fields where they are not allowed | `tests/fixtures/negative/struct_positional.nv`, `struct_named_function.nv` |
@@ -1380,7 +1412,7 @@ never changes meaning; a new condition gets a new code.
 | `E0396` | error | `match` is not exhaustive, or has no arms | `tests/fixtures/negative/match_not_exhaustive.nv` |
 | `E0397` | error | duplicate match arm | `tests/fixtures/negative/match_duplicate_arm.nv` |
 | `E0398` | error | unreachable match arm after `_` | `tests/fixtures/negative/match_arm_after_wildcard.nv` |
-| `E0399` | error | unsupported enum variant field type | `tests/fixtures/negative/enum_variant_str.nv` |
+| `E0399` | error | unsupported enum variant field type | `tests/fixtures/negative/enum_variant_array.nv` |
 | `E0410` | error | `?` expects an Option or a Result | `tests/fixtures/negative/propagate_not_option.nv` |
 | `E0411` | error | `?` cannot propagate into this function's return type | `tests/fixtures/negative/propagate_in_void.nv`, `propagate_failure_mismatch.nv` |
 | `E0412` | error | wrong number of type arguments | `tests/fixtures/negative/result_wrong_arity.nv` |
@@ -1391,7 +1423,7 @@ never changes meaning; a new condition gets a new code.
 | `E0421` | error | only an array can be sliced | `tests/fixtures/negative/slice_not_an_array.nv` |
 | `E0422` | error | a slice is read-only | `tests/fixtures/negative/slice_read_only.nv` |
 | `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
-| `E0424` | error | an array element may not be an enum | `tests/fixtures/negative/array_of_enum.nv` |
+| `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
 | `E0432` | error | a label must name the loop it is written on | `tests/fixtures/negative/label_not_a_loop.nv` |

@@ -461,7 +461,7 @@ REGISTERED_TESTS = {
     "GenericFrontendTests": {
         "test_a_bare_template_is_not_a_type",
         "test_a_generic_enum_template_is_not_a_type_either",
-        "test_a_struct_instance_cannot_own_a_string",
+        "test_a_struct_instance_may_hold_a_string",
         "test_a_template_can_be_instantiated_with_a_struct_and_an_enum",
         "test_a_type_argument_list_comes_first",
         "test_a_type_parameter_is_declared_once",
@@ -482,6 +482,23 @@ REGISTERED_TESTS = {
         "test_identity_works_for_every_scalar_type",
         "test_instances_nest",
         "test_the_same_instance_is_generated_once",
+    },
+    # --- N11a: values that hold text, arrays of every value ------------------
+    "ValueFrontendTests": {
+        "test_a_string_is_a_field_and_a_payload",
+        "test_a_zeroable_element_type_still_works",
+        "test_an_array_field_and_an_array_payload_are_still_refused",
+        "test_an_enum_is_an_array_element",
+        "test_an_undeclared_element_name_is_an_unknown_type",
+        "test_array_zeros_needs_a_zero_value",
+    },
+    "ValueRuntimeTests": {
+        "test_a_mutable_array_of_enums_is_written_in_place",
+        "test_a_string_field_copies_while_the_string_is_shared",
+        "test_a_string_payload_matches",
+        "test_a_struct_with_text_travels_through_functions_and_arrays",
+        "test_an_array_of_enums_is_written_and_read",
+        "test_an_array_of_enums_slices_and_is_passed",
     },
     # --- N10g: function values and function pointers -------------------------
     "FunctionValueFrontendTests": {
@@ -517,7 +534,7 @@ REGISTERED_TESTS = {
         "test_a_slice_composes",
         "test_a_slice_is_read_only",
         "test_a_slice_needs_edition_two",
-        "test_an_array_of_enums_is_refused_for_now",
+        "test_an_array_of_enums_is_a_value_array",
         "test_an_unknown_element_name_is_reported_as_an_unknown_type",
         "test_only_an_array_can_be_sliced",
         "test_struct_arrays_keep_the_array_rules",
@@ -818,13 +835,15 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_structs  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
     import test_study  # noqa: PLC0415
+    import test_values  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
                    test_float, test_functions, test_generics, test_grammar, test_guides,
                    test_local_model_server,
                    test_modules, test_nava, test_plan, test_registry, test_release,
-                   test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib, test_study):
+                   test_results, test_sandbox, test_slices, test_spec, test_structs, test_stdlib,
+                   test_study, test_values):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -880,6 +899,7 @@ def check_skip_state() -> list[str]:
     import test_generics  # noqa: PLC0415
     import test_modules  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
+    import test_values  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -889,6 +909,7 @@ def check_skip_state() -> list[str]:
                                (test_stdlib, "SortTests"),
                                (test_stdlib, "TextTests"),
                                (test_functions, "FunctionValueRuntimeTests"),
+                               (test_values, "ValueRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

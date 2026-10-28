@@ -81,7 +81,7 @@ GRAMMAR_ACCEPTS = frozenset(
      | {"E0415"}
      # Slices and arrays of structs: the shape is fine, the types and the
      # ownership rules are not, so the checker is the authority.
-     | {f"E042{index}" for index in range(0, 5)}
+     | {f"E042{index}" for index in range(0, 4)} | {"E0425"}
      # A jump that names no enclosing loop, and a jump out of a deferred block.
      | {"E0430", "E0431", "E0433"}
      # Generics: a duplicate parameter, a template used as a type, an argument

@@ -1,7 +1,7 @@
 edition 2;
 
-enum Message {
-    Text(str)
+struct Bag {
+    items: [i64],
 }
 
 fn main() {
