@@ -1,0 +1,10 @@
+edition 2;
+
+enum Shape {
+    Dot
+}
+
+fn main() {
+    let s = Shape::Circle(1)
+    print(1)
+}

@@ -79,7 +79,7 @@ The grammar below is the whole language. Statements are separated by a newline
 or `;`; a separator is not required before `}`.
 
 ```text
-program        = { import } { function } end_of_file ;
+program        = [ edition ] { import } { function } end_of_file ;
 import         = "import" IDENT ;
 function       = "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
 parameters     = parameter { "," parameter } ;
@@ -87,8 +87,8 @@ parameter      = IDENT ":" [ "mut" ] type ;
 type           = "i64" | "bool" | "str" | "void"
                | "[" ( "i64" | "bool" | "str" ) "]" ;
 block          = "{" { separator } { statement { separator } } "}" ;
-statement      = let | assignment | element_assignment | if_statement
-               | while_statement | for_statement | break_statement
+statement      = let | assignment | element_assignment | member_assignment
+               | if_statement | while_statement | for_statement | break_statement
                | continue_statement | return_statement | call ;
 
 let            = "let" IDENT [ ":" type ] "=" expression ;
@@ -110,9 +110,10 @@ equality       = ordering { ( "==" | "!=" ) ordering } ;
 ordering       = additive { ( "<" | "<=" | ">" | ">=" ) additive } ;
 additive       = multiplicative { ( "+" | "-" ) multiplicative } ;
 multiplicative = unary { ( "*" | "/" | "%" ) unary } ;
-unary          = ( "-" | "!" ) unary | primary ;
+unary          = ( "-" | "!" ) unary | postfix ;
 primary        = NUMBER | STRING | "true" | "false" | "(" expression ")"
-               | IDENT | call | element | array_literal ;
+               | IDENT | call | element | array_literal | construction ;
+postfix        = primary { "." IDENT } ;
 element        = IDENT "[" expression "]" ;
 array_literal  = "[" [ expression { "," expression } ] "]" ;
 call           = [ IDENT "::" ] IDENT "(" [ arguments ] ")" ;
@@ -779,6 +780,160 @@ fn main() {
 - `print(value)` also accepts `f64`.
 - All twelve names are reserved: they cannot be redefined (`E0301`).
 
+## Edition 2: structs
+
+A file opts into edition 2 with `edition 2;` as its first statement. An edition-1
+file is unchanged: every program that compiled before still compiles, with the
+same diagnostics. A file without the declaration is edition 1, and the
+edition-2 constructs below are then refused with `E0372` and a hint that names
+the declaration.
+
+```text
+edition        = "edition" NUMBER ";" ;
+struct         = "struct" IDENT "{" { separator } [ field { separator } ] "}" ;
+field          = IDENT ":" type { "," IDENT ":" type } ;
+construction   = IDENT "(" IDENT ":" expression { "," IDENT ":" expression } ")" ;
+member         = primary "." IDENT ;
+member_assign  = IDENT "." IDENT "=" expression ;
+```
+
+### Declaring a struct
+
+```
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+```
+
+A struct is a value with named fields. In edition 2 a field type is `i64`,
+`bool`, `f64`, or another struct; `str` and array fields are refused with
+`E0378` because both carry ownership, which edition 2 does not yet define — they
+arrive with the memory work, not by accident. A struct name is shared by every
+module of the program (`E0380` for a duplicate), and a struct may not contain
+itself directly or through another struct (`E0377`), because a struct is stored
+inline and a recursive type would have no finite size.
+
+### Constructing a value
+
+```
+let p = Point(x: 3, y: 4)
+```
+
+Construction names every field exactly once, in any order (`E0376` for a missing
+field, `E0375` for one given twice, `E0374` for an unknown one, `E0311` for a
+wrong type). The syntax is a call with named fields rather than `Point { ... }`
+on purpose: a `{` after an expression would be ambiguous with the block that
+follows a condition or a range, so `if p { }` and `for i in 0..n { }` would stop
+being readable — and a model writing code should not have to know which
+positions are exceptions.
+
+### Reading and writing fields
+
+```
+let dx = p.to.x - p.from.x
+p.x = 0
+```
+
+`p.x` reads a field (`E0379` if the value is not a struct, `E0374` if the struct
+has no such field), and `p.x = value` writes one; both are checked. A field of a
+loop variable cannot be written, for the same reason the variable itself cannot
+(`E0351`).
+
+### Copying
+
+A struct is copied by assignment, as a parameter and as a return value. The copy
+is a value: writing to the copy is not visible through the original.
+
+```
+let a = Counter(value: 1)
+let b = a
+b.value = 99       # a.value is still 1
+```
+
+Nothing is shared and nothing is freed: a struct field cannot own storage until
+the owning types arrive (see `E0378`). This is why a struct is not printable
+(`print` accepts `i64`, `bool`, `f64` and `str`, so `E0323` applies) and cannot
+be compared with `==` (`E0320`): both would need a definition of equality or a
+format that edition 2 does not have. They are the next edition's business, and
+the compiler says so instead of guessing.
+
+Struct declarations are module-wide, not per-file with a visibility keyword: a
+`pub`-style keyword and cross-module visibility are part of the later stages of
+the independence plan, and the current rule is stated here rather than implied.
+
+### Enums and `match`
+
+```
+edition 2;
+
+enum Shape {
+    Dot,
+    Circle(i64),
+    Rect(i64, i64)
+}
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Dot => { return 0 }
+        Shape::Circle(r) => { return 3 * r * r }
+        Shape::Rect(w, h) => { return w * h }
+    }
+}
+```
+
+```text
+enum_decl      = "enum" IDENT "{" { separator } variant { separator } "}" ;
+variant        = IDENT [ "(" type { "," type } ")" ] ;
+variant_value  = IDENT "::" IDENT "(" [ expression { "," expression } ] ")" ;
+match_stmt     = "match" expression "{" { separator } arm { separator } "}" ;
+arm            = "=>" block | pattern "=>" block ;
+pattern        = "_" | IDENT "::" IDENT [ "(" IDENT { "," IDENT } ")" ] ;
+```
+
+An enum is a type whose values are exactly its variants. A variant carries a
+fixed, positional list of fields, each `i64`, `bool`, `f64`, a struct or another
+enum (`E0399` for `str` and arrays, which wait for the memory work, and `E0203`
+for an unknown name). Variant names are unique inside their enum (`E0391`) and
+`struct`, `enum` and builtin type names share one namespace (`E0390`).
+
+A value is built with its variants, always qualified: `Shape::Circle(2)`. All
+fields are given, positionally, with their declared types (`E0394`, `E0311`).
+
+`match` is a **statement**. Every arm names a variant of the enum —
+
+```
+match cmd {
+    Cmd::Add(a, b) => { total = total + a + b }
+    Cmd::Neg(v) => { total = total - v }
+    _ => { }                    # the wildcard: no bindings, matches anything
+}
+```
+
+— and the checker requires the arms to cover every variant, either by naming
+each one or by adding `_` (`E0396`). Naming a variant twice is `E0397`, an arm
+after `_` is unreachable and is `E0398`, an unqualified pattern such as `Dot` is
+`E0392` because a variant is only in scope through its enum, and a pattern must
+bind exactly the variant's fields (`E0394`).
+
+Semantics, stated because they are observable:
+
+* the scrutinee is evaluated **once**, before the first arm, and the arms are
+  tested in source order;
+* a binding is a **copy** of the field, with the declared type, scoped to its
+  arm's block; assigning to it does not change the matched value;
+* a `match` whose arms all return counts as a return for `E0306`, and
+  exhaustiveness is checked before that analysis, so `fn f(s: Shape) -> i64 {
+  match s { ... } }` needs no trailing `return`;
+* an arm that matches nothing observable is still an arm: `Shape::Dot => { }`
+  leaves the program unchanged.
+
+`match` is not an expression in edition 2. There is no `Option`/`Result` and no
+`?`, no guards, no literal or range patterns and no matching on `i64` values:
+those are N10c and later, and nothing above claims otherwise.
+
 ## Diagnostics
 
 Errors are reported with a stable code, a source range and an optional hint.
@@ -840,9 +995,33 @@ never changes meaning; a new condition gets a new code.
 |---|---|---|---|
 | `E0201` | error | unexpected token | `tests/fixtures/negative/parse_expected_token.nv` |
 | `E0202` | error | missing statement separator | `tests/fixtures/negative/parse_missing_separator.nv` |
-| `E0203` | error | unknown type (also `[void]` and `[[i64]]`) | `tests/fixtures/negative/parse_unknown_type.nv`, `array_nested_type.nv`, `array_of_void.nv` |
+| `E0203` | error | unknown type | `tests/fixtures/negative/parse_unknown_type.nv` |
+| `E0206` | error | an array element type is not allowed (`[void]`, `[f64]`, `[[i64]]`, `[Name]`) | `tests/fixtures/negative/array_nested_type.nv`, `array_of_void.nv`, `array_of_f64.nv` |
 | `E0204` | error | unclosed block | `tests/fixtures/negative/parse_unclosed_block.nv` |
 | `E0205` | error | expected an expression | `tests/fixtures/negative/parse_expected_expression.nv` |
+
+| `E0370` | error | the edition declaration is not the first statement | `tests/fixtures/negative/edition_not_first.nv` |
+| `E0371` | error | unknown edition | `tests/fixtures/negative/edition_unknown.nv` |
+| `E0372` | error | an edition-2 construct in an edition-1 file | `tests/fixtures/negative/edition_one_struct.nv` |
+| `E0373` | error | unknown struct | `tests/fixtures/negative/struct_unknown.nv` |
+| `E0374` | error | unknown field | `tests/fixtures/negative/struct_unknown_field.nv` |
+| `E0375` | error | duplicate field | `tests/fixtures/negative/struct_duplicate_field.nv` |
+| `E0376` | error | missing field in a construction | `tests/fixtures/negative/struct_missing_field.nv` |
+| `E0377` | error | a struct contains itself | `tests/fixtures/negative/struct_recursive.nv` |
+| `E0378` | error | unsupported struct field type | `tests/fixtures/negative/struct_field_str.nv` |
+| `E0379` | error | member access on a non-struct value | `tests/fixtures/negative/struct_member_scalar.nv` |
+| `E0380` | error | duplicate struct | `tests/fixtures/negative/struct_duplicate.nv` |
+| `E0381` | error | named fields where they are not allowed | `tests/fixtures/negative/struct_positional.nv`, `struct_named_function.nv` |
+| `E0390` | error | duplicate enum | `tests/fixtures/negative/enum_duplicate.nv` |
+| `E0391` | error | duplicate enum variant | `tests/fixtures/negative/enum_duplicate_variant.nv` |
+| `E0392` | error | a variant pattern needs the enum name | `tests/fixtures/negative/match_pattern_unqualified.nv` |
+| `E0393` | error | unknown enum variant | `tests/fixtures/negative/enum_unknown_variant.nv` |
+| `E0394` | error | wrong number of variant fields (construction or pattern) | `tests/fixtures/negative/enum_variant_arity.nv`, `match_binding_arity.nv` |
+| `E0395` | error | `match` expects an enum value | `tests/fixtures/negative/match_not_an_enum.nv` |
+| `E0396` | error | `match` is not exhaustive, or has no arms | `tests/fixtures/negative/match_not_exhaustive.nv` |
+| `E0397` | error | duplicate match arm | `tests/fixtures/negative/match_duplicate_arm.nv` |
+| `E0398` | error | unreachable match arm after `_` | `tests/fixtures/negative/match_arm_after_wildcard.nv` |
+| `E0399` | error | unsupported enum variant field type | `tests/fixtures/negative/enum_variant_str.nv` |
 
 **Types and semantics**
 
@@ -1008,6 +1187,12 @@ indexing, string concatenation, string input, mathematical functions such as
 module visibility keyword, or more than one file per module. Module imports and
 a capability-limited file API are implemented, as described above; a package
 manager is not.
+Edition 2 adds structs, enums and `match`; it does not add `Option`/`Result`,
+`?`, generics, generic containers, string fields, arrays of structs, struct or
+enum equality, printing a struct or an enum, or module visibility keywords.
+Those are N10c and later in `INDEPENDENCE.md`, and nothing here is a promise
+that they exist today.
+
 Array length is fixed at creation and the element types are exactly `i64`,
 `bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated
 C with `nava emit-c`; building requires C11 and the C standard library. GCC and

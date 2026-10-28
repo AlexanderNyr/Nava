@@ -167,9 +167,9 @@ class ArrayFrontendTests(unittest.TestCase):
         self.assert_code("E0316", "fn main() { let a: [i64] = [1]; if a {} }")
 
     def test_array_types_are_restricted(self):
-        self.assert_code("E0203", "fn main() { let a: [[i64]] = [] }",
+        self.assert_code("E0206", "fn main() { let a: [[i64]] = [] }",
                          "cannot contain another array")
-        self.assert_code("E0203", "fn main() { let a: [void] = [] }",
+        self.assert_code("E0206", "fn main() { let a: [void] = [] }",
                          "must be i64, bool, or str")
         self.assert_code("E0330", "fn f(a: [i64], b: [i64]) -> [i64] { return a } fn main() {}",
                          "cannot return an array")

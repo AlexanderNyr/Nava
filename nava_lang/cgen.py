@@ -5,8 +5,9 @@ import os
 from . import limits, runtime
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
-    Float, For, Function, If, Index, IndexAssign, Let, Number, Program, Range,
-    Return, String, Unary, Variable, While,
+    Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
+    Number, Program, Range, Return, String, StructLiteral, Unary, Variable,
+    VariantValue, While,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -621,6 +622,22 @@ class CGenerator:
         #: `continue` jump out of that frame, so its arrays must be released
         #: explicitly before the jump.
         self.loops: list[int] = []
+        #: Declared structs by name; the C type of one is its `cname`.
+        self.structs: dict[str, object] = {struct.name: struct for struct in program.structs}
+        #: Declared enums by name; a variant value is a compound literal of one.
+        self.enums: dict[str, object] = {decl.name: decl for decl in program.enums}
+
+    def ctype(self, typ: str) -> str:
+        """The C type of a Nava type: a scalar, an array handle or a struct."""
+        if typ in C_TYPES:
+            return C_TYPES[typ]
+        struct = self.structs.get(typ)
+        if struct is not None:
+            return struct.cname
+        decl = self.enums.get(typ)
+        if decl is None:
+            raise AssertionError(f"no C type for {typ!r}")
+        return decl.cname
 
     def line(self, text: str = "") -> None:
         self.lines.append("    " * self.indent + text)
@@ -628,15 +645,93 @@ class CGenerator:
     def temp(self, typ: str, initializer: str) -> str:
         name = f"nv_t{self.temp_index}"
         self.temp_index += 1
-        self.line(f"{C_TYPES[typ]} {name} = {initializer};")
+        self.line(f"{self.ctype(typ)} {name} = {initializer};")
         return name
 
-    @staticmethod
-    def signature(function: Function) -> str:
-        params = ", ".join(f"{C_TYPES[p.typ]} {p.symbol.cname}" for p in function.params) or "void"
-        return f"static {C_TYPES[function.returns]} {function.cname}({params})"
+    def signature(self, function: Function) -> str:
+        params = ", ".join(f"{self.ctype(p.typ)} {p.symbol.cname}"
+                           for p in function.params) or "void"
+        return f"static {self.ctype(function.returns)} {function.cname}({params})"
+
+    def dependencies(self, name: str) -> list[str]:
+        """Declared types this declaration needs complete, in source order."""
+        struct = self.structs.get(name)
+        if struct is not None:
+            names = [item.typ for item in struct.fields]
+        else:
+            names = [typ for choice in self.enums[name].variants for typ in choice.types]
+        return [item for item in names if item in self.structs or item in self.enums]
+
+    def emit_structs(self) -> None:
+        """Every declaration, dependencies first.
+
+        A struct and a variant payload are copied by value, so C needs the
+        complete type before it can be used as a field, and the two kinds may
+        depend on each other: `struct Tagged { kind: Kind, value: i64 }` and
+        `enum Item { TaggedItem(Tagged), Empty }`. The checker has already
+        rejected a cycle, which is what makes this ordering terminate.
+        """
+        emitted: set[str] = set()
+
+        def emit_type(name: str) -> None:
+            if name in emitted:
+                return
+            for dependency in self.dependencies(name):
+                emit_type(dependency)
+            emitted.add(name)
+            if name in self.enums:
+                self.emit_enum(self.enums[name])
+            else:
+                self.emit_struct(self.structs[name])
+
+        for declaration in list(self.program.structs) + list(self.program.enums):
+            emit_type(declaration.name)
+        if self.program.structs or self.program.enums:
+            self.line()
+
+    def emit_struct(self, struct) -> None:
+        """One `typedef struct` per declaration, with the field order as written."""
+        if struct.fields:
+            self.line(f"typedef struct {struct.cname} {{")
+            self.indent += 1
+            for item in struct.fields:
+                self.line(f"{self.ctype(item.typ)} {item.name};")
+            self.indent -= 1
+            self.line(f"}} {struct.cname};")
+        else:
+            # C has no empty struct; a single padding byte keeps the type
+            # usable and `sizeof` non-zero.
+            self.line(f"typedef struct {struct.cname} {{ unsigned char _unused; }} "
+                      f"{struct.cname};")
+
+    def emit_enum(self, decl) -> None:
+        """A tag plus a union of payload structs, one type per enum.
+
+        The tag is the variant's position in the declaration, so a `match` is a
+        comparison against a constant. Unit variants contribute no member: an
+        empty C struct is not portable C, and a union needs at least one member,
+        so a unit-only enum still gets a one-byte placeholder.
+        """
+        payloads = [choice for choice in decl.variants if choice.types]
+        if not payloads:
+            self.line(f"typedef struct {decl.cname} {{ int32_t _tag; }} {decl.cname};")
+            return
+        self.line(f"typedef struct {decl.cname} {{")
+        self.indent += 1
+        self.line("int32_t _tag;")
+        self.line("union {")
+        self.indent += 1
+        for choice in payloads:
+            fields = " ".join(f"{self.ctype(typ)} _f{index};"
+                              for index, typ in enumerate(choice.types))
+            self.line(f"struct {{ {fields} }} _v_{choice.name};")
+        self.indent -= 1
+        self.line("} _payload;")
+        self.indent -= 1
+        self.line(f"}} {decl.cname};")
 
     def generate(self) -> str:
+        self.emit_structs()
         for function in self.program.functions:
             self.line(self.signature(function) + ";")
         self.line()
@@ -748,7 +843,7 @@ class CGenerator:
             if isinstance(statement, Let):
                 value = (self.new_array(statement.value)
                          if statement.symbol.typ in ARRAY_TAG else self.expression(statement.value))
-                self.line(f"{C_TYPES[statement.symbol.typ]} {statement.symbol.cname} = {value};")
+                self.line(f"{self.ctype(statement.symbol.typ)} {statement.symbol.cname} = {value};")
                 if statement.symbol.typ in ARRAY_TAG:
                     self.owned[-1].append((statement.symbol.cname, statement.symbol.typ))
             elif isinstance(statement, IndexAssign):
@@ -763,6 +858,12 @@ class CGenerator:
             elif isinstance(statement, Assign):
                 value = self.expression(statement.value)
                 self.line(f"{statement.symbol.cname} = {value};")
+            elif isinstance(statement, Match):
+                self.match_statement(statement)
+            elif isinstance(statement, MemberAssign):
+                target = self.member_path(statement.target)
+                value = self.expression(statement.value)
+                self.line(f"{target} = {value};")
             elif isinstance(statement, ExprStmt):
                 self.expression(statement.expr)
             elif isinstance(statement, Return):
@@ -835,7 +936,7 @@ class CGenerator:
                 high = self.expression(iterable.end)
                 low_name = self.temp("i64", low)
                 high_name = self.temp("i64", high)
-                self.line(f"{C_TYPES['i64']} {symbol.cname} = {low_name};")
+                self.line(f"{self.ctype('i64')} {symbol.cname} = {low_name};")
                 self.line(f"for (; {symbol.cname} < {high_name}; "
                           f"{symbol.cname} = nv_add({symbol.cname}, INT64_C(1))) {{")
                 self.indent += 1
@@ -850,7 +951,7 @@ class CGenerator:
                 self.line(f"for (; {index_name} < {end_name}; "
                           f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
                 self.indent += 1
-                self.line(f"{C_TYPES[symbol.typ]} {symbol.cname} = "
+                self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
                           f"nv_arr_{tag}_get({source}, {index_name});")
                 self.loop_body(statement.body)
                 self.indent -= 1
@@ -859,6 +960,84 @@ class CGenerator:
             # Arrays that the iterable expression created stay alive for the
             # whole loop and are released with the statement.
             self.temporaries = saved + self.temporaries
+
+    def match_statement(self, statement: Match) -> None:
+        """A chain of `if` tests on the tag, one branch per arm.
+
+        The subject is materialised into a temporary first: the documented rule
+        is that a `match` evaluates its value once, and an arm may call a
+        function. A binding is a copy of the payload field, which is what the
+        checker promised when it declared it as a typed local.
+        """
+        subject_type = statement.value.typ
+        subject = self.temp(subject_type, self.expression(statement.value))
+        opened = False
+        for arm in statement.arms:
+            if arm.variant is None:
+                if not opened:
+                    self.line("if (true) {")
+                else:
+                    self.indent -= 1
+                    self.line("} else {")
+                    self.indent += 1
+                self.indent += 1
+                self.block(arm.body)
+                self.indent -= 1
+                break
+            choice = arm.choice
+            condition = f"{subject}._tag == {choice.tag}"
+            if not opened:
+                self.line(f"if ({condition}) {{")
+                opened = True
+            else:
+                self.indent -= 1
+                self.line(f"}} else if ({condition}) {{")
+                self.indent += 1
+            self.indent += 1
+            for index, (symbol, typ) in enumerate(zip(arm.symbols, choice.types)):
+                self.line(f"{self.ctype(typ)} {symbol.cname} = {subject}._payload."
+                          f"_v_{choice.name}._f{index};")
+            self.block(arm.body)
+            self.indent -= 1
+        if opened:
+            self.indent -= 1
+            self.line("}")
+
+    def member_path(self, expr: Member) -> str:
+        """`p.q.x` as a C lvalue, with every step parenthesised."""
+        steps: list[str] = []
+        while isinstance(expr, Member):
+            steps.append(expr.field)
+            expr = expr.base
+        base = self.expression(expr)
+        return "".join([f"({base})"] + [f".{step}" for step in reversed(steps)])
+
+    def variant_value(self, expr: VariantValue) -> str:
+        """`Shape::Circle(3)` as a compound literal with the tag set."""
+        decl = expr.declared
+        choice = expr.choice
+        assert decl is not None and choice is not None
+        values = [self.temp(typ, self.expression(argument))
+                  for argument, typ in zip(expr.args, choice.types)]
+        fields = ", ".join(f"._f{index} = {value}" for index, value in enumerate(values))
+        payload = f" ._payload = {{ ._v_{choice.name} = {{ {fields} }} }}," if values else ""
+        return f"({decl.cname}){{ ._tag = {choice.tag},{payload} }}"
+
+    def struct_literal(self, expr: StructLiteral) -> str:
+        """`Point(x: 1, y: 2)` as a C compound literal with every field named.
+
+        Each field value is materialised into a temporary before the literal is
+        built: a C initializer list has unspecified evaluation order, and Nava
+        documents left-to-right evaluation of the construction's arguments.
+        """
+        struct = expr.struct
+        assert struct is not None
+        values = []
+        for name, value in expr.fields:
+            declared = next(item.typ for item in struct.fields if item.name == name)
+            values.append((name, self.temp(declared, self.expression(value))))
+        fields = ", ".join(f".{name} = {temporary}" for name, temporary in values)
+        return f"({struct.cname}){{ {fields} }}"
 
     def expression(self, expr: Expr) -> str | None:
         if isinstance(expr, Number):
@@ -873,6 +1052,12 @@ class CGenerator:
             return "true" if expr.value else "false"
         if isinstance(expr, Variable):
             return expr.symbol.cname
+        if isinstance(expr, Member):
+            return self.member_path(expr)
+        if isinstance(expr, StructLiteral):
+            return self.struct_literal(expr)
+        if isinstance(expr, VariantValue):
+            return self.variant_value(expr)
         if isinstance(expr, ArrayLiteral):
             # Every item is materialised first, so left-to-right evaluation and
             # a single allocation are both preserved. In value position the new

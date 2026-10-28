@@ -3,9 +3,11 @@ from __future__ import annotations
 from .diagnostics import make, severity_of
 from .limits import MAX_NESTING
 from .model import (
-    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Diagnostic,
-    Expr, ExprStmt, Float, For, Function, If, Import, Index, IndexAssign, Let,
-    Number, Program, Range, Return, String, Symbol, Unary, Variable, While,
+    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue,
+    Diagnostic, EnumDecl, Expr, ExprStmt, Float, For, Function, If, Import,
+    Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Program, Range,
+    Return, String, Struct, StructLiteral, Symbol, Unary, Variable, VariantValue,
+    While,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -59,6 +61,11 @@ class Checker:
         self.loop_depth = 0
 
     def check(self) -> Program:
+        # Names first, types second: a struct may hold an enum and an enum may
+        # carry a struct, so neither table can be validated before both exist.
+        self.collect_structs()
+        self.collect_enums()
+        self.validate_declaration_types()
         for index, function in enumerate(self.program.functions):
             table = self.by_module.setdefault(function.module, {})
             if function.name in BUILTINS:
@@ -90,7 +97,8 @@ class Checker:
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
             for param in function.params:
-                if param.typ not in VALUE_TYPES and not is_array(param.typ):
+                if param.typ not in VALUE_TYPES and not is_array(param.typ) \
+                        and not self.is_struct(param.typ) and not self.is_enum(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
                                param.loc.advance(param.name))
                 if param.mutable and not is_array(param.typ):
@@ -118,6 +126,360 @@ class Checker:
         self.unused_imports()
         self.program.warnings = self.warnings
         return self.program
+
+    # --- enums (edition 2) --------------------------------------------------
+
+    def validate_declaration_types(self) -> None:
+        """Field and payload types, now that every declared name is known."""
+        for struct in self.program.structs:
+            for item in struct.fields:
+                if item.typ in ("str",) or is_array(item.typ):
+                    raise make(
+                        "E0378",
+                        f"a field of {struct.name} cannot have type {item.typ} yet",
+                        item.loc, item.loc.advance(item.name),
+                        "edition 2 struct fields are i64, bool, f64, a struct or an enum; "
+                        "owning types such as str and arrays arrive with the memory work (N11)",
+                    )
+                if item.typ not in VALUE_TYPES and not self.is_struct(item.typ) \
+                        and not self.is_enum(item.typ):
+                    raise make(
+                        "E0203",
+                        f"unknown type {item.typ!r}; use i64, bool, f64, or a declared "
+                        f"struct or enum",
+                        item.loc, item.loc.advance(item.name),
+                    )
+
+    def is_enum(self, typ: str | None) -> bool:
+        return typ is not None and typ in self.enums
+
+    def collect_enums(self) -> None:
+        """Build the enum table and reject the declarations that cannot work.
+
+        A variant carries a fixed list of positional fields, each of a scalar,
+        struct or enum type. `str` and arrays again wait for N11: a variant that
+        owns storage needs the memory model that structs also wait for.
+        """
+        self.enums: dict[str, EnumDecl] = {}
+        for decl in self.program.enums:
+            if decl.name in self.structs:
+                raise make(
+                    "E0390",
+                    f"{decl.name!r} is already a struct; struct and enum names "
+                    f"share one namespace",
+                    decl.loc, decl.loc.advance("enum " + decl.name),
+                    hint="rename one of them",
+                )
+            if decl.name in self.enums or decl.name in self.builtin_names:
+                raise make(
+                    "E0390",
+                    f"duplicate enum {decl.name!r}",
+                    decl.loc, decl.loc.advance("enum " + decl.name),
+                    hint="struct, enum and builtin type names share one namespace",
+                )
+            if not decl.variants:
+                raise make(
+                    "E0396",
+                    f"enum {decl.name} declares no variants",
+                    decl.loc, decl.loc.advance("enum " + decl.name),
+                    hint="an enum with no values has no value to construct or match",
+                )
+            decl.cname = f"nv_enum_{decl.name}"
+            self.enums[decl.name] = decl
+        for decl in self.program.enums:
+            seen: set[str] = set()
+            for tag, variant in enumerate(decl.variants):
+                variant.tag = tag
+                if variant.name in seen:
+                    raise make(
+                        "E0391",
+                        f"enum {decl.name} declares the variant {variant.name!r} twice",
+                        variant.loc, variant.loc.advance(variant.name),
+                        hint="variant names are unique inside their enum",
+                    )
+                seen.add(variant.name)
+                for item in variant.types:
+                    if item in ("str",) or is_array(item):
+                        raise make(
+                            "E0399",
+                            f"a variant field of {decl.name}::{variant.name} cannot be {item} yet",
+                            variant.loc, variant.loc.advance(variant.name),
+                            "edition 2 variant fields are i64, bool, f64, a struct or an enum; "
+                            "owning types arrive with the memory work (N11)",
+                        )
+                    if item not in VALUE_TYPES and not self.is_struct(item) \
+                            and not self.is_enum(item):
+                        raise make(
+                            "E0203",
+                            f"unknown type {item!r} in variant {decl.name}::{variant.name}",
+                            variant.loc, variant.loc.advance(variant.name),
+                        )
+
+    def enum_of(self, typ: str | None) -> EnumDecl | None:
+        return self.enums.get(typ) if typ else None
+
+    def variant_value(self, expr: VariantValue) -> str:
+        """`Shape::Circle(3)`: a declared variant, with exactly its fields."""
+        decl = self.enums[expr.enum]  # the parser only builds this for a declared enum
+        expr.declared = decl
+        choice = next((item for item in decl.variants if item.name == expr.variant), None)
+        if choice is None:
+            known = ", ".join(item.name for item in decl.variants)
+            raise make(
+                "E0393",
+                f"enum {decl.name} has no variant {expr.variant!r}",
+                expr.variant_loc or expr.loc,
+                hint=f"variants are {known}",
+            )
+        expr.choice = choice
+        if len(expr.args) != len(choice.types):
+            raise make(
+                "E0394",
+                f"{decl.name}::{choice.name} takes {len(choice.types)} "
+                f"field{'s' if len(choice.types) != 1 else ''}, got {len(expr.args)}",
+                expr.loc, expr.loc.advance(expr.enum),
+                hint="variant fields are positional",
+            )
+        for argument, expected in zip(expr.args, choice.types):
+            actual = self.expression(argument)
+            if actual != expected:
+                raise make(
+                    "E0311",
+                    f"field of {decl.name}::{choice.name} is {expected}, got {actual}",
+                    argument.loc,
+                    hint="there are no implicit conversions between i64, bool, f64 and str",
+                )
+        return decl.name
+
+    def match_statement(self, statement: Match) -> None:
+        """One arm per variant, or a wildcard; bindings are copies of the fields."""
+        subject = self.expression(statement.value)
+        decl = self.enum_of(subject)
+        if decl is None:
+            raise make(
+                "E0395",
+                f"match expects an enum value, got {subject}",
+                statement.value.loc,
+                hint="an enum type is declared with `enum Name { Variant(type, ...) }`",
+            )
+        covered: dict[str, Arm] = {}
+        wildcard = False
+        for arm in statement.arms:
+            if wildcard:
+                raise make(
+                    "E0398",
+                    "this arm can never be reached: an earlier `_` arm matches every value",
+                    arm.loc, hint="move the wildcard arm last, or delete this arm",
+                )
+            if arm.variant is None:
+                wildcard = True
+                self.check_statements(arm.body, new_scope=True)
+                continue
+            choice = next((item for item in decl.variants if item.name == arm.variant), None)
+            if choice is None:
+                known = ", ".join(item.name for item in decl.variants)
+                raise make(
+                    "E0393",
+                    f"enum {decl.name} has no variant {arm.variant!r}",
+                    arm.loc, arm.loc.advance(decl.name + "::" + arm.variant),
+                    hint=f"variants are {known}",
+                )
+            if choice.name in covered:
+                raise make(
+                    "E0397",
+                    f"variant {decl.name}::{choice.name} already has an arm",
+                    arm.loc, arm.loc.advance(decl.name + "::" + choice.name),
+                )
+            if len(arm.bindings) != len(choice.types):
+                raise make(
+                    "E0394",
+                    f"{decl.name}::{choice.name} carries {len(choice.types)} "
+                    f"field{'s' if len(choice.types) != 1 else ''}, "
+                    f"the pattern binds {len(arm.bindings)}",
+                    arm.loc, arm.loc.advance(decl.name + "::" + choice.name),
+                    hint="bind every field, positionally",
+                )
+            arm.choice = choice
+            covered[choice.name] = arm
+            self.scopes.append({})
+            try:
+                arm.symbols = [self.declare(name, typ, arm.loc)
+                               for name, typ in zip(arm.bindings, choice.types)]
+                self.check_statements(arm.body, new_scope=False)
+            finally:
+                self.scopes.pop()
+        missing = [item.name for item in decl.variants if item.name not in covered]
+        if missing and not wildcard:
+            raise make(
+                "E0396",
+                f"match on {decl.name} does not cover "
+                + ", ".join(f"{decl.name}::{name}" for name in missing),
+                statement.loc, statement.loc.advance("match"),
+                hint="cover every variant, or add `_ => { ... }` as the last arm",
+            )
+
+    # --- structs (edition 2) ------------------------------------------------
+
+    def is_struct(self, typ: str | None) -> bool:
+        return typ is not None and typ in self.structs
+
+    def collect_structs(self) -> None:
+        """Build the struct table and reject the declarations that cannot work.
+
+        A struct is a value with named fields. Edition 2 restricts a field to a
+        scalar (`i64`, `bool`, `f64`) or another struct: `str` and arrays carry
+        ownership, which is N11's work, and accepting them here would mean
+        copying a pointer and calling it a copy.
+        """
+        self.structs: dict[str, Struct] = {}
+        for struct in self.program.structs:
+            if struct.name in self.structs or struct.name in self.builtin_names:
+                raise make(
+                    "E0380",
+                    f"duplicate struct {struct.name!r}",
+                    struct.loc, struct.loc.advance("struct " + struct.name),
+                    hint="struct names are shared by every module of the program",
+                )
+            struct.cname = f"nv_struct_{struct.name}"
+            self.structs[struct.name] = struct
+        for struct in self.program.structs:
+            seen: set[str] = set()
+            for item in struct.fields:
+                if item.name in seen:
+                    raise make(
+                        "E0375",
+                        f"struct {struct.name} declares the field {item.name!r} twice",
+                        item.loc, item.loc.advance(item.name),
+                        hint="each field name appears exactly once",
+                    )
+                seen.add(item.name)
+        for struct in self.program.structs:
+            self.check_struct_cycle(struct)
+
+    def check_struct_cycle(self, struct: Struct) -> None:
+        """A struct may not contain itself, directly or through another struct."""
+        def walk(current: Struct, path: list[str]) -> None:
+            for item in current.fields:
+                if item.typ == struct.name:
+                    chain = " -> ".join(path + [struct.name])
+                    raise make(
+                        "E0377",
+                        f"struct {struct.name} contains itself: {chain}",
+                        item.loc, item.loc.advance(item.name),
+                        "a struct is stored inline, so a recursive type has no finite size; "
+                        "edition 2 has no indirection to put it behind",
+                    )
+                nested = self.structs.get(item.typ)
+                if nested is not None and nested.name not in path:
+                    walk(nested, path + [nested.name])
+        walk(struct, [struct.name])
+
+    @property
+    def builtin_names(self) -> set[str]:
+        return set(BUILTINS)
+
+    def struct_literal(self, expr: StructLiteral) -> str:
+        """`Point(x: 1, y: 2)`: every field once, in any order."""
+        struct = self.structs.get(expr.name)
+        if struct is None:
+            if expr.name in BUILTINS or any(
+                    function.name == expr.name for function in self.program.functions):
+                raise make(
+                    "E0381",
+                    f"{expr.name!r} is a function, not a struct: it takes positional arguments",
+                    expr.loc, expr.loc.advance(expr.name),
+                    hint=f"write {expr.name}(value, ...) without field names",
+                )
+            raise make(
+                "E0373",
+                f"unknown struct {expr.name!r}",
+                expr.loc, expr.loc.advance(expr.name),
+                hint="declare it with `struct Name { field: type }` in edition 2, "
+                     "or call a function with positional arguments",
+            )
+        expr.struct = struct
+        declared = {item.name: item for item in struct.fields}
+        seen: dict[str, int] = {}
+        for name, value in expr.fields:
+            if name not in declared:
+                raise make(
+                    "E0374",
+                    f"struct {struct.name} has no field {name!r}",
+                    value.loc,
+                    hint="fields are " + ", ".join(declared) if declared else "the struct has no fields",
+                )
+            if name in seen:
+                raise make(
+                    "E0375",
+                    f"field {name!r} is given twice when constructing {struct.name}",
+                    value.loc,
+                )
+            seen[name] = 1
+            actual = self.expression(value)
+            if actual != declared[name].typ:
+                raise make(
+                    "E0311",
+                    f"field {name!r} of {struct.name} is {declared[name].typ}, got {actual}",
+                    value.loc,
+                    hint="there are no implicit conversions between i64, bool, f64 and str",
+                )
+        missing = [item.name for item in struct.fields if item.name not in seen]
+        if missing:
+            listy = ", ".join(missing)
+            raise make(
+                "E0376",
+                f"missing field{'s' if len(missing) > 1 else ''} {listy} "
+                f"when constructing {struct.name}",
+                expr.loc, expr.loc.advance(expr.name),
+                hint="every field is named at the construction site",
+            )
+        return struct.name
+
+    def member(self, expr: Member) -> str:
+        base = self.expression(expr.base)
+        if not self.is_struct(base):
+            raise make(
+                "E0379",
+                f"only a struct has fields, but this value is {base}",
+                expr.loc, expr.loc.advance("."),
+                hint="a field access needs a value of a declared struct type",
+            )
+        struct = self.structs[base]
+        for item in struct.fields:
+            if item.name == expr.field:
+                expr.owner = item
+                return item.typ
+        raise make(
+            "E0374",
+            f"struct {struct.name} has no field {expr.field!r}",
+            expr.field_loc or expr.loc,
+            hint="fields are " + ", ".join(item.name for item in struct.fields)
+            if struct.fields else "the struct has no fields",
+        )
+
+    def root_variable(self, expr: Expr) -> Variable | None:
+        while isinstance(expr, Member):
+            expr = expr.base
+        return expr if isinstance(expr, Variable) else None
+
+    def member_assign(self, statement: MemberAssign) -> None:
+        target_type = self.member(statement.target)
+        root = self.root_variable(statement.target)
+        if root is not None and root.symbol is not None and root.symbol.readonly:
+            raise make(
+                "E0351",
+                f"the loop variable {root.name!r} cannot be assigned",
+                statement.loc, statement.loc.advance(root.name),
+                "the loop rebinds it; use a separate `let` for a mutated copy",
+            )
+        value_type = self.expression(statement.value)
+        if value_type != target_type:
+            raise make(
+                "E0312",
+                f"cannot assign {value_type} to field {statement.target.field!r} "
+                f"of type {target_type}",
+                statement.value.loc,
+            )
 
     def unused_imports(self) -> None:
         """W0002: an import that no qualified call in its module uses."""
@@ -186,11 +548,7 @@ class Checker:
     @staticmethod
     def always_returns(statements) -> bool:
         for statement in statements:
-            if isinstance(statement, Return):
-                return True
-            if (isinstance(statement, If) and statement.else_body is not None
-                    and Checker.always_returns(statement.then_body)
-                    and Checker.always_returns(statement.else_body)):
+            if Checker.guarantees_return(statement):
                 return True
         return False
 
@@ -228,13 +586,26 @@ class Checker:
             self.scopes.pop()
 
     @staticmethod
+    @staticmethod
     def guarantees_return(statement) -> bool:
-        """True when this single statement always returns."""
+        """True when this single statement always returns.
+
+        A `match` counts when the checker has already proved it exhaustive —
+        which happens before this analysis runs, because `check_statement`
+        records every arm's variant on the arm — and every arm returns.
+        """
         if isinstance(statement, Return):
             return True
-        return (isinstance(statement, If) and statement.else_body is not None
-                and Checker.always_returns(statement.then_body)
-                and Checker.always_returns(statement.else_body))
+        if isinstance(statement, If):
+            return (statement.else_body is not None
+                    and Checker.always_returns(statement.then_body)
+                    and Checker.always_returns(statement.else_body))
+        if isinstance(statement, Match):
+            # Exhaustiveness is already proved: an incomplete match is `E0396`
+            # and never reaches this analysis.
+            return bool(statement.arms) and all(
+                Checker.always_returns(arm.body) for arm in statement.arms)
+        return False
 
     def check_statement(self, statement) -> None:
         if isinstance(statement, Let):
@@ -261,6 +632,10 @@ class Checker:
                     "one to a parameter",
                 )
             statement.symbol = self.declare(statement.name, typ, name_loc)
+        elif isinstance(statement, Match):
+            self.match_statement(statement)
+        elif isinstance(statement, MemberAssign):
+            self.member_assign(statement)
         elif isinstance(statement, IndexAssign):
             statement.symbol = self.lookup(statement.name, statement.loc)
             if not is_array(statement.symbol.typ):
@@ -460,6 +835,12 @@ class Checker:
         elif isinstance(expr, Variable):
             expr.symbol = self.lookup(expr.name, expr.loc)
             typ = expr.symbol.typ
+        elif isinstance(expr, VariantValue):
+            typ = self.variant_value(expr)
+        elif isinstance(expr, StructLiteral):
+            typ = self.struct_literal(expr)
+        elif isinstance(expr, Member):
+            typ = self.member(expr)
         elif isinstance(expr, ArrayLiteral):
             typ = self.array_literal(expr, expected)
         elif isinstance(expr, Index):
@@ -546,6 +927,13 @@ class Checker:
         return result
 
     def call(self, expr: Call) -> str:
+        if expr.module is None and self.is_struct(expr.name):
+            raise make(
+                "E0381",
+                f"{expr.name!r} is a struct: its fields are named at the construction site",
+                expr.loc, expr.loc.advance(expr.name),
+                hint=f"write {expr.name}(field: value, ...) with every field of the struct",
+            )
         if expr.module is None and expr.name == "print":
             if len(expr.args) != 1:
                 raise make("E0322", "print expects exactly one argument", expr.loc)

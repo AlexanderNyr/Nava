@@ -23,8 +23,17 @@ REQUIRED_SECTIONS = (
 )
 
 
+PLAN = ROOT / "PLAN.md"
+INDEPENDENCE = ROOT / "INDEPENDENCE.md"
+
+
 def plan_text() -> str:
-    return (ROOT / "PLAN.md").read_text(encoding="utf-8")
+    """Both plan documents: `PLAN.md` for N0–N9, `INDEPENDENCE.md` for N10–N18."""
+    return PLAN.read_text(encoding="utf-8") + "\n" + INDEPENDENCE.read_text(encoding="utf-8")
+
+
+def independence_text() -> str:
+    return INDEPENDENCE.read_text(encoding="utf-8")
 
 
 def phase_blocks(text: str) -> dict[str, str]:
@@ -64,30 +73,44 @@ class PhaseRecordTests(unittest.TestCase):
                 rf"#### Delivery record[^\n]*\n", text)
             self.assertIsNotNone(recorded, f"{name} is claimed delivered with no delivery record")
 
-    def test_the_status_line_names_the_last_specified_phase(self):
-        header = plan_text().splitlines()[2]
+    def test_the_status_lines_name_the_last_specified_phase(self):
+        header = PLAN.read_text(encoding="utf-8").splitlines()[2]
         self.assertIn("N0–N9 DELIVERED", header)
-        self.assertIn("N10–N18", header)
+        self.assertIn("N10", header)
         self.assertIn("NOT STARTED", header)
+        # The independence plan carries its own status line, so a phase cannot be
+        # started in one document and still be "not started" in the other.
+        status = INDEPENDENCE.read_text(encoding="utf-8")
+        self.assertIn("**Status:", status)
+        # Both documents name the same delivered increment.
+        independence_status = " ".join(status.split("**Status:", 1)[1].splitlines()[:2])
+        self.assertEqual("N10a" in independence_status, "N10a" in header,
+                         "PLAN.md and INDEPENDENCE.md disagree about N10a")
+
+    def test_the_independence_plan_is_its_own_document(self):
+        text = PLAN.read_text(encoding="utf-8")
+        self.assertIn("INDEPENDENCE.md", text, "PLAN.md no longer points at the separate plan")
+        self.assertNotIn("### Phase N10", text, "the independence phases belong in INDEPENDENCE.md")
+        self.assertIn("### Phase N10", independence_text())
 
 
 class SpecificationCriteriaTests(unittest.TestCase):
     def test_the_six_criteria_exist_and_are_numbered(self):
-        text = plan_text()
+        text = independence_text()
         for number in range(1, 7):
             self.assertIn(f"| C{number} |", text, f"criterion C{number} is missing")
 
     def test_every_criterion_names_the_phase_that_proves_it(self):
-        text = plan_text()
-        table = text.split("### 4A.1", 1)[1].split("### 4A.2", 1)[0]
+        text = independence_text()
+        table = text.split("## 1. Six criteria", 1)[1].split("## 2. What the compiler needs", 1)[0]
         for line in table.splitlines():
             if re.match(r"\| C\d ", line):
                 cells = [cell.strip() for cell in line.strip("|").split("|")]
                 self.assertRegex(cells[-1], r"N\d", f"criterion with no phase: {line}")
 
     def test_the_feature_audit_names_a_phase_for_each_row(self):
-        text = plan_text()
-        audit = text.split("### 4A.2", 1)[1].split("### 4A.3", 1)[0]
+        text = independence_text()
+        audit = text.split("## 2. What the compiler needs", 1)[1].split("## 3. Decisions", 1)[0]
         rows = [line for line in audit.splitlines() if line.startswith("| ") and "| N" in line]
         self.assertGreaterEqual(len(rows), 10, "the audit table lost its rows")
         for row in rows:
@@ -111,7 +134,7 @@ class SpecificationCriteriaTests(unittest.TestCase):
 
     def test_the_non_goals_point_at_the_reversal(self):
         text = plan_text()
-        section = text.split("## 5. Definition of done and non-goals", 1)[1]
+        section = text.split("## 5. Definition of done and non-goals", 1)[1].split("## Independent", 1)[0]
         self.assertIn("self-hosting the compiler (N15)", section)
         self.assertIn("package manager (N13", section)
         self.assertIn("independent specification with a dependent toolchain", section)

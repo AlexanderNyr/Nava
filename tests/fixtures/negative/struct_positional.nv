@@ -1,0 +1,11 @@
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() {
+    let p = Point(1, 2)
+    print(p.x)
+}

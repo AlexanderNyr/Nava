@@ -1,0 +1,14 @@
+edition 2;
+
+enum Shape {
+    Dot,
+    Rect(i64, i64)
+}
+
+fn main() {
+    let s = Shape::Dot
+    match s {
+        Shape::Dot => { print(1) }
+        Shape::Rect(w) => { print(w) }
+    }
+}

@@ -4,9 +4,11 @@ from .diagnostics import make
 from .lexer import lex
 from .limits import I64_MAX, MAX_NESTING
 from .model import (
-    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Expr, ExprStmt,
-    Float, For, Function, If, Import, Index, IndexAssign, Let, Number, Param,
-    Program, Range, Return, String, Token, Unary, Variable, While,
+    Arm, ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl,
+    Expr, ExprStmt, Field, Float, For, Function, If, Import, Index, IndexAssign,
+    Let, Match, Member, MemberAssign, Number, Param, Program, Range, Return,
+    String, Struct, StructLiteral, Token, Unary, Variable, Variant, VariantValue,
+    While,
 )
 
 PRECEDENCE = {
@@ -15,6 +17,11 @@ PRECEDENCE = {
     "+": 5, "-": 5, "*": 6, "/": 6, "%": 6,
 }
 TYPES = {"i64", "bool", "str", "void", "f64"}
+#: Editions this compiler implements. An edition is frozen when it is released;
+#: a new construct belongs to the next one.
+EDITIONS = {1, 2}
+#: The edition that introduced structs, named construction and member access.
+STRUCT_EDITION = 2
 #: Types an array may contain. There are no arrays of arrays and no arrays of
 #: `void`; both are rejected in the parser because they are syntax-level shapes.
 ELEMENT_TYPES = {"i64", "bool", "str"}
@@ -25,6 +32,14 @@ class Parser:
         self.tokens = tokens
         self.i = 0
         self.depth = 0
+        #: The edition the file declares; 1 when it declares none.
+        self.edition = 1
+        #: Struct names declared anywhere in the file. The parser needs them to
+        #: accept a struct name in a type position; the checker owns the rest.
+        self.struct_names: set[str] = set()
+        #: Enum names, for the same reason: `Shape` is a type, and `Shape::Circle`
+        #: is a value rather than a module call.
+        self.enum_names: set[str] = set()
 
     def enter(self, loc) -> None:
         self.depth += 1
@@ -67,6 +82,17 @@ class Parser:
         self.i += 1
         return token
 
+    def require_edition(self, loc, feature: str, code: str = "E0372") -> None:
+        """An edition-2 construct in a file that did not declare edition 2."""
+        if self.edition >= STRUCT_EDITION:
+            return
+        raise make(
+            code,
+            f"{feature} needs edition 2, but this file is edition {self.edition}",
+            loc,
+            hint="add `edition 2;` as the first line of the file",
+        )
+
     def separators(self) -> None:
         while self.at("NL") or self.at(";"):
             self.i += 1
@@ -86,17 +112,22 @@ class Parser:
         if self.at("["):
             opening = self.expect("[")
             if self.at("["):
-                raise make("E0203", "an array cannot contain another array",
+                raise make("E0206", "an array cannot contain another array",
                            self.current.loc, self.current.loc.advance("["),
                            "nested collections are not part of Nava 0.1")
             element = self.expect("IDENT", "an element type (i64, bool, or str)")
             if element.value not in ELEMENT_TYPES:
-                raise make("E0203",
+                raise make("E0206",
                            f"an array element type must be i64, bool, or str, got {element.value!r}",
                            element.loc, element.loc.advance(str(element.value)))
             self.expect("]", "']'")
             return f"[{element.value}]"
         token = self.expect("IDENT", "a type (i64, bool, str, void, or f64)")
+        if self.edition >= STRUCT_EDITION and (token.value in self.struct_names
+                                               or token.value in self.enum_names):
+            # A declared struct or enum is a type in edition 2. The checker
+            # decides whether it may be a field, a parameter or a local.
+            return str(token.value)
         if token.value not in TYPES:
             # The message text is part of the fixture contract: array types are
             # documented in LANGUAGE.md and the hint names the scalar set only.
@@ -104,12 +135,123 @@ class Parser:
                        token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
 
+    def edition_declaration(self) -> None:
+        """`edition 2;` — the first statement of the file, when it has one."""
+        start = self.expect("EDITION")
+        number = self.expect("NUMBER", "an edition number")
+        value = int(number.value)
+        if value not in EDITIONS:
+            raise make(
+                "E0371",
+                f"unknown edition {value}; this compiler implements editions 1 and 2",
+                number.loc,
+                number.loc.advance(str(number.value)),
+                hint="an edition is a version of the language, not a compiler flag",
+            )
+        self.edition = value
+        self.end_statement()
+        # Struct names are needed while parsing types, and a struct may be
+        # declared after the function that uses it.
+        if self.edition >= STRUCT_EDITION:
+            self.struct_names = {
+                str(self.tokens[index + 1].value)
+                for index, token in enumerate(self.tokens[:-1])
+                if token.kind == "STRUCT" and self.tokens[index + 1].kind == "IDENT"
+            }
+            self.enum_names = {
+                str(self.tokens[index + 1].value)
+                for index, token in enumerate(self.tokens[:-1])
+                if token.kind == "ENUM" and self.tokens[index + 1].kind == "IDENT"
+            }
+
+    def struct_declaration(self) -> Struct:
+        start = self.expect("STRUCT")
+        self.require_edition(start.loc, "a struct declaration")
+        name = self.expect("IDENT", "a struct name")
+        if name.value in TYPES:
+            raise make("E0203", f"{name.value!r} is a built-in type name",
+                       name.loc, name.loc.advance(str(name.value)),
+                       "pick a name that is not one of i64, bool, str, f64 or void")
+        self.separators()
+        self.expect("{", "'{'")
+        fields: list[Field] = []
+        self.separators()
+        while not self.at("}"):
+            if self.at("EOF"):
+                raise make("E0204", "expected '}' before end of file", self.current.loc,
+                           hint=f"the struct opened at line {start.loc.line} is not closed")
+            field_name = self.expect("IDENT", "a field name")
+            self.expect(":", "':' after a field name")
+            typ = self.parse_type()
+            fields.append(Field(str(field_name.value), typ, field_name.loc))
+            if not self.take(","):
+                self.separators()
+                if not self.at("}"):
+                    raise make("E0202", "expected ',' or '}' after a struct field",
+                               self.current.loc,
+                               hint="separate fields with ',' or a newline")
+            self.separators()
+        self.expect("}")
+        return Struct(str(name.value), fields, start.loc)
+
+    def enum_declaration(self) -> EnumDecl:
+        start = self.expect("ENUM")
+        self.require_edition(start.loc, "an enum declaration")
+        name = self.expect("IDENT", "an enum name")
+        if name.value in TYPES:
+            raise make("E0203", f"{name.value!r} is a built-in type name",
+                       name.loc, name.loc.advance(str(name.value)))
+        self.separators()
+        self.expect("{", "'{'")
+        variants: list[Variant] = []
+        self.separators()
+        while not self.at("}"):
+            if self.at("EOF"):
+                raise make("E0204", "expected '}' before end of file", self.current.loc,
+                           hint=f"the enum opened at line {start.loc.line} is not closed")
+            variant = self.expect("IDENT", "a variant name")
+            types: list[str] = []
+            if self.take("("):
+                while not self.at(")"):
+                    types.append(self.parse_type())
+                    if not self.take(","):
+                        break
+                self.expect(")")
+            variants.append(Variant(str(variant.value), types, variant.loc))
+            if not self.take(","):
+                self.separators()
+                if not self.at("}"):
+                    raise make("E0202", "expected ',' or '}' after an enum variant",
+                               self.current.loc,
+                               hint="separate variants with ',' or a newline")
+            self.separators()
+        self.expect("}")
+        return EnumDecl(str(name.value), variants, start.loc)
+
     def parse(self) -> Program:
         functions: list[Function] = []
         imports: list[Import] = []
+        structs: list[Struct] = []
+        enums: list[EnumDecl] = []
         self.separators()
+        if self.at("EDITION"):
+            self.edition_declaration()
+            self.separators()
         while not self.at("EOF"):
-            if self.at("IMPORT"):
+            if self.at("EDITION"):
+                token = self.current
+                raise make(
+                    "E0370",
+                    "the edition declaration must be the first statement of the file",
+                    token.loc,
+                    token.loc.advance("edition"),
+                    hint="move `edition 2;` above every import, struct and function",
+                )
+            if self.at("STRUCT"):
+                structs.append(self.struct_declaration())
+            elif self.at("ENUM"):
+                enums.append(self.enum_declaration())
+            elif self.at("IMPORT"):
                 if functions:
                     raise make(
                         "E0354",
@@ -122,7 +264,9 @@ class Parser:
             else:
                 functions.append(self.function())
             self.separators()
-        return Program(functions, imports=imports)
+        program = Program(functions, imports=imports, structs=structs, enums=enums)
+        program.edition = self.edition
+        return program
 
     def import_statement(self) -> Import:
         start = self.expect("IMPORT")
@@ -185,6 +329,8 @@ class Parser:
             value = self.expression()
             self.end_statement()
             return Let(token.loc, str(name.value), annotation, value, name.loc)
+        if self.at("MATCH"):
+            return self.match_statement()
         if self.at("IF"):
             return self.if_statement()
         if self.take("WHILE"):
@@ -209,6 +355,19 @@ class Parser:
             value = None if self.current.kind in ("NL", ";", "}", "EOF") else self.expression()
             self.end_statement()
             return Return(token.loc, value)
+        if self.at("IDENT") and self.tokens[self.i + 1].kind == ".":
+            target = self.postfix()
+            if not isinstance(target, Member) or not self.take("="):
+                raise make(
+                    "E0313",
+                    "only function calls can be used as statements",
+                    target.loc,
+                    hint="assign to the field, as in p.x = value",
+                )
+            self.require_edition(target.loc, "a field assignment")
+            value = self.expression()
+            self.end_statement()
+            return MemberAssign(target.loc, target, value)
         if self.at("IDENT") and self.tokens[self.i + 1].kind == "[":
             # `a[i] = value` is an element assignment; `a[i]` alone is not a
             # statement, and the message names the rule instead of the token.
@@ -232,6 +391,57 @@ class Parser:
         expr = self.expression()
         self.end_statement()
         return ExprStmt(token.loc, expr)
+
+    def match_statement(self) -> Match:
+        """`match value { Enum::Variant(a, b) => { ... } _ => { ... } }`."""
+        start = self.expect("MATCH")
+        self.require_edition(start.loc, "a match statement")
+        value = self.expression()
+        self.separators()
+        self.expect("{", "'{'")
+        self.separators()
+        arms: list[Arm] = []
+        while not self.at("}"):
+            if self.at("EOF"):
+                raise make("E0204", "expected '}' before end of file", self.current.loc,
+                           hint=f"the match opened at line {start.loc.line} is not closed")
+            arms.append(self.match_arm())
+            self.separators()
+        self.expect("}")
+        if not arms:
+            raise make("E0396", "a match needs at least one arm", start.loc,
+                       start.loc.advance("match"),
+                       hint="list every variant of the enum, or add `_ => { ... }`")
+        return Match(start.loc, value, arms)
+
+    def match_arm(self) -> Arm:
+        token = self.current
+        bindings: list[str] = []
+        variant: str | None = None
+        if self.at("IDENT") and token.value == "_":
+            self.i += 1
+        elif self.at("IDENT") and self.tokens[self.i + 1].kind == "::":
+            self.i += 2
+            name = self.expect("IDENT", "a variant name after '::'")
+            variant = str(name.value)
+            if self.take("("):
+                while not self.at(")"):
+                    binding = self.expect("IDENT", "a binding name for a variant field")
+                    bindings.append(str(binding.value))
+                    if not self.take(","):
+                        break
+                self.expect(")")
+        elif self.at("IDENT"):
+            raise make(
+                "E0392",
+                f"a variant pattern must name its enum, as in Shape::{token.value}(...)",
+                token.loc, token.loc.advance(str(token.value)),
+                hint="`_` is the wildcard arm; every other pattern is Enum::Variant",
+            )
+        else:
+            raise make("E0205", "expected a pattern or `_`", token.loc)
+        self.expect("=>", "'=>' after a pattern")
+        return Arm(token.loc, variant, bindings, self.block())
 
     def if_statement(self) -> If:
         start = self.expect("IF")
@@ -273,7 +483,53 @@ class Parser:
                 return Unary(token.loc, "!", self.unary())
             finally:
                 self.leave()
-        return self.primary()
+        return self.postfix()
+
+    def postfix(self) -> Expr:
+        """`primary` followed by any number of `.field` reads."""
+        expr = self.primary()
+        while self.at("."):
+            dot = self.current
+            self.require_edition(dot.loc, "a field access")
+            self.i += 1
+            field = self.expect("IDENT", "a field name after '.'")
+            expr = Member(dot.loc, expr, str(field.value), field.loc)
+        return expr
+
+    def arguments(self) -> tuple[list[tuple[str, Expr]] | None, list[Expr]]:
+        """Arguments of `name(...)`.
+
+        Returns `(fields, args)`: `fields` is not None when every argument is
+        written as `name: value`, which is a struct construction; `args` is the
+        positional list otherwise. Mixing the two is rejected here, because the
+        diagnostics for it would have to guess which one the author meant.
+        """
+        if self.at(")"):
+            self.i += 1
+            return None, []
+        labelled = self.at("IDENT") and self.tokens[self.i + 1].kind == ":"
+        if labelled:
+            self.require_edition(self.current.loc, "named construction")
+        fields: list[tuple[str, Expr]] = []
+        args: list[Expr] = []
+        while not self.at(")"):
+            if labelled:
+                key = self.expect("IDENT", "a field name")
+                self.expect(":", "':' after a field name")
+                fields.append((str(key.value), self.expression()))
+            else:
+                if self.at("IDENT") and self.tokens[self.i + 1].kind == ":":
+                    raise make(
+                        "E0381",
+                        "positional and named arguments cannot be mixed",
+                        self.current.loc,
+                        hint="name every field, as in Point(x: 1, y: 2), or name none",
+                    )
+                args.append(self.expression())
+            if not self.take(","):
+                break
+        self.expect(")")
+        return (fields if labelled else None), args
 
     def primary(self) -> Expr:
         token = self.current
@@ -314,8 +570,21 @@ class Parser:
         if self.take("IDENT"):
             name = str(token.value)
             if self.take("::"):
-                # `module::function(...)`: a qualified call into another module.
                 target = self.expect("IDENT", "a function name after '::'")
+                if name in self.enum_names and self.edition >= STRUCT_EDITION:
+                    # A variant of a declared enum, not a call into a module.
+                    if not self.take("("):
+                        return VariantValue(token.loc, name, str(target.value), [],
+                                            token.loc, target.loc)
+                    args: list[Expr] = []
+                    while not self.at(")"):
+                        args.append(self.expression())
+                        if not self.take(","):
+                            break
+                    self.expect(")")
+                    return VariantValue(token.loc, name, str(target.value), args,
+                                        token.loc, target.loc)
+                # `module::function(...)`: a qualified call into another module.
                 if not self.take("("):
                     raise make(
                         "E0201",
@@ -335,12 +604,9 @@ class Parser:
                 self.expect("]", "']'")
                 return Index(token.loc, Variable(token.loc, name), index)
             if self.take("("):
-                args = []
-                while not self.at(")"):
-                    args.append(self.expression())
-                    if not self.take(","):
-                        break
-                self.expect(")")
+                fields, args = self.arguments()
+                if fields is not None:
+                    return StructLiteral(token.loc, name, fields)
                 return Call(token.loc, name, args)
             return Variable(token.loc, name)
         if self.take("("):

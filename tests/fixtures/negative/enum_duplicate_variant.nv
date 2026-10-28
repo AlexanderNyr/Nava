@@ -1,0 +1,10 @@
+edition 2;
+
+enum Shape {
+    Dot,
+    Dot
+}
+
+fn main() {
+    print(1)
+}

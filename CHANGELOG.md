@@ -2,12 +2,62 @@
 
 ## Unreleased
 
-The independence plan: `PLAN.md` §4A specifies phases N10–N18 for making Nava a
-language in its own right and a toolchain that needs neither Python nor a C
-compiler, and reverses the two non-goals that excluded self-hosting and a
-package manager.
+N10b: enums and `match` — the part of edition 2 that makes a value's shape
+checkable instead of conventional.
 
-- Six criteria (C1–C6) define what "a language" and "independent" mean here, each
+- `enum Name { Variant, Variant(type, ...) }` with positional payloads of `i64`,
+  `bool`, `f64`, a struct or another enum. `str` and array payloads are refused
+  with `E0399` until the memory work (N11) gives them an ownership story.
+- A value is always built through its enum — `Shape::Circle(2)`, `Shape::Dot` —
+  and so is a pattern; the compiler tells a variant apart from a module call
+  because it knows which names are enums.
+- `match` is a **statement**: every arm names a variant (or `_`), bindings are
+  typed copies of the fields, the scrutinee is evaluated once, arms run in source
+  order, and the checker requires the arms to cover every variant (`E0396` names
+  the missing ones). Duplicate arm `E0397`, unreachable arm after `_` `E0398`,
+  unqualified pattern `E0392`, wrong binding count `E0394`, `match` on a non-enum
+  `E0395`.
+- An exhaustive `match` whose arms all return counts as a return, so
+  `fn area(s: Shape) -> i64 { match s { ... } }` needs no trailing `return` and
+  still passes the `E0306` analysis.
+- The grammar artefact (token grammar and GBNF), its conformance classification
+  and the model-facing guide moved with the language: new guide section, a
+  canonical `enums.nv` example and a re-pinned digest, with the guidance overhead
+  re-measured rather than estimated.
+- Not in this increment: `match` as an expression, guards, literal or range
+  patterns, matching on `i64` or `str`, `Option`/`Result`, `?` and generic enums.
+
+N10a: edition 2 and structs — the first language feature since N7, delivered as
+an additive edition rather than a break.
+
+- `edition 2;` on the first line of a file opts into the new constructs; a file
+  without it is edition 1 and compiles exactly as before (`E0372` names the
+  declaration when an edition-2 construct appears in an edition-1 file).
+- `struct Name { field: type }` with `i64`, `bool`, `f64` or another struct
+  field. Named construction `Name(field: value, ...)` — named rather than
+  `Name { ... }` because a brace after an expression would be ambiguous with the
+  block of an `if` or a `for`. Field read `p.x`, field write `p.x = value`, copy
+  on assignment, as a parameter and as a return value.
+- Twelve new diagnostic codes, `E0370`–`E0381`, each with a fixture and a
+  documented meaning; the array-shape rule moved to its own syntactic code
+  `E0206` so that an unknown *name* in a type position (`E0203`) can be
+  semantic while `[void]`, `[f64]` and `[[i64]]` stay syntactic. The grammar
+  artefact and its conformance classification follow the same split.
+- The model-facing guide gains an edition-2 section, a canonical example and a
+  re-pinned digest; the guidance overhead is re-measured with a real tokenizer
+  (`cl100k_base` 19 864 prompt tokens, `o200k_base` 19 941 over the task set),
+  not estimated.
+- Not in this increment: `enum`/`match`, `Option`/`Result`, slices, generics,
+  `defer`, function pointers, `pub`, `str` and array fields, struct equality and
+  printing a struct. A struct is a value with named fields and nothing else.
+
+The independence plan is its own document: `INDEPENDENCE.md` specifies phases
+N10–N18 for making Nava a language in its own right and a toolchain that needs
+neither Python nor a C compiler, and reverses the two non-goals that excluded
+self-hosting and a package manager. `PLAN.md` keeps the dependency order and
+points at it.
+
+- Six criteria (C1–C6) define what "a language" and "independent" mean, each
   with a probe: a normative specification, the bootstrap criterion, a static
   binary on a host without `python3`/`cc`/`ld`/libc, an ecosystem, proof on real
   programs, and the existing evidence discipline.

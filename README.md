@@ -321,6 +321,7 @@ is not, on which platforms, and how each claim is tested.
 | [`pyproject.toml`](pyproject.toml) | Packaging metadata and the `nava` console script |
 | [`SECURITY.md`](SECURITY.md) | Threat model, platform support and how isolation is tested |
 | [`PLAN.md`](PLAN.md) | Dependency-ordered improvement phases and test gates |
+| [`INDEPENDENCE.md`](INDEPENDENCE.md) | The plan for a self-sufficient language and toolchain (N10–N18) |
 | [`CHANGELOG.md`](CHANGELOG.md) | Changelog |
 | [`RELEASE.md`](RELEASE.md) | Support matrix, versioning policy, release checklist, known gaps |
 | [`tools/verify_release.py`](tools/verify_release.py) | Release gate: version/metadata agreement, Python floor, artifact contents, credential scan |

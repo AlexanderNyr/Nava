@@ -1,0 +1,10 @@
+edition 2;
+
+struct Node {
+    value: i64,
+    next: Node
+}
+
+fn main() {
+    print(1)
+}

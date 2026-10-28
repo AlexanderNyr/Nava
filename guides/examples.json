@@ -58,6 +58,20 @@
       "stdin": "",
       "stdout": "3.0\n9\n3\n6\n",
       "shows": "import of a local module and of the standard library"
+    },
+    {
+      "id": "structs",
+      "entry": "structs.nv",
+      "stdin": "",
+      "stdout": "7\n10\n-4\n1\n",
+      "shows": "edition 2, struct declaration, named construction, field write and copy"
+    },
+    {
+      "id": "enums",
+      "entry": "enums.nv",
+      "stdin": "",
+      "stdout": "36\n",
+      "shows": "edition 2, enum declaration, variant construction and an exhaustive match"
     }
   ]
 }

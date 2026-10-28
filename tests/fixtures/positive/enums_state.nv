@@ -1,0 +1,47 @@
+edition 2;
+
+enum Cmd {
+    Add(i64, i64),
+    Neg(i64),
+    Stop
+}
+
+struct State {
+    value: i64,
+    ops: i64
+}
+
+fn step(s: State, c: Cmd) -> State {
+    match c {
+        Cmd::Add(a, b) => {
+            s.value = s.value + a + b
+            s.ops = s.ops + 1
+        }
+        Cmd::Neg(v) => {
+            s.value = s.value - v
+            s.ops = s.ops + 1
+        }
+        Cmd::Stop => { }
+    }
+    return s
+}
+
+fn classify(c: Cmd) -> i64 {
+    let kind = 0
+    match c {
+        Cmd::Add(a, b) => { kind = a + b }
+        _ => { kind = 0 - 1 }
+    }
+    return kind
+}
+
+fn main() {
+    let s = State(value: 0, ops: 0)
+    s = step(s, Cmd::Add(2, 3))
+    s = step(s, Cmd::Neg(4))
+    s = step(s, Cmd::Stop)
+    print(s.value)
+    print(s.ops)
+    print(classify(Cmd::Add(10, 5)))
+    print(classify(Cmd::Neg(1)))
+}

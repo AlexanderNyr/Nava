@@ -444,7 +444,7 @@
     },
     {
       "file": "array_nested_type.nv",
-      "code": "E0203",
+      "code": "E0206",
       "line": 2,
       "column": 13,
       "end_column": 14,
@@ -453,7 +453,7 @@
     },
     {
       "file": "array_of_void.nv",
-      "code": "E0203",
+      "code": "E0206",
       "line": 2,
       "column": 13,
       "end_column": 17,
@@ -732,7 +732,7 @@
     },
     {
       "file": "array_of_f64.nv",
-      "code": "E0203",
+      "code": "E0206",
       "line": 2,
       "column": 13,
       "end_column": 16,
@@ -747,6 +747,222 @@
       "end_column": 7,
       "message": "an import must come before every function definition",
       "hint": "move the import statements to the top of the file"
+    },
+    {
+      "file": "edition_not_first.nv",
+      "code": "E0370",
+      "line": 5,
+      "column": 1,
+      "end_column": 8,
+      "message": "the edition declaration must be the first statement of the file",
+      "hint": "move `edition 2;` above every import, struct and function"
+    },
+    {
+      "file": "edition_unknown.nv",
+      "code": "E0371",
+      "line": 1,
+      "column": 9,
+      "end_column": 10,
+      "message": "unknown edition 3; this compiler implements editions 1 and 2",
+      "hint": "an edition is a version of the language, not a compiler flag"
+    },
+    {
+      "file": "edition_one_struct.nv",
+      "code": "E0372",
+      "line": 1,
+      "column": 1,
+      "end_column": null,
+      "message": "a struct declaration needs edition 2, but this file is edition 1",
+      "hint": "add `edition 2;` as the first line of the file"
+    },
+    {
+      "file": "struct_unknown.nv",
+      "code": "E0373",
+      "line": 4,
+      "column": 13,
+      "end_column": 20,
+      "message": "unknown struct 'Missing'",
+      "hint": "declare it with `struct Name { field: type }` in edition 2, or call a function with positional arguments"
+    },
+    {
+      "file": "struct_unknown_field.nv",
+      "code": "E0374",
+      "line": 10,
+      "column": 13,
+      "end_column": null,
+      "message": "struct Point has no field 'z'",
+      "hint": "fields are x, y"
+    },
+    {
+      "file": "struct_duplicate_field.nv",
+      "code": "E0375",
+      "line": 5,
+      "column": 5,
+      "end_column": 6,
+      "message": "struct Point declares the field 'x' twice",
+      "hint": "each field name appears exactly once"
+    },
+    {
+      "file": "struct_missing_field.nv",
+      "code": "E0376",
+      "line": 9,
+      "column": 13,
+      "end_column": 18,
+      "message": "missing field y when constructing Point",
+      "hint": "every field is named at the construction site"
+    },
+    {
+      "file": "struct_recursive.nv",
+      "code": "E0377",
+      "line": 5,
+      "column": 5,
+      "end_column": 9,
+      "message": "struct Node contains itself: Node -> Node",
+      "hint": "a struct is stored inline, so a recursive type has no finite size; edition 2 has no indirection to put it behind"
+    },
+    {
+      "file": "struct_field_str.nv",
+      "code": "E0378",
+      "line": 4,
+      "column": 5,
+      "end_column": 9,
+      "message": "a field of Person cannot have type str yet",
+      "hint": "edition 2 struct fields are i64, bool, f64, a struct or an enum; owning types such as str and arrays arrive with the memory work (N11)"
+    },
+    {
+      "file": "struct_member_scalar.nv",
+      "code": "E0379",
+      "line": 5,
+      "column": 12,
+      "end_column": 13,
+      "message": "only a struct has fields, but this value is i64",
+      "hint": "a field access needs a value of a declared struct type"
+    },
+    {
+      "file": "struct_duplicate.nv",
+      "code": "E0380",
+      "line": 7,
+      "column": 1,
+      "end_column": 13,
+      "message": "duplicate struct 'Point'",
+      "hint": "struct names are shared by every module of the program"
+    },
+    {
+      "file": "struct_positional.nv",
+      "code": "E0381",
+      "line": 9,
+      "column": 13,
+      "end_column": 18,
+      "message": "'Point' is a struct: its fields are named at the construction site",
+      "hint": "write Point(field: value, ...) with every field of the struct"
+    },
+    {
+      "file": "struct_named_function.nv",
+      "code": "E0381",
+      "line": 8,
+      "column": 13,
+      "end_column": 17,
+      "message": "'area' is a function, not a struct: it takes positional arguments",
+      "hint": "write area(value, ...) without field names"
+    },
+    {
+      "file": "enum_duplicate.nv",
+      "code": "E0390",
+      "line": 7,
+      "column": 1,
+      "end_column": 11,
+      "message": "duplicate enum 'Shape'",
+      "hint": "struct, enum and builtin type names share one namespace"
+    },
+    {
+      "file": "enum_duplicate_variant.nv",
+      "code": "E0391",
+      "line": 5,
+      "column": 5,
+      "end_column": 8,
+      "message": "enum Shape declares the variant 'Dot' twice",
+      "hint": "variant names are unique inside their enum"
+    },
+    {
+      "file": "enum_unknown_variant.nv",
+      "code": "E0393",
+      "line": 8,
+      "column": 20,
+      "end_column": null,
+      "message": "enum Shape has no variant 'Circle'",
+      "hint": "variants are Dot"
+    },
+    {
+      "file": "enum_variant_arity.nv",
+      "code": "E0394",
+      "line": 8,
+      "column": 13,
+      "end_column": 18,
+      "message": "Shape::Circle takes 1 field, got 2",
+      "hint": "variant fields are positional"
+    },
+    {
+      "file": "enum_variant_str.nv",
+      "code": "E0399",
+      "line": 4,
+      "column": 5,
+      "end_column": 9,
+      "message": "a variant field of Message::Text cannot be str yet",
+      "hint": "edition 2 variant fields are i64, bool, f64, a struct or an enum; owning types arrive with the memory work (N11)"
+    },
+    {
+      "file": "match_not_an_enum.nv",
+      "code": "E0395",
+      "line": 5,
+      "column": 11,
+      "end_column": null,
+      "message": "match expects an enum value, got i64",
+      "hint": "an enum type is declared with `enum Name { Variant(type, ...) }`"
+    },
+    {
+      "file": "match_not_exhaustive.nv",
+      "code": "E0396",
+      "line": 10,
+      "column": 5,
+      "end_column": 10,
+      "message": "match on Shape does not cover Shape::Circle",
+      "hint": "cover every variant, or add `_ => { ... }` as the last arm"
+    },
+    {
+      "file": "match_duplicate_arm.nv",
+      "code": "E0397",
+      "line": 12,
+      "column": 9,
+      "end_column": 19,
+      "message": "variant Shape::Dot already has an arm",
+      "hint": null
+    },
+    {
+      "file": "match_arm_after_wildcard.nv",
+      "code": "E0398",
+      "line": 12,
+      "column": 9,
+      "end_column": null,
+      "message": "this arm can never be reached: an earlier `_` arm matches every value",
+      "hint": "move the wildcard arm last, or delete this arm"
+    },
+    {
+      "file": "match_pattern_unqualified.nv",
+      "code": "E0392",
+      "line": 11,
+      "column": 9,
+      "end_column": 12,
+      "message": "a variant pattern must name its enum, as in Shape::Dot(...)",
+      "hint": "`_` is the wildcard arm; every other pattern is Enum::Variant"
+    },
+    {
+      "file": "match_binding_arity.nv",
+      "code": "E0394",
+      "line": 12,
+      "column": 9,
+      "end_column": 20,
+      "message": "Shape::Rect carries 2 fields, the pattern binds 1",
+      "hint": "bind every field, positionally"
     }
   ]
 }

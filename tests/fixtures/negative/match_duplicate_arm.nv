@@ -1,0 +1,15 @@
+edition 2;
+
+enum Shape {
+    Dot,
+    Circle(i64)
+}
+
+fn main() {
+    let s = Shape::Dot
+    match s {
+        Shape::Dot => { print(1) }
+        Shape::Dot => { print(2) }
+        Shape::Circle(r) => { print(r) }
+    }
+}

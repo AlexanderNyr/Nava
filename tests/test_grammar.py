@@ -45,8 +45,14 @@ NAVA = ROOT / "nava"
 GRAMMAR_REJECTS = frozenset(
     {f"E01{index:02d}" for index in range(1, 8)}
     | {"E0109", "E0110", "E0112", "E0113"}
-    | {f"E02{index:02d}" for index in range(1, 6)}
+    # E0203 (an unknown *name* in a type position) is semantic: the grammar
+    # accepts any identifier there, because a struct name is a type in edition 2.
+    # The array shapes keep a syntactic code, E0206, and the grammar models the
+    # same fixed element set.
+    | {"E0201", "E0202", "E0204", "E0205", "E0206"}
     | {"E0346", "E0350"}
+    # `edition` is a prefix of the file in the grammar and in the compiler.
+    | {"E0370"}
 )
 
 #: Codes produced after the source was read successfully: the program is
@@ -54,7 +60,14 @@ GRAMMAR_REJECTS = frozenset(
 #: language restriction. The grammar must accept these, and the compiler must
 #: still reject them.
 GRAMMAR_ACCEPTS = frozenset(
-    ({"E0108"} | {f"E03{index:02d}" for index in range(1, 62)} | {"E0401"})
+    ({"E0108"} | {f"E03{index:02d}" for index in range(1, 62)} | {"E0401"}
+     # Edition 2: an unknown type name, an unknown edition number, a struct
+     # declaration in an edition-1 file, and every struct rule that depends on
+     # declared names or on types.
+     | {"E0203"} | {f"E03{index:02d}" for index in range(70, 82)}
+     # Enum and match rules are all names, arities and coverage: syntax the
+     # grammar accepts and the checker rejects.
+     | {f"E039{index}" for index in range(0, 10)})
     - GRAMMAR_REJECTS
 )
 

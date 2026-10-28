@@ -1,0 +1,13 @@
+edition 2;
+
+enum Shape {
+    Dot
+}
+
+enum Shape {
+    Circle(i64)
+}
+
+fn main() {
+    print(1)
+}

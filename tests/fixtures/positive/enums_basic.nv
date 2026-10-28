@@ -1,0 +1,21 @@
+edition 2;
+
+enum Shape {
+    Dot,
+    Circle(i64),
+    Rect(i64, i64)
+}
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Dot => { return 0 }
+        Shape::Circle(r) => { return 3 * r * r }
+        Shape::Rect(w, h) => { return w * h }
+    }
+}
+
+fn main() {
+    print(area(Shape::Dot))
+    print(area(Shape::Circle(2)))
+    print(area(Shape::Rect(3, 4)))
+}

@@ -127,6 +127,81 @@ fn main() {
 
 For a single-file answer, do not write imports; use the built-ins above.
 
+## Edition 2: structs
+
+A file that starts with `edition 2;` may declare and use structs and enums. A file without
+that line is edition 1 and is unchanged: do not mix the two.
+
+```nava
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn manhattan(p: Point) -> i64 {
+    let ax = p.x
+    if ax < 0 { ax = 0 - ax }
+    let ay = p.y
+    if ay < 0 { ay = 0 - ay }
+    return ax + ay
+}
+
+fn main() {
+    let a = Point(x: 3, y: 0 - 4)
+    print(manhattan(a))     # 7
+    a.x = 10                # fields are assigned in place
+    let b = a               # a struct is copied: b is an independent value
+    b.y = 1
+    print(a.y)              # -4
+    print(b.y)              # 1
+}
+```
+
+Fields are `i64`, `bool`, `f64` or another struct. `str` and array fields do not
+exist yet, a struct may not contain itself, and a struct cannot be printed or
+compared with `==`: print a field, not the struct. Construction names every
+field exactly once, as in `Point(x: 1, y: 2)`; there is no positional form.
+
+## Edition 2: enums and `match`
+
+An enum is a type whose values are exactly its variants. A variant carries a
+fixed, positional list of fields; `match` is a **statement** that must cover
+every variant.
+
+```nava
+edition 2;
+
+enum Op {
+    Add(i64, i64),
+    Mul(i64, i64),
+    Halt
+}
+
+fn apply(acc: i64, op: Op) -> i64 {
+    match op {
+        Op::Add(a, b) => { return acc + a + b }
+        Op::Mul(a, b) => { return acc * a * b }
+        Op::Halt => { return acc }
+    }
+}
+
+fn main() {
+    let acc = 1
+    acc = apply(acc, Op::Add(2, 3))    # 6
+    acc = apply(acc, Op::Mul(2, 3))    # 36
+    print(acc)
+}
+```
+
+Rules that matter: a value is always built through its enum, as in
+`Op::Add(2, 3)` or `Op::Halt`; a pattern is always qualified too, as in
+`Op::Add(a, b)`, and `_ => { ... }` is the wildcard arm and must come last; a
+binding is a copy of the field. A `match` that misses a variant does not
+compile. There is no `match` expression, no `Option`/`Result`, no guards and no
+matching on `i64` values.
+
 ## Rules that most often cost a round trip
 
 1. `main` takes no parameters and returns `void` or `i64`.
@@ -141,3 +216,7 @@ For a single-file answer, do not write imports; use the built-ins above.
    `1.0`.
 8. Division or overflow errors stop the program with a non-zero status; do not
    "fix" them with wrapping arithmetic.
+9. Structs need `edition 2;` on the first line, and only a field can be printed,
+   not the struct itself.
+10. A `match` covers every variant of the enum or adds a final `_` arm; a
+    variant is written `Enum::Variant`, never bare.

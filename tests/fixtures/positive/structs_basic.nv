@@ -1,0 +1,26 @@
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+struct Segment {
+    from: Point,
+    to: Point
+}
+
+fn length_squared(s: Segment) -> i64 {
+    let dx = s.to.x - s.from.x
+    let dy = s.to.y - s.from.y
+    return dx * dx + dy * dy
+}
+
+fn main() {
+    let origin = Point(x: 0, y: 0)
+    let here = Point(x: 3, y: 4)
+    let s = Segment(from: origin, to: here)
+    print(length_squared(s))
+    print(s.from.x)
+    print(s.to.y)
+}

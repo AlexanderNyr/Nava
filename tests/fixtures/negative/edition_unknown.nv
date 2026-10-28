@@ -1,0 +1,5 @@
+edition 3;
+
+fn main() {
+    print(1)
+}

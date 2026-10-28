@@ -1,0 +1,21 @@
+edition 2;
+
+struct Counter {
+    value: i64
+}
+
+fn bump(c: Counter) -> Counter {
+    c.value = c.value + 1
+    return c
+}
+
+fn main() {
+    let a = Counter(value: 1)
+    let b = bump(a)
+    print(a.value)
+    print(b.value)
+    let c = a
+    c.value = 99
+    print(a.value)
+    print(c.value)
+}

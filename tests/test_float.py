@@ -108,7 +108,7 @@ class FloatFrontendTests(unittest.TestCase):
         self.assert_code("E0316", "fn main() { if 1.5 {} }", "if condition must be bool")
         self.assert_code("E0317", "fn main() { while 1.5 {} }", "while condition must be bool")
         self.assert_code("E0349", "fn main() { for i in 0.0..2.0 {} }", "bound must be i64")
-        self.assert_code("E0203", "fn main() { let a: [f64] = [1.0] }", "must be i64, bool, or str")
+        self.assert_code("E0206", "fn main() { let a: [f64] = [1.0] }", "must be i64, bool, or str")
 
     def test_literal_rules(self):
         self.assert_code("E0346", "fn main() { print(1e999) }", "outside the f64 range")

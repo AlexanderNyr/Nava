@@ -8,6 +8,7 @@ include SECURITY.md
 include BENCHMARK.md
 include RELEASE.md
 include PLAN.md
+include INDEPENDENCE.md
 include pyproject.toml
 include MANIFEST.in
 

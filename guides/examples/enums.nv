@@ -1,0 +1,23 @@
+edition 2;
+
+enum Op {
+    Add(i64, i64),
+    Mul(i64, i64),
+    Halt
+}
+
+fn apply(acc: i64, op: Op) -> i64 {
+    match op {
+        Op::Add(a, b) => { return acc + a + b }
+        Op::Mul(a, b) => { return acc * a * b }
+        Op::Halt => { return acc }
+    }
+}
+
+fn main() {
+    let acc = 1
+    acc = apply(acc, Op::Add(2, 3))
+    acc = apply(acc, Op::Mul(2, 3))
+    acc = apply(acc, Op::Halt)
+    print(acc)
+}

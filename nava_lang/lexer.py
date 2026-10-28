@@ -13,9 +13,12 @@ KEYWORDS = {
     "while": "WHILE", "return": "RETURN", "true": "TRUE", "false": "FALSE",
     "mut": "MUT", "for": "FOR", "in": "IN", "break": "BREAK",
     "continue": "CONTINUE", "import": "IMPORT",
+    # Edition 2 keywords. They are keywords in every edition so that an
+    # edition-1 file cannot use them as identifiers and then change meaning.
+    "struct": "STRUCT", "edition": "EDITION", "enum": "ENUM", "match": "MATCH",
 }
-TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", "..", "::"}
-ONE_CHAR = set("(){}[],:+-*/%=!<>;")
+TWO_CHAR = {"->", "<=", ">=", "==", "!=", "&&", "||", "..", "::", "=>"}
+ONE_CHAR = set("(){}[],:+-*/%=!<>;.")
 #: Decimal floating-point literal: the integer part may not use underscores, so
 #: `1_0.5` is a malformed token rather than a silently different number.
 FLOAT_RE = re.compile(r"[0-9][0-9]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?")
@@ -134,6 +137,11 @@ def _lex(source: str) -> list[Token]:
             tokens.append(Token(op, op, loc))
             i += 2
             col += 2
+        elif ch == "." and tokens and tokens[-1].kind in ("NUMBER", "FLOAT"):
+            # `1.` and `1.5.5` are not literals and not a field access: keep the
+            # error at the token that caused it.
+            raise make("E0101", "unexpected character '.'", loc, loc.advance(ch),
+                       hint="a field access needs a value on the left, as in p.x")
         elif ch in ONE_CHAR:
             if ch in "([":
                 open_delimiters.append((ch, loc))

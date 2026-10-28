@@ -1,0 +1,10 @@
+edition 2;
+
+fn area(w: i64) -> i64 {
+    return w
+}
+
+fn main() {
+    let a = area(w: 2)
+    print(a)
+}

@@ -427,12 +427,55 @@ REGISTERED_TESTS = {
         "test_strict_mode_fails_when_namespaces_are_missing",
         "test_the_ok_line_names_the_isolation_backend",
     },
+    # --- N10b: enums and match -----------------------------------------------
+    "EnumFrontendTests": {
+        "test_a_match_that_does_not_return_everywhere_still_needs_a_return",
+        "test_a_struct_and_an_enum_cannot_share_a_name",
+        "test_an_enum_cannot_be_printed_or_compared",
+        "test_an_enum_needs_edition_two",
+        "test_an_exhaustive_match_counts_as_a_return",
+        "test_construction_rules",
+        "test_declaration_rules",
+        "test_enums_nest_in_structs_and_each_other",
+        "test_match_rules",
+    },
+    "EnumRuntimeTests": {
+        "test_a_wildcard_arm_catches_the_variants_it_did_not_name",
+        "test_arms_are_tried_in_source_order_and_run_once",
+        "test_bindings_are_copies",
+        "test_every_variant_is_reachable_and_binds_its_fields",
+        "test_the_scrutinee_is_evaluated_once",
+    },
+    # --- N10a: editions and structs -------------------------------------------
+    "StructFrontendTests": {
+        "test_a_duplicate_struct_is_rejected",
+        "test_a_field_may_be_written_inside_a_loop",
+        "test_a_function_does_not_take_named_arguments",
+        "test_a_struct_cannot_be_printed_or_compared",
+        "test_a_struct_may_be_a_parameter_and_a_return_value",
+        "test_a_struct_may_not_contain_itself",
+        "test_a_struct_must_be_declared_before_use_is_not_required",
+        "test_a_struct_needs_edition_two",
+        "test_an_unknown_edition_is_named",
+        "test_construction_rules",
+        "test_edition_one_is_unchanged",
+        "test_field_rules",
+        "test_member_rules",
+        "test_nesting_is_copied_with_the_struct",
+        "test_the_edition_declaration_must_come_first",
+    },
+    "StructRuntimeTests": {
+        "test_a_struct_is_copied_not_shared",
+        "test_a_struct_parameter_is_a_copy",
+        "test_fields_evaluate_left_to_right",
+    },
     # --- N10–N18: the plan is itself guarded --------------------------------
     "PhaseRecordTests": {
         "test_a_phase_is_not_called_delivered_without_a_record",
         "test_every_phase_has_an_objective_tasks_gate_and_deliverable",
         "test_the_independence_phases_also_carry_a_negative_control",
-        "test_the_status_line_names_the_last_specified_phase",
+        "test_the_status_lines_name_the_last_specified_phase",
+        "test_the_independence_plan_is_its_own_document",
     },
     "SpecificationCriteriaTests": {
         "test_decisions_are_numbered_without_gaps",
@@ -567,8 +610,8 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 83,
-    "tests/fixtures/positive": 19,
+    "tests/fixtures/negative": 107,
+    "tests/fixtures/positive": 23,
     "tests/fixtures/warnings": 2,
 }
 
@@ -626,6 +669,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_ab  # noqa: PLC0415  (import after sys.path setup)
     import test_arrays  # noqa: PLC0415
     import test_control  # noqa: PLC0415
+    import test_enums  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
     import test_grammar  # noqa: PLC0415
@@ -638,15 +682,15 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_release  # noqa: PLC0415
     import test_sandbox  # noqa: PLC0415
     import test_spec  # noqa: PLC0415
+    import test_structs  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
     import test_study  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_ab, test_arrays, test_control, test_files, test_float,
-                   test_grammar, test_guides, test_local_model_server, test_modules,
-                   test_nava, test_plan, test_registry, test_release, test_sandbox,
-                   test_spec,
-                   test_stdlib, test_study):
+    for module in (test_ab, test_arrays, test_control, test_enums, test_files,
+                   test_float, test_grammar, test_guides, test_local_model_server,
+                   test_modules, test_nava, test_plan, test_registry, test_release,
+                   test_sandbox, test_spec, test_structs, test_stdlib, test_study):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:

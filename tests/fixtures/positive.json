@@ -117,6 +117,30 @@
       "stdin": "",
       "stdout": "2\n-2\n-2\n2\n1\n-1\n1\n-1\n9223372036854775806\n-9223372036854775807\n-9223372036854775808\n-2\n6074000998\ntrue\ntrue\ntrue\n",
       "exit_code": 0
+    },
+    {
+      "file": "structs_basic.nv",
+      "stdin": "",
+      "stdout": "25\n0\n4\n",
+      "exit_code": 0
+    },
+    {
+      "file": "structs_copy.nv",
+      "stdin": "",
+      "stdout": "1\n2\n1\n99\n",
+      "exit_code": 0
+    },
+    {
+      "file": "enums_basic.nv",
+      "stdin": "",
+      "stdout": "0\n12\n12\n",
+      "exit_code": 0
+    },
+    {
+      "file": "enums_state.nv",
+      "stdin": "",
+      "stdout": "1\n2\n15\n-1\n",
+      "exit_code": 0
     }
   ]
 }
