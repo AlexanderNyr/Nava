@@ -187,7 +187,7 @@
     {
       "file": "self_test.nv",
       "stdin": "",
-      "stdout": "ok   math::abs\nok   math::min\nok   math::max\nok   math::sign\nok   math::gcd\nok   math::sum\nok   sort::is_sorted\nok   sort::insertion_sort\nok   sort::binary_search\nok   text::is_continuation\nok   text::sequence_width\nok   text::is_valid_utf8\nok   text::code_points\nok   text::is_ascii\nok   fmt::repeat\nok   fmt::pad_left\nok   fmt::pad_right\nok   fmt::pad_center\nok   fmt::clip\nok   fmt::i64_aligned\nok   fmt::f64_fixed\nok   io::count_lines\nok   io::first_line\nok   io::join_lines\nok   io::lines_of\nok   fs::basename\nok   fs::dirname\nok   fs::path_join\nok   fs::extension\nok   fs::stem\nok   fs::is_absolute\nok   args::flag_in\nok   args::value_in\nstandard library: ok\n",
+      "stdout": "ok   math::abs\nok   math::min\nok   math::max\nok   math::sign\nok   math::gcd\nok   math::sum\nok   sort::is_sorted\nok   sort::insertion_sort\nok   sort::binary_search\nok   text::is_continuation\nok   text::sequence_width\nok   text::is_valid_utf8\nok   text::code_points\nok   text::is_ascii\nok   fmt::repeat\nok   fmt::pad_left\nok   fmt::pad_right\nok   fmt::pad_center\nok   fmt::clip\nok   fmt::i64_aligned\nok   fmt::f64_fixed\nok   io::count_lines\nok   io::first_line\nok   io::join_lines\nok   io::lines_of\nok   fs::basename\nok   fs::dirname\nok   fs::path_join\nok   fs::extension\nok   fs::stem\nok   fs::is_absolute\nok   args::flag_in\nok   args::value_in\nok   collections::sum_of\nok   collections::count_of\nok   collections::contains_all\nok   collections::has_any\nok   collections::count_distinct\nok   collections::keys_of\nok   collections::elements_of\nstandard library: ok\n",
       "exit_code": 0
     },
     {

@@ -6,6 +6,7 @@ edition 2;
 # name with no test here fails the guard.
 
 import args;
+import collections;
 import fmt;
 import fs;
 import io;
@@ -367,6 +368,107 @@ fn value_in_tests() -> i64 {
     return failures
 }
 
+fn sum_of_tests() -> i64 {
+    let failures = 0
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 3)
+    vec_push(values, 1)
+    vec_push(values, 3)
+    failures = failures + test::expect_i64(collections::sum_of(values), 7,
+                                           "the sum of the vector")
+    let empty: Vec(i64) = vec_new()
+    failures = failures + test::expect_i64(collections::sum_of(empty), 0,
+                                           "an empty vector sums to nothing")
+    return failures
+}
+
+fn count_of_tests() -> i64 {
+    let failures = 0
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 3)
+    vec_push(values, 1)
+    vec_push(values, 3)
+    failures = failures + test::expect_i64(collections::count_of(values, 3), 2,
+                                           "two threes")
+    failures = failures + test::expect_i64(collections::count_of(values, 4), 0,
+                                           "a value that is not there")
+    return failures
+}
+
+fn contains_all_tests() -> i64 {
+    let failures = 0
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 1)
+    vec_push(values, 2)
+    let both: [i64] = [2, 1]
+    failures = failures + test::expect_true(collections::contains_all(values, both),
+                                            "both values are present")
+    let missing: [i64] = [1, 9]
+    failures = failures + test::expect_true(!collections::contains_all(values, missing),
+                                            "one missing value is enough to fail")
+    let none: [i64] = []
+    failures = failures + test::expect_true(collections::contains_all(values, none),
+                                            "everything of nothing is present")
+    return failures
+}
+
+fn has_any_tests() -> i64 {
+    let failures = 0
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 1)
+    vec_push(values, 2)
+    let some: [i64] = [9, 2]
+    failures = failures + test::expect_true(collections::has_any(values, some),
+                                            "one of the wanted values is there")
+    let none: [i64] = [9]
+    failures = failures + test::expect_true(!collections::has_any(values, none),
+                                            "none of the wanted values is there")
+    let nothing: [i64] = []
+    failures = failures + test::expect_true(!collections::has_any(values, nothing),
+                                            "nothing to look for, nothing found")
+    return failures
+}
+
+fn count_distinct_tests() -> i64 {
+    let failures = 0
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 3)
+    vec_push(values, 1)
+    vec_push(values, 3)
+    let seen: HashSet(i64) = set_new()
+    failures = failures + test::expect_i64(collections::count_distinct(values, seen), 2,
+                                           "two different values")
+    failures = failures + test::expect_i64(set_len(seen), 2,
+                                           "the scratch set kept them")
+    return failures
+}
+
+fn keys_of_tests() -> i64 {
+    let failures = 0
+    let table: HashMap(str, i64) = map_new()
+    map_set(table, "a", 1)
+    map_set(table, "b", 2)
+    let keys: Vec(str) = vec_new()
+    collections::keys_of(table, keys)
+    failures = failures + test::expect_i64(vec_len(keys), 2, "one key per entry")
+    failures = failures + test::expect_true(!map_contains(table, "c"),
+                                            "the table itself is unchanged")
+    return failures
+}
+
+fn elements_of_tests() -> i64 {
+    let failures = 0
+    let items: HashSet(i64) = set_new()
+    set_add(items, 4)
+    set_add(items, 5)
+    let listed: Vec(i64) = vec_new()
+    collections::elements_of(items, listed)
+    failures = failures + test::expect_i64(vec_len(listed), 2, "one element per value")
+    failures = failures + test::expect_i64(set_len(items), 2,
+                                           "the set itself is unchanged")
+    return failures
+}
+
 fn main() -> i64 {
     let failed = 0
     failed = failed + test::run("math::abs", abs_tests)
@@ -402,5 +504,12 @@ fn main() -> i64 {
     failed = failed + test::run("fs::is_absolute", is_absolute_tests)
     failed = failed + test::run("args::flag_in", flag_in_tests)
     failed = failed + test::run("args::value_in", value_in_tests)
+    failed = failed + test::run("collections::sum_of", sum_of_tests)
+    failed = failed + test::run("collections::count_of", count_of_tests)
+    failed = failed + test::run("collections::contains_all", contains_all_tests)
+    failed = failed + test::run("collections::has_any", has_any_tests)
+    failed = failed + test::run("collections::count_distinct", count_distinct_tests)
+    failed = failed + test::run("collections::keys_of", keys_of_tests)
+    failed = failed + test::run("collections::elements_of", elements_of_tests)
     return test::summary("standard library", failed)
 }

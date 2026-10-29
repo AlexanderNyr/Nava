@@ -162,6 +162,26 @@ REGISTERED_TESTS = {
         "test_an_option_of_nava_after_the_source_belongs_to_nava",
         "test_no_double_dash_means_no_arguments",
     },
+    #: N12h: `collections` — every public name of this module runs in the
+    #: self-test (none of them needs a file, a grant or a command line), so this
+    #: file carries the properties a single call cannot show: appending rather
+    #: than replacing, a scratch set that keeps its values, the checked sum and
+    #: the stability of the iteration order.
+    "ReadingTests": {
+        "test_the_sum_is_checked",
+        "test_counting_and_containment_agree_with_each_other",
+        "test_an_empty_vector_and_an_empty_wanted_list",
+    },
+    "FillingTests": {
+        "test_keys_are_appended_not_replaced",
+        "test_elements_are_appended_after_removals",
+        "test_the_scratch_set_keeps_its_values",
+        "test_a_set_that_already_held_values_counts_them",
+    },
+    "OrderTests": {
+        "test_two_listings_of_one_table_agree",
+        "test_the_same_insertions_give_the_same_order",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1180,6 +1200,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_io  # noqa: PLC0415
     import test_fs  # noqa: PLC0415
     import test_args  # noqa: PLC0415
+    import test_collections  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1188,7 +1209,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
-                   test_io, test_fs, test_args,
+                   test_io, test_fs, test_args, test_collections,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1261,7 +1282,11 @@ def check_skip_state() -> list[str]:
     import test_io  # noqa: PLC0415
     import test_fs  # noqa: PLC0415
     import test_args  # noqa: PLC0415
-    for module, class_name in ((test_args, "ArgumentTests"),
+    import test_collections  # noqa: PLC0415
+    for module, class_name in ((test_collections, "ReadingTests"),
+                               (test_collections, "FillingTests"),
+                               (test_collections, "OrderTests"),
+                               (test_args, "ArgumentTests"),
                                (test_args, "FlagAndValueTests"),
                                (test_args, "CommandLineTests"),
                                (test_fs, "ExistenceTests"),

@@ -172,6 +172,10 @@ fn main() {
 - `args` — `args::flag_in` and `args::value_in` over an array of words
   (`pure: yes`), and `args::count`, `args::get`, `args::flag`, `args::value`
   over the real command line (`pure: no`). A flag is a whole word.
+- `collections` — `collections::sum_of`, `collections::count_of`,
+  `collections::contains_all`, `collections::has_any` (`pure: yes`), and
+  `collections::count_distinct`, `collections::keys_of`,
+  `collections::elements_of`, which fill a container the caller passes in.
 
 Two aligned columns, without a format language to learn:
 
@@ -232,6 +236,23 @@ fn main() -> i64 {
 ```
 
 Run as `nava run prog.nv -- --count 3`, this prints `3`.
+
+Asking a question about a whole collection:
+
+```nava
+edition 2;
+
+import collections;
+
+fn main() {
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 3)
+    vec_push(values, 1)
+    vec_push(values, 3)
+    print(collections::sum_of(values))
+    print(collections::count_of(values, 3))
+}
+```
 
 For a single-file answer, do not write imports; use the built-ins above.
 

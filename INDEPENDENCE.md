@@ -52,7 +52,7 @@ moment the language has to express a compiler.
 The requirement list below is not a wish list: it is an audit of the 10 631 lines,
 14 modules and 329 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12g) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12h) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,37 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12h (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| The whole collection, not one element at a time | `nava_lang/stdlib/collections.nv`, `docs/stdlib/collections.md` (267 lines, 6 441 bytes), `tests/test_contracts.py` | seven public functions, each with a summary, `pre:`, `post:`, `cost:`, `pure:` and examples; `contracts.check_program` returns `[]` and `nava doc` renders the reference from the blocks |
+| Reading is pure, writing is not, and the line is the caller's storage | `contracts.purity_problems`, the `pure:` lines | `sum_of`, `count_of`, `contains_all` and `has_any` are `pure: yes` — they look and answer. `count_distinct`, `keys_of` and `elements_of` are `pure: no`, and the effect is real rather than technical: they write into a `mut` container the caller keeps and can inspect afterwards |
+| A function that fills a container takes it as a parameter | `FillingTests.test_keys_are_appended_not_replaced`, `test_elements_are_appended_after_removals` | the vector keeps what it held (`["kept"]` plus two keys is three elements) and the set is listed after a removal (`4` removed, `5` listed). Returning a container was the alternative and it was refused: the caller decides how much a scratch collection costs, and a loop reuses one |
+| A scratch collection keeps its values | `test_the_scratch_set_keeps_its_values`, `test_a_set_that_already_held_values_counts_them` | `count_distinct` called twice on the same vector answers `2` and `2`, not `2` and `4`, because it answers `set_len(seen)` after the call; a set that already held a value counts it, which is what the contract says and what a reader who assumed "how many were new" would get wrong |
+| The arithmetic is checked | `ReadingTests.test_the_sum_is_checked`, the module's documented `error:` line | `sum_of` over `[i64_max, 1]` stops the program with `i64 overflow in +` — the same text `math::sum` gives, because it is the same `+`. The guard executes the documented failure |
+| The iteration order is the container's, and it is stable | `OrderTests` (2 tests) | two listings of one table agree element for element; two separately built sets with the same insertions list the same order. That is the claim made: stable, not sorted — the contract says a program that needs an order sorts where the data is |
+| Every public name is tested in the language itself | `tests/fixtures/positive/self_test.nv`, `tests/test_self_test.py` | seven new bodies, one per public name, so this module adds **no** entry to `TESTED_ELSEWHERE`: none of its functions needs a file, a grant or a command line. The run prints 41 lines of `ok` and `standard library: ok`, 863 bytes, recorded as the positive case |
+| A test would fail if the sum wrapped | `ReadingTests`, and the module's `error:` line | the checked `+` is asserted twice: once by the generated program's runtime message and once by the contract lane that runs the documented failure. A wrapping sum would pass neither |
+| The specification, the guide and the records moved with the code | `LANGUAGE.md` (`### collections`, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the table of seven functions, the parameter convention, the append rule, the `set_len(seen)` rule and the order claim are normative; the guide lists the module and a program that asks two questions of one vector, and is re-pinned at 31 833 bytes, 31 747 characters, 917 lines, sha256 `ca6c7aa7…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 105 642 tokens (`cl100k_base`) and 106 060 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 105 006 / 105 424 |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 10 631 lines, 14 modules, 329 functions — unchanged from N12g, and said so: this increment added a standard-library module and its tests, and the audit counts the compiler |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, `bash /tmp/ci-sim.sh` | registry `OK: 760 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **830 tests OK** (1 415 subtests); nine packaged modules in the contract list; release checks OK; the guide digest verifies; the CI simulation passes |
+
+Negative controls: the checked sum (documented, executed, and separately asserted
+with an overflow that must stop the program), the empty-collection answers (an
+empty `wanted` is vacuously present for `contains_all` and absent for `has_any`,
+which is the pair a reader is most likely to get backwards), and the two calls of
+`count_distinct` that would answer `4` if the scratch set were cleared or
+double-counted.
+
+Deliberately not done in N12h: sorting, and a container-returning form. Sorting a
+vector needs an order over elements, and the language sorts arrays
+(`sort::insertion_sort`) — a vector-to-array copy or a new `sort` for vectors is a
+decision for the phase that needs it, not a convenience to smuggle in here.
+Returning a container was refused for the reason above and is recorded as a
+decision rather than an omission.
 
 #### Delivery record N12g (2026-10-29)
 
@@ -1032,7 +1063,8 @@ self-testing facility.
 | N12e | **`io`**: lines of text — `count_lines`, `first_line`, `join_lines`, `lines_of` — and the files they come from: `read_lines`, `write_lines`, `append_line`, on the capability model N6 established, with the file half tested against grants and the text half in the self-test | **Delivered** (record below) |
 | N12f | **`fs`**: six pure path functions (`basename`, `dirname`, `path_join`, `extension`, `stem`, `is_absolute`) and three filesystem questions (`exists`, `size`, `entries`) over three new builtins — `path_exists`, `file_size`, `list_dir` — on the read-grant model, with the listing ordered by bytes | **Delivered** (record below) |
 | N12g | **`args`**: the words a program was started with — the builtins `arg_count`/`arg_at`, the `--` fence on the command line, six module functions of which two are pure over an array of words and four read the real command line | **Delivered** (record below) |
-| N12h–N12x | the remaining `collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12h | **`collections`**: the layer above one element at a time — four read-only questions (`sum_of`, `count_of`, `contains_all`, `has_any`) and three functions that fill a container the caller passes in (`count_distinct`, `keys_of`, `elements_of`) | **Delivered** (record below) |
+| N12i–N12x | `time`, the last module of the phase, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here

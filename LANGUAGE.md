@@ -611,6 +611,7 @@ nava_lang/stdlib/fmt.nv       repeat, pad_left, pad_right, pad_center, clip, ...
 nava_lang/stdlib/io.nv        count_lines, first_line, join_lines, lines_of, read_lines, ...
 nava_lang/stdlib/fs.nv        basename, dirname, path_join, extension, stem, exists, ...
 nava_lang/stdlib/args.nv      flag_in, value_in, count, get, flag, value
+nava_lang/stdlib/collections.nv  sum_of, count_of, contains_all, has_any, ...
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -831,6 +832,54 @@ Run as `nava run prog.nv -- --count 3`, this prints `3`.
 The contract examples of `args` are executed with a fixed command line,
 `--count 3 name`, because a module about a command line cannot be demonstrated
 without one; every other module's examples ignore it.
+
+### `collections`
+
+The layer above one element at a time: a question about the whole collection.
+
+| Function | Result |
+|---|---|
+| `collections::module_version() -> i64` | the standard library version |
+| `collections::sum_of(values: Vec(i64)) -> i64` | the sum, with the checked `+`; `0` for an empty vector |
+| `collections::count_of(haystack: Vec(i64), value: i64) -> i64` | how many elements equal the value |
+| `collections::contains_all(haystack: Vec(i64), wanted: [str]) -> bool` | is every wanted value present? |
+| `collections::has_any(haystack: Vec(i64), wanted: [str]) -> bool` | is at least one present? |
+| `collections::count_distinct(values: Vec(i64), seen: mut HashSet(i64)) -> i64` | how many different values, counted into the caller's set |
+| `collections::keys_of(table: HashMap(str, i64), out: mut Vec(str))` | the keys, appended to the caller's vector |
+| `collections::elements_of(items: HashSet(i64), out: mut Vec(i64))` | the elements, appended to the caller's vector |
+
+The four functions that only read are `pure: yes`; the three that fill a container
+are `pure: no`, because the effect is on storage the caller keeps. A function that
+fills a container takes it as a **parameter** rather than returning one: the
+caller decides how much a scratch collection costs, and a loop that calls one of
+these reuses it. Filling appends — what the vector already held is kept — and the
+number appended is the length of the source. `count_distinct` leaves the values in
+the set it was given, so it answers `set_len(seen)` **after** the call: a second
+call answers the same number, not twice the count.
+
+The iteration order of `keys_of` and `elements_of` is the container's own order.
+It is stable for the same insertions in the same build — the tests assert exactly
+that — but it is not a sorted order, and a program that needs one sorts where the
+data is: `sort::insertion_sort` sorts an array, and a vector is not an array.
+
+```nava
+edition 2;
+
+import collections;
+
+fn main() {
+    let values: Vec(i64) = vec_new()
+    vec_push(values, 3)
+    vec_push(values, 1)
+    vec_push(values, 3)
+    print(collections::sum_of(values))
+    print(collections::count_of(values, 3))
+    let seen: HashSet(i64) = set_new()
+    print(collections::count_distinct(values, seen))
+}
+```
+
+This prints `7`, `2` and `2`.
 
 ## Doc blocks and `nava doc`
 

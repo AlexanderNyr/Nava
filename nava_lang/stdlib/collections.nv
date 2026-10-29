@@ -1,0 +1,194 @@
+edition 2;
+
+# Nava standard library: the small things every program does to a collection.
+# Version 1.
+#
+# `Vec(T)`, `HashMap(K, V)` and `HashSet(T)` have builtins for one element at a
+# time; this module is the layer above them, where the question is about the
+# whole collection.
+#
+# Two conventions are worth stating, because both are visible from outside:
+#
+#   * **A function that fills a container takes it as a parameter.** `keys_of`,
+#     `elements_of` and `count_distinct` do not return a container; they write
+#     into one the caller owns, through `mut`. That is why they are `pure: no` —
+#     the effect is on storage the caller can see afterwards — and it is also why
+#     there is no allocation inside them: the caller decides how much a scratch
+#     collection is worth, and a loop that calls one of these reuses one.
+#   * **A function that only reads is `pure: yes`.** `sum_of`, `count_of`,
+#     `contains_all` and `has_any` look at the values they are given and answer,
+#     so the same call always gives the same answer.
+#
+# Nothing here sorts: `sort::insertion_sort` sorts an array, and a vector is not
+# an array. A program that needs an order gets one by sorting where the data is.
+#
+# A program that uses the module:
+#
+#     import collections;
+#
+#     fn main() {
+#         let values: Vec(i64) = vec_new()
+#         vec_push(values, 3)
+#         vec_push(values, 1)
+#         vec_push(values, 3)
+#         print(collections::sum_of(values))          # 7
+#         print(collections::count_of(values, 3))     # 2
+#         let seen: HashSet(i64) = set_new()
+#         print(collections::count_distinct(values, seen))   # 2
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `sum_of(values)` — the sum of a vector of whole numbers.
+///
+/// pre: none
+/// post: the sum of every element, and `0` for an empty vector; the addition is
+/// the checked one, so a sum that does not fit in an `i64` stops the program
+/// rather than wrapping round
+/// cost: O(vec_len(values))
+/// pure: yes
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); vec_push(values, 2); collections::sum_of(values) == 3
+/// example: let empty: Vec(i64) = vec_new(); collections::sum_of(empty) == 0
+/// example: let mixed: Vec(i64) = vec_new(); vec_push(mixed, -5); vec_push(mixed, 5); collections::sum_of(mixed) == 0
+/// error: let big: Vec(i64) = vec_new(); vec_push(big, 9223372036854775807); vec_push(big, 1); print(collections::sum_of(big)) => i64 overflow in +
+pub fn sum_of(values: Vec(i64)) -> i64 {
+    let total = 0
+    let i = 0
+    while i < vec_len(values) {
+        total = total + vec_get(values, i)
+        i = i + 1
+    }
+    return total
+}
+
+/// `count_of(haystack, value)` — how many elements are equal to this one.
+///
+/// pre: none
+/// post: the number of positions whose element equals `value`, and `0` for an
+/// empty vector
+/// cost: O(vec_len(haystack))
+/// pure: yes
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 3); vec_push(values, 1); vec_push(values, 3); collections::count_of(values, 3) == 2
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 3); collections::count_of(values, 4) == 0
+/// example: let empty: Vec(i64) = vec_new(); collections::count_of(empty, 0) == 0
+pub fn count_of(haystack: Vec(i64), value: i64) -> i64 {
+    let found = 0
+    let i = 0
+    while i < vec_len(haystack) {
+        if vec_get(haystack, i) == value {
+            found = found + 1
+        }
+        i = i + 1
+    }
+    return found
+}
+
+/// `contains_all(haystack, wanted)` — is every wanted value in the vector?
+///
+/// pre: none
+/// post: true when each element of `wanted` appears at least once in `haystack`;
+/// true for an empty `wanted`, because there is nothing missing; multiplicity is
+/// not counted, so wanting the same value twice needs it in the vector once
+/// cost: O(vec_len(haystack) × len(wanted))
+/// pure: yes
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); vec_push(values, 2); let wanted: [i64] = [2, 1]; collections::contains_all(values, wanted)
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); let wanted: [i64] = [1, 2]; !collections::contains_all(values, wanted)
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); let none: [i64] = []; collections::contains_all(values, none)
+pub fn contains_all(haystack: Vec(i64), wanted: [i64]) -> bool {
+    let w = 0
+    while w < len(wanted) {
+        let found = false
+        let i = 0
+        while i < vec_len(haystack) {
+            if vec_get(haystack, i) == wanted[w] {
+                found = true
+            }
+            i = i + 1
+        }
+        if !found {
+            return false
+        }
+        w = w + 1
+    }
+    return true
+}
+
+/// `has_any(haystack, wanted)` — is at least one wanted value in the vector?
+///
+/// pre: none
+/// post: true when some element of `wanted` appears in `haystack`; false for an
+/// empty `wanted` or an empty vector, because nothing was found
+/// cost: O(vec_len(haystack) × len(wanted))
+/// pure: yes
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); vec_push(values, 2); let wanted: [i64] = [2, 9]; collections::has_any(values, wanted)
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 1); let wanted: [i64] = [9]; !collections::has_any(values, wanted)
+/// example: let values: Vec(i64) = vec_new(); let none: [i64] = []; !collections::has_any(values, none)
+pub fn has_any(haystack: Vec(i64), wanted: [i64]) -> bool {
+    let w = 0
+    while w < len(wanted) {
+        let i = 0
+        while i < vec_len(haystack) {
+            if vec_get(haystack, i) == wanted[w] {
+                return true
+            }
+            i = i + 1
+        }
+        w = w + 1
+    }
+    return false
+}
+
+/// `count_distinct(values, seen)` — how many different values the vector holds.
+///
+/// pre: none
+/// post: every element of `values` is added to `seen`, and the result is
+/// `set_len(seen)` — the size of the set as it stands after the call, so a set
+/// that already held values counts them too; the caller's set is left with the
+/// values in it, which is what makes a second call answer the same number
+/// cost: O(vec_len(values)) expected set operations
+/// pure: no
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 3); vec_push(values, 1); vec_push(values, 3); let seen: HashSet(i64) = set_new(); collections::count_distinct(values, seen) == 2
+/// example: let empty: Vec(i64) = vec_new(); let seen: HashSet(i64) = set_new(); collections::count_distinct(empty, seen) == 0
+/// example: let values: Vec(i64) = vec_new(); vec_push(values, 7); let seen: HashSet(i64) = set_new(); set_add(seen, 7); collections::count_distinct(values, seen) == 1
+pub fn count_distinct(values: Vec(i64), seen: mut HashSet(i64)) -> i64 {
+    let i = 0
+    while i < vec_len(values) {
+        set_add(seen, vec_get(values, i))
+        i = i + 1
+    }
+    return set_len(seen)
+}
+
+/// `keys_of(table, out)` — the keys of a table, appended to a vector.
+///
+/// pre: none
+/// post: one `str` per key is appended to `out`, in the table's own iteration
+/// order; what the vector already held is kept, and the number appended is
+/// `map_len(table)`
+/// cost: O(map_len(table))
+/// pure: no
+/// example: let table: HashMap(str, i64) = map_new(); map_set(table, "a", 1); map_set(table, "b", 2); let keys: Vec(str) = vec_new(); collections::keys_of(table, keys); vec_len(keys) == 2
+/// example: let table: HashMap(str, i64) = map_new(); let keys: Vec(str) = vec_new(); collections::keys_of(table, keys); vec_len(keys) == 0
+pub fn keys_of(table: HashMap(str, i64), out: mut Vec(str)) {
+    for key in table {
+        vec_push(out, key)
+    }
+}
+
+/// `elements_of(items, out)` — the elements of a set, appended to a vector.
+///
+/// pre: none
+/// post: one `i64` per element is appended to `out`, in the set's own iteration
+/// order; what the vector already held is kept, and the number appended is
+/// `set_len(items)`
+/// cost: O(set_len(items))
+/// pure: no
+/// example: let items: HashSet(i64) = set_new(); set_add(items, 4); set_add(items, 5); let listed: Vec(i64) = vec_new(); collections::elements_of(items, listed); vec_len(listed) == 2
+/// example: let items: HashSet(i64) = set_new(); let listed: Vec(i64) = vec_new(); collections::elements_of(items, listed); vec_len(listed) == 0
+pub fn elements_of(items: HashSet(i64), out: mut Vec(i64)) {
+    for value in items {
+        vec_push(out, value)
+    }
+}

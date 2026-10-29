@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+N12h: **`collections`** — the layer above one element at a time.
+
+- Four questions that only read, and are `pure: yes`: `sum_of` (checked `+`, so a
+  sum that does not fit stops the program), `count_of`, `contains_all` and
+  `has_any`. An empty wanted list is vacuously contained and never "any", which is
+  the pair a reader is most likely to get backwards.
+- Three that fill a container the caller passes in, and are `pure: no` because the
+  effect is on storage the caller keeps: `count_distinct(values, seen)`,
+  `keys_of(table, out)` and `elements_of(items, out)`. Filling **appends**; the
+  vector keeps what it held. `count_distinct` answers `set_len(seen)` after the
+  call, so calling it twice answers the same number instead of doubling it.
+- The iteration order is the container's own: stable for the same insertions in
+  the same build, and not claimed to be sorted.
+- Every public name of this module runs in the standard library's self-test, so it
+  adds no entry to `TESTED_ELSEWHERE`; the run is 41 `ok` lines and `standard
+  library: ok`, 863 bytes recorded as a positive case.
+
 N12g: **`args`**, and a program's command line. A program can see the words it
 was started with, and nothing about them is interpreted.
 
