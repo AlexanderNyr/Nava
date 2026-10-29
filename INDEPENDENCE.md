@@ -9,8 +9,9 @@ no C compiler, no libc.
 N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
 (function values and pointers) are done. N11 is in progress: N11a (strings and
 enums as values, arrays of every value), N11b (owning fields, with the copy and
-release rules they need) and N11c (`Vec(T)`, the growing vector) are delivered,
-N11d is specified, and N12–N18 are not started.** The
+release rules they need), N11c (`Vec(T)`, the growing vector) and N11d (`String`,
+the `str_*` text functions and the arena) are delivered, and N12–N18 are not
+started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -46,23 +47,23 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 8 092 lines,
+The requirement list below is not a wish list: it is an audit of the 8 573 lines,
 13 modules and 266 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11c) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11d) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
 | `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 281 / 55 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 72 / 63 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `raise` / `try` | 287 / 55 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 73 / 63 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
 | `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 125 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add`, `.discard`, `.update` | 15 / 14 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 487 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 101 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 23 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
+| set literal, `.add`, `.discard`, `.update` | 16 / 14 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 519 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 103 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 24 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(...)`, of which `key=` | 5 / 1 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
 | generator expressions, list/set comprehensions | 57 / 40 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 2 | a function used as a value: `fn(i64) -> i64` and a call through a variable (N10g; there is still no closure, and the audit row is closed because a call-back needs no `lambda`) | N10 |
@@ -296,7 +297,53 @@ the checker, the code generator, the specification and the guide.
 | N11a | `str` as a struct field and a variant payload; arrays of enums; `array_zeros` restricted to element types with a zero value | **Delivered** (record below) |
 | N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | **Delivered** (record below) |
 | N11c | `Vec(T)` with amortised growth, `pop -> Option<T>`, iteration, and the owner/release accounting it needs | **Delivered** (record below) |
-| N11d | `String` (growing UTF-8) with the audit's methods, `HashMap<K, V>` and `HashSet<T>` with a deterministic hash, and the **arena allocator with its accounting**, deferred from N11c for the reason the record gives | Open (next) |
+| N11d | `String` (growing UTF-8) with the audit's methods and the **arena allocator with its accounting**, deferred from N11c for the reason that record gives; `HashMap`/`HashSet` moved to N12 | **Delivered** (record below) |
+
+`HashMap` and `HashSet` are the one item of N11 that moved: the audit's dict and
+set rows are compiler bookkeeping, and the collections belong with the standard
+library and the package work of N12 rather than with the memory model. The move
+is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
+collection type".
+
+
+#### Delivery record N11d (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A program can build text | `tests/test_text.py`: `test_the_constructors_produce_the_text_that_print_writes`, `test_slices_and_searches_are_checked_and_exact`, `test_trim_and_replace_build_the_expected_text` | `str_concat`, `str_from_i64`, `str_from_f64`, `str_slice`, `str_index_of`, `str_starts_with`, `str_ends_with`, `str_trim` and `str_replace` return a `str`; the constructors produce exactly the decimal text `print` writes (`1.0`, `0.5`, `-9223372036854775808`), a slice of `abcdef` is `cdef`, a missing needle is `-1`, and an out-of-range slice prints `nava runtime error: string slice 1..9 is out of bounds for a string of 3 bytes` and exits non-zero with nothing on stdout |
+| `String` owns bytes and grows by doubling | `test_the_builder_grows_by_doubling_and_keeps_its_text`, `test_text_built_in_a_loop_and_from_a_parameter_is_stable` | capacity `32 → 64 → 128` while 90 bytes are written, `string_text` is stable after a later push (the finished text is copied into the arena, so the builder may grow under it), and the block that wrote the `let` frees the buffer |
+| Text that is split and joined goes through a vector | `test_split_fills_a_vector_and_join_reads_one` | `str_split("a,bb,,ccc", ",", parts)` gives four fields including the empty one, `str_join(parts, "-")` is `a-bb--ccc`, and an empty separator is a runtime error rather than an empty list |
+| What is refused is refused once, from one place | `test_a_string_cannot_be_copied_or_reassigned`, `…_returned_a_field_or_a_payload`, `…_an_element_or_a_type_argument`, `test_a_mutating_call_needs_a_writable_string` | copy, reassign, return, field, payload and type argument are `E0428`; `[String]` is `E0426` and `Vec(String)` is `E0427`, both naming the reason; `string_push` through a plain `String` parameter is `E0444`; a `mut String` argument from a borrow is `E0333` |
+| The strings are reserved and edition-scoped | `test_the_text_names_are_reserved`, `test_a_string_needs_edition_two` | `fn str_concat(…)` and `let string_new = 1` are `E0301`; `String` in an edition-1 file is `E0372` |
+| The arena is the accounting, and it is released | `test_the_arena_is_one_chunk_for_small_text_and_freed_at_exit`, `test_a_large_amount_of_text_uses_several_chunks` | under `-DNAVA_TRACK_ALLOCS` the runtime prints `nava: arena bytes: N, chunks: M`; one chunk serves 8 bytes of text, 20 000 concatenations of 32 bytes need several chunks, and AddressSanitizer reports no leak — every chunk is freed at exit |
+| Text and vectors under the sanitizers | `test_text_and_vectors_under_the_sanitizers` | 200 rounds of `str_replace`/`str_concat` over a split vector, with a builder per round, clean under AddressSanitizer and UndefinedBehaviorSanitizer and with the live-array counter at zero |
+| A defect from N11c is closed, and pinned | `ArgumentOnceTests` in `tests/test_text.py` | the vector builtins used to evaluate their arguments twice: `vec_push(xs, bump(1))` printed `1` twice, because the dispatch ran *after* the generic argument materialisation. Every vector and text builtin now materialises each argument once, and two tests assert the printed count |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### Strings that grow: String and the text builtins`, the code table), `guides/nava-1.md` (`## Edition 2: String and the text functions`) | The type, the seventeen builtins, the owner and borrow rules, the arena's lifetime and the byte-versus-character rule are normative; `E0428` now covers a `String` and names both fixtures; `tests/test_guides.py` requires every builtin name in the guide, and the digest is re-pinned |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base` and `--encoding o200k_base` | prompt 69 562 tokens (`cl100k_base`) and 69 848 (`o200k_base`) for the `gcd` task, of which the guide is 68 926 / 69 212 tokens at 20 848 bytes |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 8 573 lines, 13 modules, 269 functions under `nava_lang/` after this increment (8 092 / 13 / 266 at N11c) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 584 registered tests, 11 tasks with 76 cases, 181 spec fixtures, 143 diagnostic codes`; suite **654 tests OK** (1 186 subtests) |
+
+Negative controls: four new fixtures — `string_copied.nv` (`E0428`),
+`string_field.nv` (`E0428`), `string_mutated_through_a_borrow.nv` (`E0444`) and
+`array_of_strings.nv` (`E0426`) — each asserting its own code, location, message
+and hint, and two existing fixtures were updated because the text of two
+messages moved with the new rules (`E0426` now names the *move* work of N11e, and
+`E0341` names an array, a vector or a String parameter). The behavioural control
+that carries the memory claim is the arena accounting plus AddressSanitizer: a
+chunk that is never released is a LeakSanitizer report, and the counter printed at
+exit says how much text was handed out. The control that carries the language
+claim is `string_mutated_through_a_borrow.nv`: a builder is bytes one owner
+writes, so a mutating call through a read-only parameter is refused exactly as a
+mutating vector call is.
+
+Deliberately not done in N11d: **`HashMap`/`HashSet`** (moved to N12, with the
+reason given in the increment table); a `String` or a `Vec` as a field, a payload,
+a type argument or a return value, and therefore `Vec(String)` and `[String]` as
+storage — the same move work that N11c deferred appears here, because an owning
+value that crosses a frame boundary is what a region cannot reclaim; `str_from_bool`,
+`str_chars`, string indexing and iteration over a `String`; UTF-8-aware slicing
+(slices and lengths are bytes, and `chars_len` plus the `text` standard module
+stay the character-level tools).
 
 #### Delivery record N11c (2026-10-28)
 
@@ -843,7 +890,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 8 092 Python lines and 266 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 8 573 Python lines and 269 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

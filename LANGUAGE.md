@@ -821,7 +821,7 @@ assignment, a field write, a `match` binding and a `return` — and is not elide
 
 A value that owns an array may not be an **array element** (`E0426`): an element
 is copied on every read and every write, so `[Bag]` would need those copies to be
-deep, which is the arena work of N11d. A struct name is shared by
+deep, which is the move work of N11e. A struct name is shared by
 every module of the program (`E0380` for a duplicate), and a struct may not
 contain itself directly or through another struct (`E0377`), because a struct is
 stored inline and a recursive type would have no finite size. A variant payload
@@ -1029,7 +1029,7 @@ an enum that owns nothing itself. `f64`, `void` and another array are refused
 (`E0206` for the shapes no symbol table could allow, `E0203` for a name that is
 not declared), and a struct or enum that holds an array is refused with `E0426`:
 an element is copied on every read and every write, so an owning element would
-need deep copies in the storage itself, which the arena work of N11d brings. An
+need deep copies in the storage itself, which the move work of N11e brings. An
 enum is a value like a struct — its payload is stored inline — so `[Shape]` is
 an array of plain values and the array stays the single owner.
 
@@ -1166,7 +1166,7 @@ What the type is, and what it is not:
   name that declares nothing is `E0203`. An element may not own storage
   (`E0427`): a vector copies elements on every push and every read, and a
   shrinking vector would have to release elements it never copied, so an owning
-  element waits for the arena work of N11d, exactly as an owning array element
+  element waits for the move work of N11e, exactly as an owning array element
   does.
 * the block that writes the `let` owns the vector and releases it when the block
   ends, including on an early `return`. A vector cannot be **copied** (`E0428`:
@@ -1204,6 +1204,101 @@ What the type is, and what it is not:
 * the seven names are **reserved** (`E0301`): `fn vec_new()` or `let vec_len = 1`
   is refused, because the builtin is resolved before any declaration and a
   program that shadowed it would be writing dead code.
+
+### Strings that grow: `String` and the text builtins
+
+A `str` is immutable and lives for the whole run; a program cannot build one.
+`String` is the owner of bytes a program assembles a piece at a time, and the
+`str_*` builtins build a finished `str` from parts.
+
+```text
+string_type    = "String" ;                     # edition 2
+string_call    = ( "string_new" | "string_push" | "string_push_byte"
+                 | "string_len" | "string_capacity" | "string_clear"
+                 | "string_text" ) "(" ... ")" ;
+text_call      = ( "str_concat" | "str_from_i64" | "str_from_f64" | "str_slice"
+                 | "str_index_of" | "str_starts_with" | "str_ends_with"
+                 | "str_trim" | "str_replace" | "str_split" | "str_join" )
+                 "(" ... ")" ;
+```
+
+```nava
+edition 2;
+
+fn join(words: Vec(str), sep: str) -> str {
+    let out: String = string_new()
+    let first = true
+    for word in words {
+        if !first { string_push(out, sep) }
+        string_push(out, word)
+        first = false
+    }
+    return string_text(out)
+}
+
+fn main() {
+    let parts: Vec(str) = vec_new()
+    str_split("a,bb,ccc", ",", parts)
+    print(vec_len(parts))
+    print(str_join(parts, "-"))
+    print(join(parts, "/"))
+    print(str_concat("na", "va"))
+    print(str_from_i64(-42))
+    print(str_replace("a-b-c", "-", "+"))
+}
+```
+
+The example prints `3`, `a-bb-ccc`, `a/bb/ccc`, `nava`, `-42`, `a+b+c`.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `string_new()` | `String` | an empty builder |
+| `string_push(s, x)` | `void` | append a `str` |
+| `string_push_byte(s, b)` | `void` | append one byte, `0..255`, never `0` |
+| `string_len(s)` | `i64` | bytes written so far |
+| `string_capacity(s)` | `i64` | bytes before the next growth |
+| `string_clear(s)` | `void` | forget the bytes, keep the capacity |
+| `string_text(s)` | `str` | the finished text, as an immutable `str` |
+| `str_concat(a, b)` | `str` | the two strings joined |
+| `str_from_i64(n)` / `str_from_f64(x)` | `str` | the same decimal text `print` writes |
+| `str_slice(x, i, j)` | `str` | bytes `i .. j`, both checked |
+| `str_index_of(x, needle)` | `i64` | first byte offset, or `-1` |
+| `str_starts_with(x, p)` / `str_ends_with(x, p)` | `bool` | prefix and suffix tests |
+| `str_trim(x)` | `str` | leading and trailing ASCII whitespace removed |
+| `str_replace(x, from, to)` | `str` | every occurrence of `from` |
+| `str_split(x, sep, out)` | `void` | appends each field to a `mut Vec(str)` |
+| `str_join(parts, sep)` | `str` | the vector's strings with `sep` between them |
+
+The rules, and the reasons for them:
+
+* `String` has **exactly one owner**, like an array and like a vector. It cannot
+  be copied, reassigned, returned, stored in a field, used as a payload or a type
+  argument (`E0428`), and an element of an array or a vector may not be a
+  `String` (`E0426` / `E0427`). A `mut String` parameter is a borrow that may
+  write, and a `String` parameter may not.
+* the block that writes `let s: String = string_new()` releases the buffer when
+  it ends, including on an early `return`. Growth doubles from 32 bytes; the
+  buffer is allocated through the same checked allocator as an array, so the
+  leak counter sees it.
+* `str_split` writes into a vector instead of returning one, because a program
+  cannot return an array or a vector: `let parts: Vec(str) = vec_new()` followed
+  by `str_split(x, sep, parts)` is the shape, and `vec_len(parts)` is the count.
+  An empty separator is a runtime error rather than an empty field list.
+* **Built `str` values live in an arena** — one list of chunks, bump-allocated
+  and released together when the process exits. Text a program builds is
+  immutable and may be stored anywhere `str` may go (a field, a payload, a
+  returned local), so a region cannot be reclaimed while something that crossed
+  a frame boundary can still point into it; that needs the move tracking of
+  N11e. Cycles and literals are unaffected: literals are static and are never
+  copied. Under `-DNAVA_TRACK_ALLOCS` the arena prints its own accounting
+  (`nava: arena bytes: N, chunks: M`) and frees every chunk at exit, which is
+  what the AddressSanitizer gate checks.
+* `string_text` copies into the arena rather than handing out the builder's
+  buffer: the builder may grow afterwards, and a `str` must not change.
+* bytes are not characters. `string_len` and `str_slice` count bytes, like
+  `bytes_len` and `byte_at`; `chars_len` remains the one place where UTF-8 is
+  validated, and the `text` standard module (`is_valid_utf8`, `code_points`)
+  adds classification without allocating.
 
 ### `defer`, labelled loops and `pub`
 
@@ -1540,7 +1635,7 @@ never changes meaning; a new condition gets a new code.
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
 | `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
 | `E0427` | error | a vector element cannot own storage | `tests/fixtures/negative/vector_of_owning_values.nv` |
-| `E0428` | error | a vector cannot be copied, returned or stored | `tests/fixtures/negative/vector_copied.nv` |
+| `E0428` | error | a vector or a String cannot be copied, returned or stored | `tests/fixtures/negative/vector_copied.nv`, `string_copied.nv` |
 | `E0429` | error | `vec_new` needs an annotated element type | `tests/fixtures/negative/vector_new_without_element_type.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |

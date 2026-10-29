@@ -474,7 +474,7 @@
       "code": "E0329",
       "line": 3,
       "column": 11,
-      "end_column": 12,
+      "end_column": null,
       "message": "only an array can be indexed, but 'x' is i64",
       "hint": null
     },
@@ -583,7 +583,7 @@
       "line": 1,
       "column": 9,
       "end_column": 14,
-      "message": "'mut' is only allowed on an array or vector parameter, not on i64",
+      "message": "'mut' is only allowed on an array, vector or String parameter, not on i64",
       "hint": "scalar parameters are already mutable locals inside the function"
     },
     {
@@ -1032,7 +1032,7 @@
       "code": "E0421",
       "line": 5,
       "column": 16,
-      "end_column": 21,
+      "end_column": null,
       "message": "only an array can be sliced, but 'count' is i64",
       "hint": null
     },
@@ -1169,7 +1169,7 @@
       "column": 9,
       "end_column": 13,
       "message": "an array element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every read and every write; making those copies deep is the arena work of N11d, so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the move work of N11e, so an array of owning values is refused rather than shared"
     },
     {
       "file": "array_zeros_str.nv",
@@ -1214,7 +1214,43 @@
       "column": 26,
       "end_column": null,
       "message": "a vector element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every push and every read; a vector of owning values waits for the arena work (N11d)"
+      "hint": "an element is copied on every push and every read; a vector of owning values waits for the move work of N11e"
+    },
+    {
+      "file": "string_copied.nv",
+      "code": "E0428",
+      "line": 5,
+      "column": 9,
+      "end_column": 10,
+      "message": "a String cannot be copied: 't' would share one buffer with another String",
+      "hint": "create it with `let s: String = string_new()` and fill it with string_push"
+    },
+    {
+      "file": "string_field.nv",
+      "code": "E0428",
+      "line": 4,
+      "column": 5,
+      "end_column": 9,
+      "message": "a field of Note cannot be a String yet",
+      "hint": "a field is copied with its value, and a String has exactly one owner; a field that owns storage arrives with the move work of N11e"
+    },
+    {
+      "file": "string_mutated_through_a_borrow.nv",
+      "code": "E0444",
+      "line": 4,
+      "column": 17,
+      "end_column": null,
+      "message": "argument 1 of string_push changes the String, so it must be a writable local or a `mut String` parameter",
+      "hint": "declare it in this function, or take it as `mut String`"
+    },
+    {
+      "file": "array_of_strings.nv",
+      "code": "E0426",
+      "line": 4,
+      "column": 9,
+      "end_column": 14,
+      "message": "an array element cannot own storage, but String owns its bytes",
+      "hint": "an element is copied on every read and every write; making those copies deep is the move work of N11e, so an array of owning values is refused rather than shared"
     }
   ]
 }

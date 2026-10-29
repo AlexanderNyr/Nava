@@ -245,7 +245,7 @@ unchanged, never converted, and the rest of the function does not run.
 An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** that
 owns nothing itself — anything that is a value with no owner. A struct or enum
 holding an array is refused as an element (`E0426`): an element is copied on every
-read and every write, so an owning element waits for the arena (N11d). `for point in points` copies each
+read and every write, so an owning element waits for the move work (N11e). `for point in points` copies each
 element, and `points[i].x` reads a field of an element. `array_zeros(n)` gives
 every element its zero value, so it needs an element type whose zero bits are a
 value: `i64`, `bool`, `f64`, a struct of those, or an enum whose first variant is
@@ -341,6 +341,64 @@ fn main() {
         Option(i64)::Some(last) => { print(last) }
         Option(i64)::None => { print(-1) }
     }
+}
+```
+
+## Edition 2: `String` and the text functions
+
+A `str` is immutable and lives for the run; `String` is the owner of bytes a
+program assembles a piece at a time. `let s: String = string_new()` creates it
+and the block releases it. A `String` cannot be copied, reassigned, returned,
+stored in a field or a payload (`E0428`), and it cannot be an array or vector
+element (`E0426`/`E0427`). `mut String` lets a function write into the caller's
+builder.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `string_push(s, x)` | `void` | append a `str` |
+| `string_push_byte(s, b)` | `void` | append one byte, `0..255`, never `0` |
+| `string_len(s)` | `i64` | bytes written so far |
+| `string_capacity(s)` | `i64` | bytes before the next growth |
+| `string_clear(s)` | `void` | forget the bytes, keep the capacity |
+| `string_text(s)` | `str` | the finished text |
+| `str_concat(a, b)` | `str` | joined |
+| `str_from_i64(n)`, `str_from_f64(x)` | `str` | the text `print` would write |
+| `str_slice(x, i, j)` | `str` | bytes `i .. j`, both checked |
+| `str_index_of(x, n)` | `i64` | byte offset or `-1` |
+| `str_starts_with(x, p)`, `str_ends_with(x, p)` | `bool` | prefix, suffix |
+| `str_trim(x)` | `str` | ASCII whitespace removed |
+| `str_replace(x, from, to)` | `str` | every occurrence |
+| `str_split(x, sep, out)` | `void` | appends the fields to a `Vec(str)` |
+| `str_join(parts, sep)` | `str` | the vector joined by `sep` |
+
+`str_split` fills a vector rather than returning one, because a function cannot
+return a vector: `let parts: Vec(str) = vec_new()` then
+`str_split(text, ",", parts)`. Built `str` values live in an arena that is
+released when the process exits; lengths and slices count **bytes**, not
+characters (`chars_len` counts code points and validates UTF-8).
+
+```nava
+edition 2;
+
+fn join(words: Vec(str), sep: str) -> str {
+    let out: String = string_new()
+    let first = true
+    for word in words {
+        if !first { string_push(out, sep) }
+        string_push(out, word)
+        first = false
+    }
+    return string_text(out)
+}
+
+fn main() {
+    let parts: Vec(str) = vec_new()
+    str_split("a,bb,ccc", ",", parts)
+    print(vec_len(parts))
+    print(str_join(parts, "-"))
+    print(join(parts, "/"))
+    print(str_concat("na", "va"))
+    print(str_replace("a-b-c", "-", "+"))
 }
 ```
 

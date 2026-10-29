@@ -8,7 +8,7 @@ from .model import (
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
     MemberAssign, Number, Program, Range, Return, Slice, String, StructLiteral, Try,
     Unary, Variable, VariantValue, While, function_type_parts, is_function_type,
-    is_vec, vec_element,
+    is_string, is_vec, vec_element,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -329,9 +329,14 @@ static int64_t nv_live_arrays = 0;
 static void nv_report_live_arrays(void) {
     fprintf(stderr, "nava: live arrays at exit: %" PRId64 "\n", nv_live_arrays);
 }
+/* One registration for one report: the arena prints the same line when it is
+   the only thing the program allocated, and must not print it twice. */
+static bool nv_live_arrays_registered = false;
 static void nv_note_array_alloc(void) {
-    static bool registered = false;
-    if (!registered) { atexit(nv_report_live_arrays); registered = true; }
+    if (!nv_live_arrays_registered) {
+        atexit(nv_report_live_arrays);
+        nv_live_arrays_registered = true;
+    }
     nv_live_arrays += 1;
 }
 static void nv_note_array_free(void) { nv_live_arrays -= 1; }
@@ -473,6 +478,237 @@ static void nv_arr_str_free(nv_arr_str *array) {
     if (array->data != NULL) { free(array->data); nv_note_array_free(); }
     array->data = NULL;
     array->len = 0;
+}
+
+/* --- arena ---------------------------------------------------------------
+   Text a program *builds* — `str_concat`, `str_slice`, `str_trim`,
+   `str_replace`, `str_from_i64` — is immutable and lives for the rest of the
+   run, exactly like a literal. It is therefore allocated in an arena: a list of
+   chunks that are bump-allocated and released together when the process exits.
+
+   There is no per-frame reset, and the reason is written down rather than
+   hidden: a `str` may be stored wherever a value may go — a struct field, a
+   variant payload, a returned local — so a region cannot be reclaimed while
+   something that crossed a frame boundary can still point into it. That needs
+   move tracking, which is N11e. Until then every chunk is freed at exit, and
+   the leak check under AddressSanitizer is what proves it. */
+
+#define NV_ARENA_CHUNK ((size_t)65536)
+
+typedef struct nv_arena_chunk { struct nv_arena_chunk *next; size_t size; size_t used; unsigned char data[]; } nv_arena_chunk;
+
+static nv_arena_chunk *nv_arena_chunks = NULL;
+static int64_t nv_arena_chunk_count = 0;
+static int64_t nv_arena_bytes = 0;
+
+static void nv_arena_release_all(void) {
+    nv_arena_chunk *chunk = nv_arena_chunks;
+    while (chunk != NULL) {
+        nv_arena_chunk *next = chunk->next;
+        free(chunk);
+        chunk = next;
+    }
+    nv_arena_chunks = NULL;
+    nv_arena_chunk_count = 0;
+}
+
+static void nv_arena_cleanup(void) {
+#ifdef NAVA_TRACK_ALLOCS
+    /* The counter is the accounting: bytes handed out, chunks still held. The
+       chunks are released immediately afterwards, so a missing release in this
+       function is a LeakSanitizer report rather than a number nobody reads.
+       The array report is printed here too, so a program that allocates only
+       arena text still states how many arrays it owns — which is none. */
+    fprintf(stderr, "nava: arena bytes: %" PRId64 ", chunks: %" PRId64 "\n",
+            nv_arena_bytes, nv_arena_chunk_count);
+    if (!nv_live_arrays_registered) nv_report_live_arrays();
+#endif
+    nv_arena_release_all();
+}
+
+static void *nv_arena_alloc(int64_t size) {
+    if (size < 0) nv_fail("arena size must not be negative");
+    /* Every allocation is rounded up to a word, so a bump pointer can serve
+       any later request without a hidden misalignment. */
+    size = (size + 7) & ~INT64_C(7);
+    if (nv_arena_chunks == NULL || nv_arena_chunks->size - nv_arena_chunks->used < (size_t)size) {
+        size_t chunk_size = NV_ARENA_CHUNK;
+        if (chunk_size < (size_t)size) chunk_size = (size_t)size;
+        nv_arena_chunk *chunk = (nv_arena_chunk *)malloc(sizeof(nv_arena_chunk) + chunk_size);
+        if (chunk == NULL) nv_fail("out of memory in the arena");
+        chunk->next = nv_arena_chunks;
+        chunk->size = chunk_size;
+        chunk->used = 0;
+        nv_arena_chunks = chunk;
+        nv_arena_chunk_count += 1;
+        if (nv_arena_chunk_count == 1) atexit(nv_arena_cleanup);
+    }
+    void *result = nv_arena_chunks->data + nv_arena_chunks->used;
+    nv_arena_chunks->used += (size_t)size;
+    nv_arena_bytes = nv_add(nv_arena_bytes, size);
+    return result;
+}
+
+/* A copy of `length` bytes plus a terminator: the only way text enters the
+   arena, so every arena string is a well-formed `str`. */
+static char *nv_arena_text(const char *bytes, int64_t length) {
+    char *copy = (char *)nv_arena_alloc(nv_add(length, INT64_C(1)));
+    if (length > 0) memcpy(copy, bytes, (size_t)length);
+    copy[length] = '\0';
+    return copy;
+}
+
+static const char *nv_str_concat(const char *left, const char *right) {
+    int64_t left_len = (int64_t)strlen(left);
+    int64_t right_len = (int64_t)strlen(right);
+    char *text = (char *)nv_arena_alloc(nv_add(nv_add(left_len, right_len), INT64_C(1)));
+    memcpy(text, left, (size_t)left_len);
+    memcpy(text + left_len, right, (size_t)right_len + 1);
+    return text;
+}
+
+static const char *nv_str_from_f64(double value) {
+    char buffer[64];
+    nv_format_f64(value, buffer, sizeof buffer);
+    return nv_arena_text(buffer, (int64_t)strlen(buffer));
+}
+
+static const char *nv_str_from_i64(int64_t value) {
+    char buffer[32];
+    int written = snprintf(buffer, sizeof buffer, "%" PRId64, value);
+    return nv_arena_text(buffer, (int64_t)written);
+}
+
+static const char *nv_str_slice(const char *value, int64_t start, int64_t end) {
+    int64_t length = (int64_t)strlen(value);
+    if (start < 0 || end < start || end > length)
+        nv_failf("string slice %" PRId64 "..%" PRId64
+                 " is out of bounds for a string of %" PRId64 " bytes",
+                 start, end, length);
+    return nv_arena_text(value + start, end - start);
+}
+
+static int64_t nv_str_index_of(const char *value, const char *needle) {
+    const char *found = strstr(value, needle);
+    return found == NULL ? INT64_C(-1) : (int64_t)(found - value);
+}
+
+static bool nv_str_starts_with(const char *value, const char *prefix) {
+    return strncmp(value, prefix, strlen(prefix)) == 0;
+}
+
+static bool nv_str_ends_with(const char *value, const char *suffix) {
+    int64_t value_len = (int64_t)strlen(value);
+    int64_t suffix_len = (int64_t)strlen(suffix);
+    if (suffix_len > value_len) return false;
+    return memcmp(value + (value_len - suffix_len), suffix, (size_t)suffix_len) == 0;
+}
+
+static const char *nv_str_trim(const char *value) {
+    int64_t start = 0;
+    int64_t end = (int64_t)strlen(value);
+    while (start < end && isspace((unsigned char)value[start])) start += 1;
+    while (end > start && isspace((unsigned char)value[end - 1])) end -= 1;
+    return nv_arena_text(value + start, end - start);
+}
+
+static const char *nv_str_replace(const char *value, const char *from, const char *to) {
+    int64_t value_len = (int64_t)strlen(value);
+    int64_t from_len = (int64_t)strlen(from);
+    int64_t to_len = (int64_t)strlen(to);
+    /* An empty needle replaces nothing, and says so by returning a copy: the
+       result is still a `str` the caller may keep. */
+    if (from_len == 0) return nv_arena_text(value, value_len);
+    int64_t count = 0;
+    const char *scan = value;
+    while ((scan = strstr(scan, from)) != NULL) { count += 1; scan += from_len; }
+    /* Counted first, so the result is one allocation and one pass of writing. */
+    char *text = (char *)nv_arena_alloc(
+        nv_add(nv_add(value_len, nv_mul(count, nv_sub(to_len, from_len))), INT64_C(1)));
+    const char *read = value;
+    char *write = text;
+    while (true) {
+        const char *found = strstr(read, from);
+        if (found == NULL) break;
+        size_t span = (size_t)(found - read);
+        memcpy(write, read, span);
+        write += span;
+        memcpy(write, to, (size_t)to_len);
+        write += to_len;
+        read = found + from_len;
+    }
+    size_t tail = (size_t)(value_len - (int64_t)(read - value));
+    memcpy(write, read, tail);
+    write += tail;
+    *write = '\0';
+    return text;
+}
+
+/* --- the growing string builder ------------------------------------------
+   `String` exists for the case `str` cannot serve: text assembled a piece at a
+   time, where each concatenation would otherwise copy everything written so
+   far. The bytes are owned by the binding, the capacity doubles like a vector's,
+   and `string_text` hands the finished text to the arena — so a `str` never
+   points into storage that may grow or be released. */
+
+typedef struct nv_string { char *data; int64_t len; int64_t cap; } nv_string;
+
+static nv_string *nv_string_new(void) {
+    nv_string *text = (nv_string *)calloc(1, sizeof(nv_string));
+    if (text == NULL) nv_fail("out of memory");
+    return text;
+}
+
+static void nv_string_free(nv_string **slot) {
+    nv_string *text = *slot;
+    if (text == NULL) return;
+    if (text->data != NULL) { free(text->data); nv_note_array_free(); }
+    free(text);
+    *slot = NULL;
+}
+
+static void nv_string_reserve(nv_string *text, int64_t needed) {
+    if (needed <= text->cap) return;
+    int64_t capacity = text->cap > 0 ? text->cap : INT64_C(32);
+    while (capacity < needed) capacity = nv_mul(capacity, INT64_C(2));
+    /* Through the array allocator, so the buffer is counted by the same
+       instrumentation that counts array storage. */
+    char *data = (char *)nv_array_alloc(capacity, 1);
+    if (text->len > 0) memcpy(data, text->data, (size_t)text->len);
+    if (text->data != NULL) { free(text->data); nv_note_array_free(); }
+    text->data = data;
+    text->cap = capacity;
+}
+
+static void nv_string_push(nv_string *text, const char *value) {
+    int64_t length = (int64_t)strlen(value);
+    nv_string_reserve(text, nv_add(nv_add(text->len, length), INT64_C(1)));
+    if (length > 0) memcpy(text->data + text->len, value, (size_t)length);
+    text->len = nv_add(text->len, length);
+    text->data[text->len] = '\0';
+}
+
+static void nv_string_push_byte(nv_string *text, int64_t byte) {
+    if (byte < 0 || byte > 255)
+        nv_failf("a string byte must be in 0..255, got %" PRId64, byte);
+    if (byte == 0) nv_fail("a String cannot contain a NUL byte");
+    nv_string_reserve(text, nv_add(text->len, INT64_C(2)));
+    text->data[text->len] = (char)(unsigned char)byte;
+    text->len = nv_add(text->len, INT64_C(1));
+    text->data[text->len] = '\0';
+}
+
+static int64_t nv_string_len(nv_string *text) { return text->len; }
+static int64_t nv_string_capacity(nv_string *text) { return text->cap; }
+
+static void nv_string_clear(nv_string *text) {
+    text->len = 0;
+    if (text->data != NULL) text->data[0] = '\0';
+}
+
+static const char *nv_string_text(nv_string *text) {
+    if (text->len == 0) return "";
+    return nv_arena_text(text->data, text->len);
 }
 
 /* --- files -------------------------------------------------------------
@@ -642,6 +878,11 @@ ARRAY_LITERAL = {"[i64]": "const int64_t", "[bool]": "const bool",
                  "[str]": "const char *const"}
 #: Built-in vector operations; the checker resolves them before user functions.
 VEC_CALLS = {"vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set"}
+#: Text builtins. `str_*` returns an arena string, `string_*` drives the builder.
+TEXT_CALLS = {"str_concat", "str_from_i64", "str_from_f64", "str_slice", "str_index_of",
+              "str_starts_with", "str_ends_with", "str_trim", "str_replace",
+              "str_split", "str_join", "string_push", "string_push_byte", "string_len",
+              "string_capacity", "string_clear", "string_text"}
 #: Element type an array literal is copied from; a struct array reuses the struct
 #: C type, because `memcpy` of a value type is exactly a copy.
 ARITHMETIC = {"+": "nv_add", "-": "nv_sub", "*": "nv_mul", "/": "nv_div", "%": "nv_rem"}
@@ -760,6 +1001,10 @@ class CGenerator:
         """The C type of a Nava type: a scalar, an array handle or a struct."""
         if typ in C_TYPES:
             return C_TYPES[typ]
+        if is_string(typ):
+            # The builder is a pointer too: `string_push` may replace its bytes,
+            # and every holder must see the same builder.
+            return "nv_string *"
         if is_vec(typ):
             # A vector value is a pointer to its handle: growth may replace the
             # buffer, so every holder must see the same handle, not a copy of it.
@@ -802,9 +1047,10 @@ class CGenerator:
         """
         if typ is None:
             return False
-        if is_vec(typ):
-            # A vector is never copied into another value: it is created in a
-            # block, borrowed by a parameter, and released by its owner.
+        if is_vec(typ) or is_string(typ):
+            # A vector and a String are never copied into another value: they are
+            # created in a block, borrowed by a parameter, and released by their
+            # owner.
             return False
         if is_array(typ):
             return True
@@ -856,6 +1102,8 @@ class CGenerator:
 
     def release_statement(self, typ: str, place: str) -> str:
         """The C statement that frees the storage a value at `place` owns."""
+        if is_string(typ):
+            return f"nv_string_free(&{place});"
         if is_vec(typ):
             return f"nv_vec_{vec_tag(typ)}_free(&{place});"
         if is_array(typ):
@@ -1088,6 +1336,55 @@ class CGenerator:
             self.line("vector->data[nv_check_index(index, vector->len)] = value;")
             self.indent -= 1
             self.line("}")
+            if vec_element(typ) == "str":
+                # `str_split` and `str_join` need the handle of `Vec(str)`, so
+                # they are emitted here rather than in the runtime. Splitting
+                # appends to the vector it is given; joining reads one.
+                self.line(f"static void nv_str_split(const char *value, const char *sep, "
+                          f"{name} *out) {{")
+                self.indent += 1
+                self.line("int64_t sep_len = (int64_t)strlen(sep);")
+                self.line('if (sep_len == 0) nv_fail("str_split needs a non-empty separator");')
+                self.line("const char *start = value;")
+                self.line("while (true) {")
+                self.indent += 1
+                self.line("const char *found = strstr(start, sep);")
+                self.line("if (found == NULL) break;")
+                self.line(f"{name}_push(out, nv_arena_text(start, "
+                          f"(int64_t)(found - start)));")
+                self.line("start = found + sep_len;")
+                self.indent -= 1
+                self.line("}")
+                self.line(f"{name}_push(out, nv_arena_text(start, (int64_t)strlen(start)));")
+                self.indent -= 1
+                self.line("}")
+                self.line(f"static const char *nv_str_join({name} *parts, const char *sep) {{")
+                self.indent += 1
+                self.line("int64_t bytes = 0;")
+                self.line("int64_t sep_len = (int64_t)strlen(sep);")
+                self.line("for (int64_t at = 0; at < parts->len; at += 1)")
+                self.indent += 1
+                self.line("bytes = nv_add(bytes, nv_bytes_len(parts->data[at]));")
+                self.indent -= 1
+                self.line("if (parts->len > 1)")
+                self.indent += 1
+                self.line("bytes = nv_add(bytes, nv_mul(sep_len, nv_sub(parts->len, INT64_C(1))));")
+                self.indent -= 1
+                self.line("char *text = (char *)nv_arena_alloc(nv_add(bytes, INT64_C(1)));")
+                self.line("int64_t at = 0;")
+                self.line("for (int64_t part = 0; part < parts->len; part += 1) {")
+                self.indent += 1
+                self.line("if (part > 0) { memcpy(text + at, sep, (size_t)sep_len); "
+                          "at += sep_len; }")
+                self.line("int64_t size = nv_bytes_len(parts->data[part]);")
+                self.line("memcpy(text + at, parts->data[part], (size_t)size);")
+                self.line("at = nv_add(at, size);")
+                self.indent -= 1
+                self.line("}")
+                self.line("text[at] = '\\0';")
+                self.line("return text;")
+                self.indent -= 1
+                self.line("}")
             option = self.program.instances.get(f"Option({vec_element(typ)})")
             if option is not None:
                 some, none = option.variants[0], option.variants[1]
@@ -1487,6 +1784,7 @@ class CGenerator:
                 borrowed = statement.symbol.borrowed
                 owns_array = is_array(typ) and not borrowed
                 owns_vec = is_vec(typ)
+                owns_text = is_string(typ)
                 # A struct or an enum that holds an array owns that array too, so
                 # the binding is an owner and gets its own copy.
                 owns_value = self.owns_storage(typ) and not is_array(typ) and not borrowed
@@ -1497,7 +1795,7 @@ class CGenerator:
                 else:
                     value = self.expression(statement.value)
                 self.line(f"{self.ctype(typ)} {statement.symbol.cname} = {value};")
-                if owns_array or owns_value or owns_vec:
+                if owns_array or owns_value or owns_vec or owns_text:
                     self.owned[-1].append((statement.symbol.cname, typ))
             elif isinstance(statement, IndexAssign):
                 # The index is checked before the value is evaluated, so a failed
@@ -1735,6 +2033,64 @@ class CGenerator:
         self.line("}")
         self.line(f"{record['break']}: ;")
 
+    def text_call(self, expr: Call) -> str | None:
+        """The text builtins: one runtime helper each, arguments left to right.
+
+        `str_split` writes its parts into the vector it is given, because a
+        program cannot return an array or a vector; `str_join` reads one. Both
+        live in the generated part of the translation unit rather than in the
+        runtime, because they need the handle type of `Vec(str)`.
+        """
+        name = expr.name
+        if name == "string_new":
+            return "nv_string_new()"
+        if len(expr.args) == 1:
+            only = self.expression(expr.args[0])
+            if name == "string_len":
+                return self.temp("i64", f"nv_string_len({only})")
+            if name == "string_capacity":
+                return self.temp("i64", f"nv_string_capacity({only})")
+            if name == "string_text":
+                return self.temp("str", f"nv_string_text({only})")
+            if name == "string_clear":
+                self.line(f"nv_string_clear({only});")
+                return None
+            if name == "str_trim":
+                return self.temp("str", f"nv_str_trim({only})")
+            if name == "str_from_i64":
+                return self.temp("str", f"nv_str_from_i64({only})")
+            if name == "str_from_f64":
+                return self.temp("str", f"nv_str_from_f64({only})")
+        first = self.expression(expr.args[0])
+        second = self.expression(expr.args[1])
+        if name == "string_push":
+            self.line(f"nv_string_push({first}, {second});")
+            return None
+        if name == "string_push_byte":
+            self.line(f"nv_string_push_byte({first}, {second});")
+            return None
+        if name == "str_concat":
+            return self.temp("str", f"nv_str_concat({first}, {second})")
+        if name == "str_index_of":
+            return self.temp("i64", f"nv_str_index_of({first}, {second})")
+        if name == "str_starts_with":
+            return self.temp("bool", f"nv_str_starts_with({first}, {second})")
+        if name == "str_ends_with":
+            return self.temp("bool", f"nv_str_ends_with({first}, {second})")
+        if name == "str_join":
+            return self.temp("str", f"nv_str_join({first}, {second})")
+        if name == "str_slice":
+            start = self.expression(expr.args[1])
+            end = self.expression(expr.args[2])
+            return self.temp("str", f"nv_str_slice({first}, {start}, {end})")
+        if name == "str_replace":
+            second = self.expression(expr.args[1])
+            third = self.expression(expr.args[2])
+            return self.temp("str", f"nv_str_replace({first}, {second}, {third})")
+        assert name == "str_split", f"unknown text builtin {name!r}"
+        self.line(f"nv_str_split({first}, {second}, {self.expression(expr.args[2])});")
+        return None
+
     def vector_call(self, expr: Call) -> str | None:
         """The built-in vector operations, one C helper each.
 
@@ -1941,6 +2297,10 @@ class CGenerator:
             tag = array_tag(expr.array.typ)
             return self.temp(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
         if isinstance(expr, Call):
+            if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_CALLS):
+                return self.vector_call(expr)
+            if expr.module is None and (expr.name == "string_new" or expr.name in TEXT_CALLS):
+                return self.text_call(expr)
             # Materialize calls as statements, ensuring left-to-right evaluation.
             args = [self.expression(arg) for arg in expr.args]
             if expr.module is None and expr.name == "bytes_len":
@@ -1974,8 +2334,6 @@ class CGenerator:
                 name = self.temp("[i64]", f"nv_arr_i64_new({args[0]})")
                 self.temporaries.append((name, "[i64]"))
                 return name
-            if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_CALLS):
-                return self.vector_call(expr)
             # A call through a variable dispatches on the pointer it holds.
             callee = expr.callee.cname if expr.callee is not None else expr.target.cname
             call = f"{callee}({', '.join(args)})"

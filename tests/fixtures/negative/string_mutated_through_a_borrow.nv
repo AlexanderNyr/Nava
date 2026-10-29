@@ -1,0 +1,10 @@
+edition 2;
+
+fn add(s: String) {
+    string_push(s, "x")
+}
+
+fn main() {
+    let s: String = string_new();
+    add(s)
+}

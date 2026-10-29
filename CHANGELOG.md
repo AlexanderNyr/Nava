@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+N11d: text a program builds — `String`, the `str_*` functions and the arena.
+
+- `str_concat`, `str_from_i64`, `str_from_f64`, `str_slice`, `str_index_of`,
+  `str_starts_with`, `str_ends_with`, `str_trim`, `str_replace`, `str_split` and
+  `str_join` build a `str` from parts. Slices, lengths and offsets count bytes;
+  a bad slice is a runtime error and a missing needle is `-1`.
+- `String` is the builtin owner of bytes assembled a piece at a time:
+  `string_new`, `string_push`, `string_push_byte`, `string_len`,
+  `string_capacity`, `string_clear` and `string_text`. Capacity doubles from 32,
+  a `mut String` parameter writes into the caller's builder, and the block that
+  wrote the `let` frees the buffer. A `String` cannot be copied, reassigned,
+  returned, stored in a field or a payload, or used as a type argument
+  (`E0428`); it cannot be an array or vector element (`E0426` / `E0427`).
+- `str_split` fills a `Vec(str)` rather than returning one, because a function
+  cannot return a vector: `let parts: Vec(str) = vec_new()` then
+  `str_split(text, ",", parts)`.
+- Built text lives in an **arena**: 64 KiB chunks, bump-allocated, released
+  together at exit. A `str` may be stored wherever a value may go, so a region
+  cannot be reclaimed while something that crossed a frame boundary points into
+  it; that needs the move work of N11e. Under `-DNAVA_TRACK_ALLOCS` the arena
+  prints `nava: arena bytes: N, chunks: M` and frees every chunk, which is what
+  the AddressSanitizer gate checks.
+- A defect in N11c is closed: the vector builtins evaluated their arguments
+  twice, so `vec_push(v, bump(1))` repeated a side effect. Every builtin now
+  materialises each argument once, and two tests pin it.
+- `HashMap`/`HashSet`, the last item of N11, moved to N12 with the standard
+  library rather than the memory model; `INDEPENDENCE.md` says so next to the
+  increment table instead of leaving it implied.
+
 N11c: `Vec(T)`, the growing vector.
 
 - `Vec(T)` is a builtin type, not a generic declaration: `let xs: Vec(i64) =
@@ -41,7 +70,7 @@ N11b: fields and payloads that own array storage.
   `b.items = [...]` all work: an array field is an array in every position.
 - A value that owns an array may not be an **array element** (`E0426`). An
   element is copied on every read and every write, so an owning element needs
-  deep copies inside the storage itself — the arena work of N11d. The retired
+  deep copies inside the storage itself — the move work of N11e. The retired
   `E0378` and `E0399` go with the walls they carried.
 - `tests/test_ownership.py` checks the copy rule through observable values and
   the release rule through the runtime's live-array counter: seven runtime

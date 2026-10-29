@@ -160,6 +160,11 @@ class Parser:
         token = self.expect("IDENT", "a type (i64, bool, str, void, or f64)")
         if str(token.value) in self.type_params_in_scope:
             return str(token.value)
+        if token.value == "String":
+            # A builtin owning type, spelled like the scalars. Edition 1 has no
+            # owning values at all, so the name is unknown there, as `Vec` is.
+            self.require_edition(token.loc, "a String")
+            return "String"
         if self.at("(") and self.edition >= STRUCT_EDITION:
             if token.value == "Vec":
                 return self.vector_type(token)

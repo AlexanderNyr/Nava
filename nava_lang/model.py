@@ -187,11 +187,19 @@ class Range(Expr):
 
 FUNCTION_TYPE = "fn("
 VECTOR_TYPE = "Vec("
+#: The growing text builder. `str` is immutable and lives for the run; `String`
+#: is the owner of bytes that a program assembles a piece at a time.
+STRING_TYPE = "String"
 
 
 def is_vec(typ: object) -> bool:
     """`Vec(i64)` is a growing array that owns one buffer and a capacity."""
     return isinstance(typ, str) and typ.startswith(VECTOR_TYPE) and typ.endswith(")")
+
+
+def is_string(typ: object) -> bool:
+    """`String` is a builtin owning type, like a vector: one owner, no copies."""
+    return typ == STRING_TYPE
 
 
 def vec_element(typ: str) -> str:

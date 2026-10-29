@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let words: [String] = array_zeros(2);
+    print(len(words))
+}

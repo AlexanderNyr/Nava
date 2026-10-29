@@ -501,6 +501,37 @@ REGISTERED_TESTS = {
         "test_an_array_of_enums_slices_and_is_passed",
     },
     # --- N11b: fields and payloads that own array storage --------------------
+    "TextFrontendTests": {
+        "test_a_mutating_call_needs_a_writable_string",
+        "test_a_string_cannot_be_an_element_or_a_type_argument",
+        "test_a_string_cannot_be_copied_or_reassigned",
+        "test_a_string_cannot_be_returned_a_field_or_a_payload",
+        "test_a_string_is_not_printable_itself",
+        "test_a_string_needs_edition_two",
+        "test_every_text_function_is_usable_with_its_declared_type",
+        "test_the_argument_types_and_arities_are_checked",
+        "test_the_generated_c_owns_a_builder_and_uses_the_arena",
+        "test_the_text_names_are_reserved",
+    },
+    "TextRuntimeTests": {
+        "test_a_bad_slice_stops_the_program",
+        "test_a_byte_outside_the_range_and_a_nul_are_refused_at_run_time",
+        "test_a_large_amount_of_text_uses_several_chunks",
+        "test_an_empty_separator_is_refused_at_run_time",
+        "test_an_empty_vector_allocates_nothing" if False else "test_split_fills_a_vector_and_join_reads_one",
+        "test_slices_and_searches_are_checked_and_exact",
+        "test_text_and_vectors_under_the_sanitizers",
+        "test_text_built_in_a_loop_and_from_a_parameter_is_stable",
+        "test_the_arena_is_one_chunk_for_small_text_and_freed_at_exit",
+        "test_the_reports_are_printed_once_each",
+        "test_the_builder_grows_by_doubling_and_keeps_its_text",
+        "test_the_constructors_produce_the_text_that_print_writes",
+        "test_trim_and_replace_build_the_expected_text",
+    },
+    "ArgumentOnceTests": {
+        "test_a_text_argument_with_a_side_effect_runs_once",
+        "test_a_vector_argument_with_a_side_effect_runs_once",
+    },
     "VectorFrontendTests": {
         "test_a_mut_vector_argument_must_be_created_here",
         "test_a_mut_vector_parameter_may_grow_the_caller_s_vector",
@@ -813,7 +844,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 135,
+    "tests/fixtures/negative": 139,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -897,6 +928,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_study  # noqa: PLC0415
     import test_values  # noqa: PLC0415
     import test_vec  # noqa: PLC0415
+    import test_text  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
@@ -904,7 +936,8 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_modules, test_nava, test_ownership, test_plan, test_registry,
                    test_release, test_results, test_sandbox, test_slices, test_spec,
-                   test_structs, test_stdlib, test_study, test_values, test_vec):
+                   test_structs, test_stdlib, test_study, test_text, test_values,
+                   test_vec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -963,6 +996,7 @@ def check_skip_state() -> list[str]:
     import test_stdlib  # noqa: PLC0415
     import test_values  # noqa: PLC0415
     import test_vec  # noqa: PLC0415
+    import test_text  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -975,6 +1009,8 @@ def check_skip_state() -> list[str]:
                                (test_values, "ValueRuntimeTests"),
                                (test_ownership, "OwningFieldRuntimeTests"),
                                (test_vec, "VectorRuntimeTests"),
+                               (test_text, "TextRuntimeTests"),
+                               (test_text, "ArgumentOnceTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

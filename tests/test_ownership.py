@@ -10,7 +10,7 @@ value releases that buffer when it ends, including on an early `path` out.
 The second claim is what is still refused: a value that owns storage may not be
 an *array element* (`E0426`). An element is copied on every read and on every
 write, so an owning element would need those copies to be deep, which is the
-arena work of N11d. The refusal is one code, raised from the single place that
+move work of N11e. The refusal is one code, raised from the single place that
 checks an element type, so `[Bag]` as a binding, as a parameter, as a literal and
 as an `array_zeros` all fail the same way.
 
@@ -147,7 +147,7 @@ class OwningFieldFrontendTests(unittest.TestCase):
             with self.subTest(shape=name):
                 error = self.assert_code("edition 2;\n" + BAG + "\n" + body,
                                          "E0426", "Bag holds an array")
-                self.assertIn("arena work of N11d", error.hint)
+                self.assertIn("move work of N11e", error.hint)
 
     def test_an_enum_with_an_owning_payload_cannot_be_an_element_either(self):
         self.assert_code("edition 2;\n" + BAG + "\n"

@@ -10,7 +10,7 @@ from .model import (
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Param, Program,
     Range, Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary,
     Variable, Variant, VariantValue, While, function_signature, function_type_parts,
-    is_function_type, is_vec, vec_element,
+    is_function_type, is_string, is_vec, vec_element,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -21,6 +21,36 @@ BUILTINS = {
     # The whole vector interface, including the constructor: `vec_new` is
     # resolved like the rest, so a declaration of that name would be dead code.
     "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
+    # Text: `str_*` builds a new immutable string in the arena, `string_*`
+    # drives the growing builder. Reserved for the same reason.
+    "string_new", "string_push", "string_push_byte", "string_len", "string_capacity",
+    "string_clear", "string_text",
+    "str_concat", "str_from_i64", "str_from_f64", "str_slice", "str_index_of",
+    "str_starts_with", "str_ends_with", "str_trim", "str_replace", "str_split",
+    "str_join",
+}
+
+#: The text builtins and their signatures. An argument written with `mut ` must
+#: be a writable target — a local or a `mut` parameter — for the same reason a
+#: mutating vector call must be: it changes storage the caller holds.
+TEXT_SIGNATURES = {
+    "str_from_i64": (("i64",), "str"),
+    "str_from_f64": (("f64",), "str"),
+    "str_concat": (("str", "str"), "str"),
+    "str_slice": (("str", "i64", "i64"), "str"),
+    "str_index_of": (("str", "str"), "i64"),
+    "str_starts_with": (("str", "str"), "bool"),
+    "str_ends_with": (("str", "str"), "bool"),
+    "str_trim": (("str",), "str"),
+    "str_replace": (("str", "str", "str"), "str"),
+    "str_split": (("str", "str", "mut Vec(str)"), "void"),
+    "str_join": (("Vec(str)", "str"), "str"),
+    "string_push": (("mut String", "str"), "void"),
+    "string_push_byte": (("mut String", "i64"), "void"),
+    "string_len": (("String",), "i64"),
+    "string_capacity": (("String",), "i64"),
+    "string_clear": (("mut String",), "void"),
+    "string_text": (("String",), "str"),
 }
 #: Types a value can have (everything except `void`).
 VALUE_TYPES = {"i64", "bool", "str", "f64"}
@@ -229,10 +259,11 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
-            if is_vec(function.returns):
+            if is_vec(function.returns) or is_string(function.returns):
+                noun = "a vector" if is_vec(function.returns) else "a String"
                 raise make(
                     "E0428",
-                    f"function {function.name!r} cannot return a vector",
+                    f"function {function.name!r} cannot return {noun}",
                     function.loc,
                     function.loc.advance("fn " + function.name),
                     "a vector has exactly one owner; take `mut Vec(T)` and fill it, "
@@ -249,16 +280,17 @@ class Checker:
                 if is_function_type(param.typ):
                     self.check_function_type(param.typ, param.loc)
                 if param.typ not in VALUE_TYPES and not is_array(param.typ) \
-                        and not is_vec(param.typ) \
+                        and not is_vec(param.typ) and not is_string(param.typ) \
                         and not self.is_struct(param.typ) and not self.is_enum(param.typ) \
                         and not is_function_type(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
                                param.loc.advance(param.name))
-                if param.mutable and not is_array(param.typ) and not is_vec(param.typ):
+                if param.mutable and not is_array(param.typ) and not is_vec(param.typ) \
+                        and not is_string(param.typ):
                     raise make(
                         "E0341",
-                        f"'mut' is only allowed on an array or vector parameter, "
-                        f"not on {param.typ}",
+                        f"'mut' is only allowed on an array, vector or String "
+                        f"parameter, not on {param.typ}",
                         param.loc, param.loc.advance("mut " + param.name),
                         "scalar parameters are already mutable locals inside the function",
                     )
@@ -267,7 +299,7 @@ class Checker:
                 param.symbol = self.declare(param.name, param.typ, param.loc)
                 if is_array(param.typ):
                     self.check_element_type(param.typ, param.loc)
-                if is_array(param.typ) or is_vec(param.typ):
+                if is_array(param.typ) or is_vec(param.typ) or is_string(param.typ):
                     # A parameter is a borrow: it owns no storage and its
                     # lifetime is the call, which no Nava program can extend. A
                     # vector parameter is a pointer, so a `mut` one can grow the
@@ -312,13 +344,14 @@ class Checker:
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
-            if is_vec(item.typ):
+            if is_vec(item.typ) or is_string(item.typ):
+                kind = "a vector" if is_vec(item.typ) else "a String"
                 raise make(
                     "E0428",
-                    f"a field of {struct.name} cannot be a vector yet",
+                    f"a field of {struct.name} cannot be {kind} yet",
                     item.loc, item.loc.advance(item.name),
-                    "a field is copied with its value, and a vector has exactly one "
-                    "owner; a vector field arrives with the move work of N11d",
+                    f"a field is copied with its value, and {kind} has exactly one "
+                    f"owner; a field that owns storage arrives with the move work of N11e",
                 )
             if is_array(item.typ):
                 self.check_element_type(item.typ, item.loc)
@@ -406,7 +439,7 @@ class Checker:
         for argument in arguments:
             if not (is_value_type(argument) or self.is_struct(argument)
                     or self.is_enum(argument)):
-                raise make("E0203", f"unknown type {argument!r} in {typ}")
+                self.require_known_type(argument, f"in {typ}")
             if is_function_type(argument):
                 self.check_function_type(argument, None)
         substitution = dict(zip(parameters, arguments))
@@ -478,13 +511,15 @@ class Checker:
         """
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
-            if is_vec(item):
+            if is_vec(item) or is_string(item):
+                kind = "a vector" if is_vec(item) else "a String"
                 raise make(
                     "E0428",
-                    f"a payload of {enum_name}::{variant.name} cannot be a vector yet",
+                    f"a payload of {enum_name}::{variant.name} cannot be {kind} yet",
                     *span,
-                    hint="a payload is copied with its value, and a vector has exactly "
-                         "one owner; a vector payload arrives with the move work of N11d",
+                    hint=f"a payload is copied with its value, and {kind} has exactly "
+                         f"one owner; a payload that owns storage arrives with the move "
+                         f"work of N11e",
                 )
             if is_array(item):
                 self.check_element_type(item, variant.loc)
@@ -695,7 +730,18 @@ class Checker:
             self.check_struct_cycle(struct)
 
     def require_known_type(self, typ: str, where: str) -> None:
-        """Refuse a written type that names nothing: `Box(Nope)` names nothing."""
+        """Refuse a written type that names nothing: `Box(Nope)` names nothing.
+
+        A `String` is a known name that may not be used here: a generic instance
+        is stored inline and copied by value, and a String has exactly one owner.
+        """
+        if is_string(typ):
+            raise make(
+                "E0428",
+                f"a String cannot be a type argument yet ({where.strip()})",
+                hint="a type argument is copied with the value it instantiates, and a "
+                     "String has exactly one owner; a String field arrives with N11e",
+            )
         if typ in VALUE_TYPES or self.is_struct(typ) or self.is_enum(typ):
             return
         split = split_instance(typ)
@@ -968,13 +1014,15 @@ class Checker:
         that owned storage of its own would need those copies to be deep.
         """
         element = vec_element(typ)
-        if is_vec(element) or self.owns_storage(element):
+        if is_vec(element) or is_string(element) or self.owns_storage(element):
+            holder = ("owns a buffer" if is_vec(element)
+                      else "owns its bytes" if is_string(element) else "holds an array")
             raise make(
                 "E0427",
-                f"a vector element cannot own storage, but {element} holds an array",
+                f"a vector element cannot own storage, but {element} {holder}",
                 loc,
                 hint="an element is copied on every push and every read; a vector of "
-                     "owning values waits for the arena work (N11d)",
+                     "owning values waits for the move work of N11e",
             )
         if element in VALUE_TYPES or self.is_struct(element) or self.is_enum(element):
             return element
@@ -1055,6 +1103,43 @@ class Checker:
                                 f"{element}, got {value_type}", expr.args[-1].loc)
         return "void"
 
+    def text_builtin(self, expr: Call, expected: str | None) -> str | None:
+        """`str_*` builds text in the arena; `string_*` drives the builder.
+
+        One table, one check: every argument is compared with its declared type
+        and nothing is converted, and an argument written `mut ...` additionally
+        has to be a writable target. `string_new()` takes its type from the
+        declaration, like `vec_new()`, but the type is always `String`, so the
+        annotation is a convenience rather than a requirement.
+        """
+        name = expr.name
+        if name == "string_new":
+            if expr.args:
+                raise make("E0326", "string_new takes no arguments", expr.loc)
+            return "String"
+        arguments, result = TEXT_SIGNATURES[name]
+        if len(expr.args) != len(arguments):
+            plural = "" if len(arguments) == 1 else "s"
+            raise make("E0326", f"{name} expects {len(arguments)} argument{plural}, "
+                                f"got {len(expr.args)}", expr.loc)
+        for index, (argument, declared) in enumerate(zip(expr.args, arguments), start=1):
+            mutating = declared.startswith("mut ")
+            wanted = declared[4:] if mutating else declared
+            actual = self.expression(argument)
+            if actual != wanted:
+                raise make("E0327", f"argument {index} of {name} expects {wanted}, "
+                                    f"got {actual}", argument.loc)
+            if mutating and (not isinstance(argument, Variable)
+                             or not (argument.symbol.owned or argument.symbol.mutable)):
+                raise make(
+                    "E0444",
+                    f"argument {index} of {name} changes the {wanted}, so it must be a "
+                    f"writable local or a `mut {wanted}` parameter",
+                    argument.loc,
+                    hint=f"declare it in this function, or take it as `mut {wanted}`",
+                )
+        return result
+
     def check_element_type(self, typ: str, loc, end=None) -> None:
         """An array element is a value with no owner: a scalar, a struct or an enum.
 
@@ -1065,13 +1150,14 @@ class Checker:
         if not is_array(typ):
             return
         element = element_of(typ)
-        if self.owns_storage(element):
+        if is_string(element) or self.owns_storage(element):
+            holder = "owns its bytes" if is_string(element) else "holds an array"
             raise make(
                 "E0426",
-                f"an array element cannot own storage, but {element} holds an array",
+                f"an array element cannot own storage, but {element} {holder}",
                 *((loc,) if end is None else (loc, end)),
                 hint="an element is copied on every read and every write; making those "
-                     "copies deep is the arena work of N11d, so an array of owning "
+                     "copies deep is the move work of N11e, so an array of owning "
                      "values is refused rather than shared",
             )
         if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
@@ -1545,6 +1631,19 @@ class Checker:
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
             self.check_element_type(typ, name_loc, name_loc.advance(statement.name))
+            if is_string(typ):
+                create = (isinstance(statement.value, Call)
+                          and statement.value.module is None
+                          and statement.value.name == "string_new")
+                if not create:
+                    raise make(
+                        "E0428",
+                        f"a String cannot be copied: {statement.name!r} would share "
+                        f"one buffer with another String",
+                        name_loc, name_loc.advance(statement.name),
+                        hint="create it with `let s: String = string_new()` and fill it "
+                             "with string_push",
+                    )
             if is_vec(typ):
                 self.validate_vec(typ, name_loc)
                 create = (isinstance(statement.value, Call)
@@ -1631,6 +1730,14 @@ class Checker:
                     statement.loc, statement.loc.advance(statement.name),
                     "an array owns its storage for the life of its block; "
                     "write elements with a[i] = value",
+                )
+            if is_string(statement.symbol.typ):
+                raise make(
+                    "E0428",
+                    f"a String cannot be reassigned ({statement.name!r} is String)",
+                    statement.loc, statement.loc.advance(statement.name),
+                    "a String owns its bytes for the life of its block; change it with "
+                    "string_push, string_push_byte and string_clear",
                 )
             if is_vec(statement.symbol.typ):
                 raise make(
@@ -2109,6 +2216,8 @@ class Checker:
             return "void"
         if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_BUILTINS):
             return self.vec_builtin(expr, expected)
+        if expr.module is None and (expr.name == "string_new" or expr.name in TEXT_SIGNATURES):
+            return self.text_builtin(expr, expected)
         function = self.resolve(expr)
         if len(expr.args) != len(function.params):
             plural = "" if len(function.params) == 1 else "s"
@@ -2213,12 +2322,13 @@ class Checker:
                 raise make("E0327",
                            f"argument {index} of {expr.name} expects {param.typ}, got {real}",
                            arg.loc)
-            if not param.mutable or not (is_array(param.typ) or is_vec(param.typ)):
+            if not param.mutable or not (is_array(param.typ) or is_vec(param.typ)
+                                         or is_string(param.typ)):
                 continue
-            vector = is_vec(param.typ)
+            vector = is_vec(param.typ) or is_string(param.typ)
             # A mutable borrow must be exclusive and must come from an owner:
             # a borrow of a borrow could alias another live mutable view.
-            if not vector and isinstance(arg, Variable) and arg.symbol.borrowed:
+            if is_array(param.typ) and isinstance(arg, Variable) and arg.symbol.borrowed:
                 raise make(
                     "E0423",
                     f"argument {index} of {expr.name} is `mut {param.typ}`, but {arg.name!r} "
@@ -2231,7 +2341,7 @@ class Checker:
                     raise make(
                         "E0333",
                         f"argument {index} of {expr.name} is `mut {param.typ}`, so it must "
-                        f"be a vector created in this function, not a borrow",
+                        f"be a value created in this function, not a borrow",
                         arg.loc,
                         hint="growth is only allowed on a vector created in this "
                              "function",
