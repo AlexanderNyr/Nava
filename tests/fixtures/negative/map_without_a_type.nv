@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let counts = map_new()
+    map_set(counts, 1, 2)
+}

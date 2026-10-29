@@ -171,6 +171,18 @@
       "stdout": "-1\n1\n1\n0\n101\n1\n102\n",
       "stdin": "",
       "exit_code": 0
+    },
+    {
+      "file": "map_basics.nv",
+      "stdin": "",
+      "stdout": "6\ntrue\nfalse\n16\n6\ntrue\nfalse\n5\n5\n0\n",
+      "exit_code": 0
+    },
+    {
+      "file": "set_basics.nv",
+      "stdin": "",
+      "stdout": "4\ntrue\n6\ntrue\nfalse\n3\n0\n",
+      "exit_code": 0
     }
   ]
 }

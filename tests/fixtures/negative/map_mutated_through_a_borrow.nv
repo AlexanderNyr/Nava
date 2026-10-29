@@ -1,0 +1,11 @@
+edition 2;
+
+fn add(counts: HashMap(str, i64), key: str) {
+    map_set(counts, key, 1)
+}
+
+fn main() {
+    let counts: HashMap(str, i64) = map_new()
+    add(counts, "a")
+    print(map_len(counts))
+}

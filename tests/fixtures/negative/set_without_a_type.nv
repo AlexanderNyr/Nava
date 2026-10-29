@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let seen = set_new()
+    set_add(seen, 1)
+}

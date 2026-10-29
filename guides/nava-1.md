@@ -348,6 +348,59 @@ fn main() {
 }
 ```
 
+## Edition 2: `HashMap(K, V)` and `HashSet(T)`
+
+A map and a set answer "is this key here" without a search. `K` is a key — an
+`i64`, a `bool`, a `str` or a `String`, and nothing else (`E0447`) — and `V` is
+any value an element may be, a struct included, but not a collection (`E0206`).
+`let m: HashMap(i64, str) = map_new()` and `let s: HashSet(str) = set_new()`,
+because `map_new()`/`set_new()` have nowhere else to learn their types
+(`E0448`). Both are **moved**, never copied, like a `Vec(T)`: into another
+binding, into an assignment, out of a function as `-> HashMap(i64, str)`.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `map_len(m)` / `set_len(s)` | `i64` | how many entries |
+| `map_contains(m, k)` / `set_contains(s, x)` | `bool` | is the key there |
+| `map_get(m, k)` | `Option(V)` | the stored value, or `None` |
+| `map_set(m, k, v)` | `void` | insert or overwrite |
+| `map_remove(m, k)` / `set_remove(s, x)` | `bool` | delete, reporting whether it was there |
+| `set_add(s, x)` | `void` | insert |
+| `map_clear(m)` / `set_clear(s)` | `void` | drop every entry |
+
+A mutating call needs a writable local or a `mut HashMap(K, V)` parameter
+(`E0444`), exactly like `vec_push`. `map_get` is **total**: a missing key is
+`None`, not a run-time error. The container keeps a **copy** of every key and
+value it stores, so growing a `String` after `map_set` leaves the entry alone,
+and `for k in m` / `for x in s` binds a copy in read-only form. The order of
+iteration is the order of the table, not sorted: two runs of the same sequence
+of operations agree, two different sequences need not.
+
+```nava
+edition 2;
+
+fn main() {
+    let counts: HashMap(str, i64) = map_new()
+    map_set(counts, "a", 1)
+    map_set(counts, "b", 2)
+    map_set(counts, "a", 3)          # overwrite
+    print(map_len(counts))           # 2
+    match map_get(counts, "a") {
+        Option(i64)::Some(value) => { print(value) }    # 3
+        Option(i64)::None => { print(0) }
+    }
+    print(map_contains(counts, "z"))  # false
+    let total = 0
+    for key in counts { total = total + bytes_len(key) }
+    print(total)                     # 2
+    print(map_remove(counts, "b"))   # true
+    let seen: HashSet(i64) = set_new()
+    set_add(seen, 7)
+    set_add(seen, 7)
+    print(set_len(seen))             # 1
+}
+```
+
 ## Edition 2: `String` and the text functions
 
 A `str` is immutable and lives for the run; `String` is the owner of bytes a

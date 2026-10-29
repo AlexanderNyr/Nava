@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+N12a: `HashMap(K, V)` and `HashSet(T)` — the first increment of the standard
+library, and the two collections N11 moved to N12 on purpose.
+
+- `let m: HashMap(str, i64) = map_new()`, `let s: HashSet(String) = set_new()`.
+  The annotation is the only place the types are written, so `let m = map_new()`
+  is `E0448` rather than a guess.
+- Interface: `map_len`, `map_contains`, `map_get -> Option(V)`, `map_set`,
+  `map_remove -> bool`, `map_clear`; `set_len`, `set_contains`, `set_add`,
+  `set_remove -> bool`, `set_clear`. `map_get` is **total**: a missing key is
+  `None`, not a run-time error.
+- A key is `i64`, `bool`, `str` or `String`; anything else is `E0447`. Both hash
+  functions are fixed (`murmur3` finaliser over an integer, FNV-1a over bytes),
+  so iteration order is reproducible across runs and platforms — it is observable
+  in `for k in m`, so it cannot be free to change.
+- The table is open-addressed with linear probing over power-of-two slots,
+  tombstones for removals and doubling at three-quarters occupancy, so a
+  set/remove-heavy loop rehashes instead of degrading.
+- Ownership follows the element rule: a key and a value are copied in, released
+  on overwrite, `map_remove` and `map_clear`, and `map_get` hands back a copy
+  inside its `Option`. A map or a set is **moved**, never copied (`E0445`), a
+  parameter is a borrow (`E0446`), and a mutating call needs a writable target
+  (`E0444`).
+- A map or a set is not a value and not an element: `Vec(HashMap(i64, i64))`,
+  `[HashMap(i64, i64)]` and `HashMap(str, HashMap(i64, i64))` are `E0206`, the
+  nested-collection rule that already covered `[[i64]]`.
+- A map or a set **field** is fine, and returning one keeps the arena text of its
+  keys alive (`holds_text` now walks keys and values), which is what
+  `test_a_returned_map_keeps_its_keys` checks.
+- `E0447` and `E0448` are new, so the code table has 145 entries; `E0444`'s text
+  now names a map and a set as well as a vector.
+
 N11g: an **element** of an array or a vector may be a value that owns storage —
 `[String]`, `Vec(String)`, `[Bag]`, `Vec(Bag)`, `Vec(Slot)` — with a deep copy on
 the way in, a deep copy on every read, and a release that frees every element.

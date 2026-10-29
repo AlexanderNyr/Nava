@@ -596,6 +596,31 @@ REGISTERED_TESTS = {
         "test_an_array_of_bags_is_released_with_its_elements",
         "test_elements_under_the_sanitizers",
     },
+    "TableFrontendTests": {
+        "test_a_collection_is_not_a_value_or_an_element",
+        "test_a_key_must_be_a_value_with_a_hash",
+        "test_a_map_and_a_set_are_not_printable",
+        "test_a_map_is_moved_not_copied",
+        "test_a_map_loop_needs_a_name",
+        "test_a_mutating_call_needs_a_writable_target",
+        "test_a_set_uses_the_same_probe_without_a_value",
+        "test_a_stored_value_is_copied_in_and_released",
+        "test_a_struct_value_is_copied_with_its_own_helpers",
+        "test_map_get_is_total_and_returns_an_option",
+        "test_one_table_per_instance_is_emitted",
+        "test_the_types_must_be_written_out",
+    },
+    "TableRuntimeTests": {
+        "test_a_map_of_structs_copies_in_and_out",
+        "test_a_returned_map_keeps_its_keys",
+        "test_a_set_deduplicates_owning_elements",
+        "test_a_stored_value_is_a_copy",
+        "test_a_string_key_is_copied",
+        "test_a_struct_field_may_hold_a_map",
+        "test_entries_survive_growth_and_removal",
+        "test_iteration_visits_every_entry_once",
+        "test_tables_under_the_sanitizers",
+    },
     "ArenaRegionTests": {
         "test_a_frame_that_builds_text_gets_its_region_back",
         "test_text_that_can_escape_keeps_its_chunks",
@@ -914,8 +939,8 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 138,
-    "tests/fixtures/positive": 28,
+    "tests/fixtures/negative": 144,
+    "tests/fixtures/positive": 30,
     "tests/fixtures/warnings": 3,
 }
 
@@ -1002,6 +1027,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_moves  # noqa: PLC0415
     import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
+    import test_tables  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
@@ -1011,7 +1037,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_plan,
                    test_registry, test_release, test_results, test_sandbox, test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
-                   test_text, test_values, test_vec):
+                   test_tables, test_text, test_values, test_vec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -1074,6 +1100,7 @@ def check_skip_state() -> list[str]:
     import test_moves  # noqa: PLC0415
     import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
+    import test_tables  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -1092,6 +1119,7 @@ def check_skip_state() -> list[str]:
                                (test_moves, "ArenaRegionTests"),
                                (test_storage, "StorageRuntimeTests"),
                                (test_elements, "ElementRuntimeTests"),
+                               (test_tables, "TableRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

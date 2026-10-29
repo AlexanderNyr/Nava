@@ -1,0 +1,27 @@
+edition 2;
+
+fn main() {
+    let counts: HashMap(str, i64) = map_new()
+    let i: i64 = 0
+    while i < 6 {
+        map_set(counts, str_from_i64(i), i * i)
+        i = i + 1
+    }
+    print(map_len(counts))
+    print(map_contains(counts, "3"))
+    print(map_contains(counts, "9"))
+    match map_get(counts, "4") {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(-1) }
+    }
+    let total: i64 = 0
+    for key in counts { total = total + bytes_len(key) }
+    print(total)
+    print(map_remove(counts, "2"))
+    print(map_remove(counts, "9"))
+    print(map_len(counts))
+    map_set(counts, "5", 25)
+    print(map_len(counts))
+    map_clear(counts)
+    print(map_len(counts))
+}

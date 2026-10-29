@@ -583,7 +583,7 @@
       "line": 1,
       "column": 9,
       "end_column": 14,
-      "message": "'mut' is only allowed on an array, vector or String parameter, not on i64",
+      "message": "'mut' is only allowed on an array, vector, String, map or set parameter, not on i64",
       "hint": "scalar parameters are already mutable locals inside the function"
     },
     {
@@ -637,8 +637,8 @@
       "line": 3,
       "column": 18,
       "end_column": null,
-      "message": "a for loop iterates over an array or a range a..b, not over i64",
-      "hint": "write `for x in values` for an array or `for i in 0..n` for a count"
+      "message": "a for loop iterates over an array, a vector, a map, a set or a range a..b, not over i64",
+      "hint": "write `for x in values` for a collection or `for i in 0..n` for a count"
     },
     {
       "file": "ctl_range_outside_for.nv",
@@ -1242,6 +1242,60 @@
       "end_column": 9,
       "message": "the vector this call returns would have no owner",
       "hint": "bind it: `let v: Vec(i64) = ...` — a discarded owner leaks its buffer"
+    },
+    {
+      "file": "map_in_a_vector.nv",
+      "code": "E0206",
+      "line": 5,
+      "column": 42,
+      "end_column": null,
+      "message": "a vector cannot contain HashMap(i64, i64)",
+      "hint": "nested collections are not part of Nava: hold one collection at a time, or declare a struct with two fields"
+    },
+    {
+      "file": "map_key_not_hashable.nv",
+      "code": "E0447",
+      "line": 9,
+      "column": 37,
+      "end_column": null,
+      "message": "the key of Point cannot be hashed: a key is i64, bool, str or String",
+      "hint": "keys are compared by value; a struct or an owning aggregate has no hash the language defines"
+    },
+    {
+      "file": "map_mutated_through_a_borrow.nv",
+      "code": "E0444",
+      "line": 4,
+      "column": 13,
+      "end_column": null,
+      "message": "argument 1 of map_set changes the map, so it must be a writable local or a `mut HashMap(str, i64)` parameter",
+      "hint": "take the map as `mut HashMap(str, i64)` to change it, and pass one declared in this function"
+    },
+    {
+      "file": "map_without_a_type.nv",
+      "code": "E0448",
+      "line": 4,
+      "column": 18,
+      "end_column": 25,
+      "message": "map_new needs to know the type it holds",
+      "hint": "write the annotation, as in `let m: HashMap(i64, str) = map_new()`"
+    },
+    {
+      "file": "set_element_not_hashable.nv",
+      "code": "E0447",
+      "line": 4,
+      "column": 33,
+      "end_column": null,
+      "message": "the element of f64 cannot be hashed: a key is i64, bool, str or String",
+      "hint": "keys are compared by value; a struct or an owning aggregate has no hash the language defines"
+    },
+    {
+      "file": "set_without_a_type.nv",
+      "code": "E0448",
+      "line": 4,
+      "column": 16,
+      "end_column": 23,
+      "message": "set_new needs to know the type it holds",
+      "hint": "write the annotation, as in `let s: HashSet(str) = set_new()`"
     }
   ]
 }

@@ -1211,6 +1211,101 @@ What the type is, and what it is not:
   is refused, because the builtin is resolved before any declaration and a
   program that shadowed it would be writing dead code.
 
+### Tables: `HashMap(K, V)` and `HashSet(T)`
+
+An array keeps its length, a vector grows at the end, and a map or a set answers
+"is this key here" without a search. The key is hashed once and the slot it
+belongs in is found directly, so a lookup costs the same whatever the table
+holds.
+
+```text
+map_type       = "HashMap" "(" type_name "," type_name ")" ;   # edition 2
+set_type       = "HashSet" "(" type_name ")" ;                 # edition 2
+map_call       = ( "map_new" | "map_len" | "map_contains" | "map_get"
+                 | "map_set" | "map_remove" | "map_clear" ) "(" ... ")" ;
+set_call       = ( "set_new" | "set_len" | "set_contains" | "set_add"
+                 | "set_remove" | "set_clear" ) "(" ... ")" ;
+```
+
+```nava
+edition 2;
+
+fn main() {
+    let counts: HashMap(str, i64) = map_new()
+    map_set(counts, "a", 1)
+    map_set(counts, "b", 2)
+    map_set(counts, "a", 3)
+    print(map_len(counts))
+    match map_get(counts, "a") {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(0) }
+    }
+    print(map_contains(counts, "z"))
+    let total = 0
+    for key in counts { total = total + bytes_len(key) }
+    print(total)
+    let seen: HashSet(i64) = set_new()
+    set_add(seen, 7)
+    set_add(seen, 7)
+    print(set_len(seen))
+    print(set_contains(seen, 7))
+}
+```
+
+The example prints `2`, `3`, `false`, `2`, `1` and `true`.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `map_new()` / `set_new()` | the annotated type | an empty table |
+| `map_len(m)` / `set_len(s)` | `i64` | entries it holds now |
+| `map_contains(m, k)` / `set_contains(s, x)` | `bool` | is the key there |
+| `map_get(m, k)` | `Option(V)` | the value stored under `k`, or `None` |
+| `map_set(m, k, v)` | `void` | insert `k`, overwriting what was there |
+| `set_add(s, x)` | `void` | insert `x`; a present element changes nothing |
+| `map_remove(m, k)` / `set_remove(s, x)` | `bool` | delete, reporting whether it was there |
+| `map_clear(m)` / `set_clear(s)` | `void` | drop every entry, keep the capacity |
+
+The rules, and the reasons for them:
+
+* **a key is a value with a hash.** `K` is `i64`, `bool`, `str` or `String`, and
+  anything else is `E0447`: a key is compared by value, and a struct, an enum,
+  an array, a vector, an `f64` (two of them can be `==`-unequal to themselves
+  under NaN) and a function value have no hash the language defines.
+* **a stored value is a value, not a shape.** `V` and the element of a set may be
+  a scalar, a `str`, a `String`, a `Vec(T)`, a struct or an enum; a map or a set
+  inside one is `E0206`, the nested-collection rule that an element follows too.
+* **the annotation is the only place the types are written.**
+  `let m: HashMap(i64, str) = map_new()` and `let s: HashSet(str) = set_new()`.
+  Without it there is nothing to instantiate, so `let m = map_new()` is `E0448`.
+* **a mutating call needs a writable target.** `map_set`, `map_remove`,
+  `map_clear`, `set_add`, `set_remove` and `set_clear` are `E0444` through a
+  borrow, exactly like `vec_push`: the handle the caller holds must be the one
+  that changes. Reading calls — `map_len`, `map_contains`, `map_get`, `set_len`,
+  `set_contains` — take any map or set.
+* **the container keeps a copy.** `map_set(m, k, v)` copies the key and the
+  value in, overwriting releases what the slot held, and `map_get` hands back a
+  copy inside the `Option`. Growing a `String` after `map_set`, or reading a
+  stored one twice, therefore cannot make two owners of one buffer — the same
+  rule as an element of an array or a vector, which is why a struct or a `Vec(T)`
+  is stored as deeply as any other element.
+* **`map_get` is total.** A missing key is `Option(V)::None`, not a run-time
+  error, so a program that reads a table either handles the absence or says so.
+* **a map or a set is moved, never copied.** `let b: HashMap(i64, str) = a`,
+  `b = a` and `return a` hand the table on and leave `a` dead (`E0445`); a
+  parameter is a borrow, so returning one or assigning over one is `E0446`, and
+  an unbound owning result is `E0428` (`E0429` for a missing annotation).
+* **iteration is table order.** `for k in m` binds each key and `for x in s` each
+  element, as a read-only copy, and the order is the slot order of the table: it
+  is deterministic for one sequence of operations and identical in two runs of
+  the same program, but it is not sorted, and two programs that reach the same
+  entries by different operations may visit them differently. Sort the keys if
+  the order matters.
+* **the shape of the storage is fixed and documented.** Slots are power-of-two
+  and probed linearly, capacity doubles when the table is three-quarters full,
+  and a deleted slot is a tombstone the next insert reuses, so a
+  set/remove-heavy loop rehashes instead of degrading. `map_clear` keeps the
+  buffer; only releasing the map frees it.
+
 ### Strings that grow: `String` and the text builtins
 
 A `str` is immutable and lives for the whole run; a program cannot build one.
@@ -1878,9 +1973,11 @@ never changes meaning; a new condition gets a new code.
 | `E0441` | error | a call cannot go through a field | `tests/fixtures/negative/call_through_field.nv` |
 | `E0442` | error | function values cannot be compared | `tests/fixtures/negative/compare_function_values.nv` |
 | `E0443` | error | a function type has no mutable parameter | `tests/fixtures/negative/mutable_in_function_type.nv` |
-| `E0444` | error | a mutating vector call needs a writable target | `tests/fixtures/negative/vector_mutated_through_a_borrow.nv` |
+| `E0444` | error | a mutating vector, map or set call needs a writable target | `tests/fixtures/negative/vector_mutated_through_a_borrow.nv`, `tests/fixtures/negative/map_mutated_through_a_borrow.nv` |
 | `E0445` | error | a moved value cannot be used again | `tests/fixtures/negative/vector_moved_into_another_binding.nv`, `string_moved_into_another_binding.nv` |
 | `E0446` | error | only an owning local can be moved | `tests/fixtures/negative/string_returned_from_a_borrow.nv`, `vector_reassigned_in_a_borrow.nv` |
+| `E0447` | error | a map key or set element cannot be hashed | `tests/fixtures/negative/map_key_not_hashable.nv`, `set_element_not_hashable.nv` |
+| `E0448` | error | a map or a set needs its types written out | `tests/fixtures/negative/map_without_a_type.nv`, `set_without_a_type.nv` |
 
 **Types and semantics**
 
@@ -2042,9 +2139,8 @@ program's, not the compiler's.
 
 ## Not implemented
 
-There is no `HashMap` or `HashSet` (they arrive with the standard library in
-N12), no arrays of arrays, no array copies, no array results from a function,
-no string indexing or string input, no floating-point `%`, no pointers, FFI,
+There are no arrays of arrays, no array copies and no array results from a
+function, no string indexing or string input, no floating-point `%`, no pointers, FFI,
 networking, dynamic loading or package resolution. Module imports, a
 capability-limited file API, `Vec(T)`, `String` and the `str_*` functions, the
 `math` module and `pub` visibility are implemented, as described above; a
@@ -2053,12 +2149,14 @@ package manager is not.
 Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of
 structs and of enums, slices, `defer`, labelled loops, `pub`, generic
 declarations of your own, function values with the type `fn(i64) -> i64`, growing
-vectors and growing strings, and moves of both. It does not add closures or
+vectors, growing strings, `HashMap(K, V)` and `HashSet(T)`, and moves of all
+four. It does not add closures or
 function literals, `match` as an expression, generic arrays, type-parameter
 bounds, struct or enum equality, printing a struct, an enum, a function value, a
-vector or a `String`. A field, a payload, a type argument and an **element** may
-each hold a `Vec(T)` or a `String`; what stays out is a collection inside a
-collection.
+vector, a `String`, a map or a set. A field, a payload, a type argument and an
+**element** may each hold a `Vec(T)` or a `String`; a map value may hold those
+too. What stays out is a collection inside a collection: no array, vector, map or
+set as an element or as a map value.
 
 An array keeps the length it was created with; `Vec(T)` is the type that grows.
 This version cannot express all ordinary C or C++ tasks. Save generated

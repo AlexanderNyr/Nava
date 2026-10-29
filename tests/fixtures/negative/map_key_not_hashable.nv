@@ -1,0 +1,11 @@
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() {
+    let grid: HashMap(Point, i64) = map_new()
+    print(map_len(grid))
+}

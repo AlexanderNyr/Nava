@@ -10,7 +10,8 @@ from .model import (
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Param, Program,
     Range, Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary,
     Variable, Variant, VariantValue, While, function_signature, function_type_parts,
-    is_function_type, is_string, is_vec, vec_element,
+    is_function_type, is_map, is_owning_container, is_set, is_string, is_vec,
+    map_parts, set_element, vec_element,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -21,6 +22,10 @@ BUILTINS = {
     # The whole vector interface, including the constructor: `vec_new` is
     # resolved like the rest, so a declaration of that name would be dead code.
     "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
+    # Maps and sets: `map_new`/`set_new` take their types from the annotation,
+    # and every other name is resolved here rather than by a user declaration.
+    "map_new", "map_len", "map_contains", "map_get", "map_set", "map_remove", "map_clear",
+    "set_new", "set_len", "set_contains", "set_add", "set_remove", "set_clear",
     # Text: `str_*` builds a new immutable string in the arena, `string_*`
     # drives the growing builder. Reserved for the same reason.
     "string_new", "string_push", "string_push_byte", "string_len", "string_capacity",
@@ -259,12 +264,12 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
-            if is_vec(function.returns):
+            if is_owning_container(function.returns):
                 # An owning return is a move: the value is created in this
                 # function and handed to the caller, who becomes its owner. The
                 # `return` statement checks that the value is one this function
                 # owns; nothing is copied.
-                self.validate_vec(function.returns, function.loc)
+                self.validate_container(function.returns, function.loc)
             for param in function.params:
                 if self.is_template(param.typ):
                     raise make(
@@ -276,30 +281,29 @@ class Checker:
                 if is_function_type(param.typ):
                     self.check_function_type(param.typ, param.loc)
                 if param.typ not in VALUE_TYPES and not is_array(param.typ) \
-                        and not is_vec(param.typ) and not is_string(param.typ) \
+                        and not is_owning_container(param.typ) \
                         and not self.is_struct(param.typ) and not self.is_enum(param.typ) \
                         and not is_function_type(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
                                param.loc.advance(param.name))
-                if param.mutable and not is_array(param.typ) and not is_vec(param.typ) \
-                        and not is_string(param.typ):
+                if param.mutable and not is_array(param.typ) \
+                        and not is_owning_container(param.typ):
                     raise make(
                         "E0341",
-                        f"'mut' is only allowed on an array, vector or String "
-                        f"parameter, not on {param.typ}",
+                        f"'mut' is only allowed on an array, vector, String, map or "
+                        f"set parameter, not on {param.typ}",
                         param.loc, param.loc.advance("mut " + param.name),
                         "scalar parameters are already mutable locals inside the function",
                     )
-                if is_vec(param.typ):
-                    self.validate_vec(param.typ, param.loc)
+                self.validate_container(param.typ, param.loc)
                 param.symbol = self.declare(param.name, param.typ, param.loc)
                 if is_array(param.typ):
                     self.check_element_type(param.typ, param.loc)
-                if is_array(param.typ) or is_vec(param.typ) or is_string(param.typ):
+                if is_array(param.typ) or is_owning_container(param.typ):
                     # A parameter is a borrow: it owns no storage and its
                     # lifetime is the call, which no Nava program can extend. A
-                    # vector parameter is a pointer, so a `mut` one can grow the
-                    # caller's vector; a plain one cannot write to it.
+                    # vector, a map and a set are handles, so a `mut` one can
+                    # change the caller's container; a plain one cannot.
                     param.symbol.owned = False
                     param.symbol.mutable = bool(param.mutable)
             self.check_statements(function.body, new_scope=False)
@@ -340,11 +344,11 @@ class Checker:
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
-            if is_vec(item.typ):
-                self.validate_vec(item.typ, item.loc)
-                # A field may hold a `Vec(T)`: the struct's own copy helper
-                # copies the buffer deeply, and its release helper frees it, so
-                # the two values never share storage.
+            if is_owning_container(item.typ):
+                self.validate_container(item.typ, item.loc)
+                # A field may hold a `Vec(T)`, a `String`, a map or a set: the
+                # struct's own copy helper copies the buffer deeply, and its
+                # release helper frees it, so the two values never share storage.
                 continue
             if is_string(item.typ):
                 # The same for a `String`: a copied field owns its own bytes.
@@ -375,7 +379,7 @@ class Checker:
         return bool(declared is not None and declared.type_params)
 
     def is_enum(self, typ: str | None) -> bool:
-        if typ is None:
+        if typ is None or is_map(typ) or is_set(typ):
             return False
         if typ in self.instances:
             return True
@@ -507,8 +511,8 @@ class Checker:
         """
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
-            if is_vec(item):
-                self.validate_vec(item, None)
+            if is_owning_container(item):
+                self.validate_container(item, None)
                 continue
             if is_string(item):
                 # A payload and a field are the same case: the value is copied by
@@ -536,7 +540,7 @@ class Checker:
                 )
 
     def enum_of(self, typ: str | None) -> EnumDecl | None:
-        if not typ:
+        if not typ or is_map(typ) or is_set(typ):
             return None
         if typ in self.enums:
             return self.enums[typ]
@@ -663,6 +667,8 @@ class Checker:
         return self.struct_of(typ) is not None
 
     def struct_of(self, typ: str | None) -> Struct | None:
+        if is_map(typ) or is_set(typ):
+            return None
         """The declared struct behind a type, instantiating a template if needed.
 
         Unknown names and type-parameter names return None: this answers "is this
@@ -983,7 +989,7 @@ class Checker:
         """
         if typ is None or typ in seen:
             return False
-        if is_array(typ) or is_vec(typ) or is_string(typ):
+        if is_array(typ) or is_owning_container(typ):
             return True
         seen = seen | {typ}
         struct = self.struct_of(typ)
@@ -1007,7 +1013,7 @@ class Checker:
         nested collection, which Nava does not have (`E0206`).
         """
         element = vec_element(typ)
-        if is_vec(element) or is_array(element):
+        if is_vec(element) or is_map(element) or is_set(element) or is_array(element):
             raise make(
                 "E0206",
                 f"a vector cannot contain {element}",
@@ -1036,7 +1042,7 @@ class Checker:
         use is `E0445`. A parameter is a borrow, so moving out of one is
         `E0446`: the caller still owns what it passed and would free it again.
         """
-        noun = "vector" if is_vec(typ) else "String"
+        noun = self.container_noun(typ)
         if isinstance(value, Call):
             # A constructor, a call whose result the callee moved out, or a
             # `vec_get` — which copies the element out of the vector. The type
@@ -1068,6 +1074,102 @@ class Checker:
             hint=f"a {noun} has exactly one owner: create one, move one, or take a "
                  f"`mut {typ}` parameter",
         )
+
+    #: The key types a map or a set can hash: values whose bytes are the value.
+    HASHABLE_KEYS = frozenset({"i64", "bool", "str", "String"})
+
+    @staticmethod
+    def container_noun(typ: str) -> str:
+        """The word a diagnostic uses for an owning container."""
+        if is_map(typ):
+            return "map"
+        if is_set(typ):
+            return "set"
+        if is_vec(typ):
+            return "vector"
+        return "String"
+
+    def hashable_key(self, key: str, loc, name: str) -> None:
+        """A key is hashed, so it must be a value the hash is defined over."""
+        if key in self.HASHABLE_KEYS:
+            return
+        raise make(
+            "E0447",
+            f"the {name} of {key} cannot be hashed: a key is i64, bool, str or String",
+            loc,
+            hint="keys are compared by value; a struct or an owning aggregate has no "
+                 "hash the language defines",
+        )
+
+    def storable_value(self, value: str, loc, name: str) -> None:
+        """A map value and a set element are stored, so they are values, not shapes."""
+        if is_array(value) or is_map(value) or is_set(value):
+            raise make(
+                "E0206",
+                f"a {name} cannot contain {value}",
+                loc,
+                hint="nested collections are not part of Nava: hold one collection "
+                     "at a time, or declare a struct with two fields",
+            )
+        if is_string(value) or value in VALUE_TYPES or self.is_struct(value) \
+                or self.is_enum(value):
+            return
+        raise make(
+            "E0203",
+            f"unknown type {value!r}; use i64, bool, str, f64, String, Vec(T), a "
+            f"declared struct or an enum",
+            loc,
+        )
+
+    def validate_container(self, typ: str | None, loc) -> None:
+        """Check a type written where a container may appear."""
+        if is_vec(typ):
+            self.validate_vec(typ, loc)
+        elif is_map(typ):
+            self.validate_map(typ, loc)
+        elif is_set(typ):
+            self.validate_set(typ, loc)
+
+    def validate_map(self, typ: str, loc) -> tuple[str, str]:
+        """The key and value types of `HashMap(K, V)`, both checked."""
+        key, value = map_parts(typ)
+        self.hashable_key(key, loc, "key")
+        self.storable_value(value, loc, "map")
+        if is_vec(value):
+            self.validate_vec(value, loc)
+        return key, value
+
+    def validate_set(self, typ: str, loc) -> str:
+        """The element type of `HashSet(T)`, which is also its key type."""
+        element = set_element(typ)
+        self.hashable_key(element, loc, "element")
+        return element
+
+    def container_target(self, expr: Call, name: str, mutating: bool,
+                         kind: str, noun: str) -> str:
+        """Check argument 1 of a map or a set builtin, and return its instance.
+
+        The rule is the vector rule: a call that changes the container needs a
+        writable local or a `mut` parameter, because the caller keeps what it
+        passed and would otherwise never see the change.
+        """
+        argument = expr.args[0]
+        typ = self.expression(argument)
+        wanted = is_map(typ) if kind == "map" else is_set(typ)
+        if not wanted:
+            raise make("E0327", f"argument 1 of {name} expects a {noun}, got {typ}",
+                       argument.loc)
+        if mutating and (not isinstance(argument, Variable)
+                         or not (argument.symbol.owned or argument.symbol.mutable)):
+            raise make(
+                "E0444",
+                f"argument 1 of {name} changes the {noun}, so it must be a writable "
+                f"local or a `mut {typ}` parameter",
+                argument.loc,
+                hint=f"take the {noun} as `mut {typ}` to change it, and pass one "
+                     f"declared in this function",
+            )
+        return typ
 
     def vec_target(self, expr: Call, name: str, mutating: bool) -> str:
         """Check argument 1 of a vector builtin and return the element type."""
@@ -1139,6 +1241,76 @@ class Checker:
                                 f"{element}, got {value_type}", expr.args[-1].loc)
         return "void"
 
+    def map_builtin(self, expr: Call, expected: str | None) -> str | None:
+        """`map_*` and `set_*`: two containers, one shape of interface.
+
+        A map is created empty and typed by its annotation — `let m: HashMap(i64,
+        str) = map_new()` — because there is no other place to write the two
+        types. `map_get` is total: it returns `Option(V)`, so a missing key is a
+        value the program has to handle rather than a run-time failure.
+        """
+        name = expr.name
+        is_map_call = name.startswith("map_")
+        noun = "map" if is_map_call else "set"
+        arity = ({"map_len": 1, "map_contains": 2, "map_get": 2, "map_set": 3,
+                  "map_remove": 2, "map_clear": 1} if is_map_call
+                 else {"set_len": 1, "set_contains": 2, "set_add": 2,
+                       "set_remove": 2, "set_clear": 1})
+        if name in ("map_new", "set_new"):
+            if expr.args:
+                raise make("E0326", f"{name} takes no arguments", expr.loc)
+            wanted = is_map(expected) if is_map_call else is_set(expected)
+            if not wanted:
+                raise make(
+                    "E0448",
+                    f"{name} needs to know the type it holds",
+                    expr.loc, expr.loc.advance(name),
+                    hint=("write the annotation, as in `let m: HashMap(i64, str) = "
+                          "map_new()`" if is_map_call else
+                          "write the annotation, as in `let s: HashSet(str) = set_new()`"),
+                )
+            if is_map_call:
+                self.validate_map(expected, expr.loc)
+            else:
+                self.validate_set(expected, expr.loc)
+            return expected
+        if len(expr.args) != arity[name]:
+            plural = "s" if arity[name] != 1 else ""
+            raise make("E0326", f"{name} expects {arity[name]} argument{plural}, "
+                                f"got {len(expr.args)}", expr.loc)
+        container = self.container_target(expr, name,
+                                          mutating=name in ("map_set", "map_remove",
+                                                            "map_clear", "set_add",
+                                                            "set_remove", "set_clear"),
+                                          kind="map" if is_map_call else "set",
+                                          noun=noun)
+        if is_map_call:
+            key, value = self.validate_map(container, expr.args[0].loc)
+            wanted_key, wanted_value = key, value
+        else:
+            wanted_key, wanted_value = self.validate_set(container, expr.args[0].loc), None
+        if name in ("map_len", "set_len"):
+            return "i64"
+        if name in ("map_clear", "set_clear"):
+            return "void"
+        key_type = self.expression(expr.args[1])
+        if key_type != wanted_key:
+            raise make("E0327", f"argument 2 of {name} expects {wanted_key}, "
+                                f"got {key_type}", expr.args[1].loc)
+        if name in ("map_contains", "map_remove", "set_contains", "set_remove"):
+            return "bool"
+        if name == "map_get":
+            typ = f"Option({wanted_value})"
+            self.instantiate(typ)
+            return typ
+        if name == "set_add":
+            return "void"
+        value_type = self.expression(expr.args[2])
+        if value_type != wanted_value:
+            raise make("E0327", f"argument 3 of {name} expects {wanted_value}, "
+                                f"got {value_type}", expr.args[2].loc)
+        return "void"
+
     def text_builtin(self, expr: Call, expected: str | None) -> str | None:
         """`str_*` builds text in the arena; `string_*` drives the builder.
 
@@ -1190,7 +1362,7 @@ class Checker:
         if not is_array(typ):
             return
         element = element_of(typ)
-        if is_array(element):
+        if is_array(element) or is_map(element) or is_set(element):
             raise make(
                 "E0206",
                 f"an array cannot contain {element}",
@@ -1660,7 +1832,7 @@ class Checker:
                 typ = self.propagate(statement)
             else:
                 annotation = statement.annotation
-                expected = (annotation if is_array(annotation) or is_vec(annotation)
+                expected = (annotation if is_array(annotation) or is_owning_container(annotation)
                             else None)
                 typ = self.expression(statement.value, expected=expected)
             if typ == "void":
@@ -1682,9 +1854,8 @@ class Checker:
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
             self.check_element_type(typ, name_loc, name_loc.advance(statement.name))
-            if is_vec(typ):
-                self.validate_vec(typ, name_loc)
-            if is_vec(typ) or is_string(typ):
+            self.validate_container(typ, name_loc)
+            if is_owning_container(typ):
                 # The binding becomes the owner of exactly one buffer, so the
                 # storage arrives by being created here or moved here.
                 self.owning_source(typ, statement.value, name_loc,
@@ -1763,11 +1934,11 @@ class Checker:
                     "an array owns its storage for the life of its block; "
                     "write elements with a[i] = value",
                 )
-            owning = is_vec(statement.symbol.typ) or is_string(statement.symbol.typ)
+            owning = is_owning_container(statement.symbol.typ)
             if owning and not statement.symbol.owned:
                 # A parameter is a borrow: its buffer is the caller's, and a new
                 # one written into the local copy would never reach the caller.
-                noun = "vector" if is_vec(statement.symbol.typ) else "String"
+                noun = self.container_noun(statement.symbol.typ)
                 raise make(
                     "E0446",
                     f"a borrowed {noun} cannot be reassigned ({statement.name!r} is "
@@ -1778,8 +1949,10 @@ class Checker:
                 )
             # A vector constructor takes its element type from the binding it
             # replaces, exactly as it does in the `let` that declared it.
-            typ = self.expression(statement.value,
-                                  expected=statement.symbol.typ if is_vec(statement.symbol.typ) else None)
+            typ = self.expression(
+                statement.value,
+                expected=(statement.symbol.typ
+                          if is_owning_container(statement.symbol.typ) else None))
             if typ != statement.symbol.typ:
                 raise make("E0312", f"cannot assign {typ} to {statement.symbol.typ}",
                            statement.loc, statement.loc.advance(statement.name),
@@ -1796,10 +1969,10 @@ class Checker:
                            statement.loc,
                            hint="remove the expression or use its value, as in `print(x)`")
             discarded = self.expression(statement.expr)
-            if is_vec(discarded) or is_string(discarded):
+            if is_owning_container(discarded):
                 # The buffer would be handed to nobody and never released: the
                 # value owns storage, so it has to be bound to an owner.
-                noun = "vector" if is_vec(discarded) else "String"
+                noun = self.container_noun(discarded)
                 raise make(
                     "E0428",
                     f"the {noun} this call returns would have no owner",
@@ -1831,7 +2004,7 @@ class Checker:
                 )
             if actual != expected:
                 raise make("E0315", f"return expects {expected}, got {actual}", statement.loc)
-            if is_vec(expected) or is_string(expected):
+            if is_owning_container(expected):
                 # The value leaves this frame: the callee stops being its owner
                 # and the caller becomes one. Nothing is copied and nothing is
                 # released here.
@@ -1970,12 +2143,34 @@ class Checker:
                 finally:
                     self.scopes.pop()
                 return
+            if is_map(iterable_type) or is_set(iterable_type):
+                if not isinstance(iterable, Variable):
+                    raise make(
+                        "E0350",
+                        "a for loop iterates over a map or a set by name",
+                        iterable.loc,
+                        hint="bind it first, as in `let m: HashMap(i64, str) = map_new()`",
+                    )
+                element = (self.validate_map(iterable_type, iterable.loc)[0]
+                           if is_map(iterable_type)
+                           else self.validate_set(iterable_type, iterable.loc))
+                name_loc = statement.name_loc or statement.loc
+                self.scopes.append({})
+                try:
+                    statement.symbol = self.declare(statement.name, element, name_loc)
+                    statement.symbol.readonly = True
+                    self.check_statements(statement.body, new_scope=False)
+                finally:
+                    self.scopes.pop()
+                return
             if not is_array(iterable_type):
                 raise make(
                     "E0350",
-                    f"a for loop iterates over an array or a range a..b, not over {iterable_type}",
+                    f"a for loop iterates over an array, a vector, a map, a set or a "
+                    f"range a..b, not over {iterable_type}",
                     iterable.loc,
-                    hint="write `for x in values` for an array or `for i in 0..n` for a count",
+                    hint="write `for x in values` for a collection or `for i in 0..n` "
+                         "for a count",
                 )
             if not isinstance(iterable, (Variable, ArrayLiteral, Slice, Member)):
                 # Literals, slices and array fields are allowed because the
@@ -2138,6 +2333,16 @@ class Checker:
             # A struct is an element type in edition 2 either way; an array, a
             # str-owning value or an enum is still refused, and says so with the
             # element-type rule rather than as a generic mismatch.
+            if is_map(actual) or is_set(actual):
+                # A collection is a shape, not a value: an array of maps is a
+                # nested collection, and Nava holds one collection at a time.
+                raise make(
+                    "E0206",
+                    f"an array cannot contain {actual}",
+                    item.loc,
+                    hint="nested collections are not part of Nava: hold one "
+                         "collection at a time, or declare a struct with two fields",
+                )
             if actual not in VALUE_TYPES and not is_string(actual) \
                     and not self.is_struct(actual) and not self.is_enum(actual):
                 raise make("E0334",
@@ -2276,6 +2481,9 @@ class Checker:
             return "void"
         if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_BUILTINS):
             return self.vec_builtin(expr, expected)
+        if expr.module is None and (expr.name in ("map_new", "set_new")
+                                    or expr.name.startswith(("map_", "set_"))):
+            return self.map_builtin(expr, expected)
         if expr.module is None and (expr.name == "string_new" or expr.name in TEXT_SIGNATURES):
             return self.text_builtin(expr, expected)
         function = self.resolve(expr)

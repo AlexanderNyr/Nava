@@ -8,7 +8,8 @@ from .model import (
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
     MemberAssign, Number, Program, Range, Return, Slice, String, StructLiteral, Try,
     Unary, Variable, VariantValue, While, function_type_parts, is_function_type,
-    is_string, is_vec, vec_element,
+    is_map, is_owning_container, is_set, is_string, is_vec, map_parts,
+    set_element, vec_element,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -682,6 +683,32 @@ static const char *nv_str_replace(const char *value, const char *from, const cha
     return text;
 }
 
+/* --- hashing for maps and sets -------------------------------------------
+ *
+ * Two hash functions are enough for the four key types: an integer hashed by
+ * mixing its bits, and a byte string hashed with FNV-1a. Both are deterministic
+ * across runs and across platforms, because iteration order is part of what a
+ * program can observe, and both spread the low bits that a power-of-two table
+ * uses for its first probe.
+ */
+static uint64_t nv_hash_i64(int64_t value) {
+    uint64_t mixed = (uint64_t)value;
+    mixed ^= mixed >> 33;
+    mixed *= UINT64_C(0xff51afd7ed558ccd);
+    mixed ^= mixed >> 33;
+    mixed *= UINT64_C(0xc4ceb9fe1a85ec53);
+    mixed ^= mixed >> 33;
+    return mixed;
+}
+static uint64_t nv_hash_bytes(const char *data, int64_t length) {
+    uint64_t hash = UINT64_C(0xcbf29ce484222325);
+    for (int64_t at = 0; at < length; at += 1) {
+        hash ^= (uint64_t)(unsigned char)data[at];
+        hash *= UINT64_C(0x100000001b3);
+    }
+    return hash;
+}
+
 /* --- the growing string builder ------------------------------------------
    `String` exists for the case `str` cannot serve: text assembled a piece at a
    time, where each concatenation would otherwise copy everything written so
@@ -721,6 +748,13 @@ static void nv_string_reserve(nv_string *text, int64_t needed) {
 /* A deep copy: a field, a payload or a returned value may hold a String, and
    then the holder owns bytes of its own. Releasing one copy never touches the
    other, which is what makes storing a String safe. */
+static bool nv_string_same(nv_string *left, nv_string *right) {
+    if (left == right) return true;
+    if (left == NULL || right == NULL) return false;
+    if (left->len != right->len) return false;
+    if (left->len == 0) return true;
+    return memcmp(left->data, right->data, (size_t)left->len) == 0;
+}
 static nv_string *nv_string_copy(const nv_string *source) {
     nv_string *copy = nv_string_new();
     if (source != NULL && source->len > 0) {
@@ -945,6 +979,23 @@ def vec_tag(typ: str) -> str:
     return array_tag(f"[{vec_element(typ)}]")
 
 
+def _mangled(text: str) -> str:
+    """`Vec(i64)` -> `Vec_i64`: the identifier-safe form of a type."""
+    return "".join(character if character.isalnum() else "_" for character in text) \
+        .replace("__", "_").strip("_")
+
+
+def map_tag(typ: str) -> str:
+    """`HashMap(i64, String)` -> `i64_String`: the suffix of the map helpers."""
+    key, value = map_parts(typ)
+    return f"{_mangled(key)}_{_mangled(value)}"
+
+
+def set_tag(typ: str) -> str:
+    """`HashSet(str)` -> `str`."""
+    return _mangled(set_element(typ))
+
+
 def is_array(typ: object) -> bool:
     return isinstance(typ, str) and typ.startswith("[") and typ.endswith("]")
 
@@ -1065,6 +1116,10 @@ class CGenerator:
             # A vector value is a pointer to its handle: growth may replace the
             # buffer, so every holder must see the same handle, not a copy of it.
             return f"nv_vec_{vec_tag(typ)} *"
+        if is_map(typ):
+            return f"nv_map_{map_tag(typ)} *"
+        if is_set(typ):
+            return f"nv_set_{set_tag(typ)} *"
         if typ.startswith("[") and typ.endswith("]"):
             return f"nv_arr_{array_tag(typ)}"
         pointer = self.fnptr.get(typ)
@@ -1103,7 +1158,7 @@ class CGenerator:
         """
         if typ is None:
             return False
-        if is_vec(typ) or is_string(typ) or is_array(typ):
+        if is_owning_container(typ) or is_array(typ):
             # A vector, a String and an array all own storage, so a struct or an
             # enum that holds one contains storage and needs a copy and a
             # release. A local of one of these types is never copied — it is
@@ -1130,7 +1185,8 @@ class CGenerator:
         """Can a value of `typ` point at arena text?
 
         That is exactly the set a region reset has to respect: `str` is arena
-        text, a vector or an array of it holds pointers into the arena, and a
+        text, a vector or an array of it holds pointers into the arena, a map or
+        a set holds them through its keys and values, and a
         struct or an enum is whatever its fields and payloads are. The walk is
         guarded, so a type that contains itself — refused by the checker —
         still terminates here.
@@ -1143,6 +1199,12 @@ class CGenerator:
             return self.holds_text(vec_element(typ), seen | {typ})
         if is_array(typ):
             return self.holds_text(element_of(typ), seen | {typ})
+        if is_map(typ):
+            key, value = map_parts(typ)
+            return (self.holds_text(key, seen | {typ})
+                    or self.holds_text(value, seen | {typ}))
+        if is_set(typ):
+            return self.holds_text(set_element(typ), seen | {typ})
         struct = self.structs.get(typ)
         if struct is not None:
             return any(self.holds_text(item.typ, seen | {typ}) for item in struct.fields)
@@ -1187,6 +1249,10 @@ class CGenerator:
             return f"nv_string_copy({code})"
         if is_vec(typ):
             return f"nv_vec_{vec_tag(typ)}_copy({code})"
+        if is_map(typ):
+            return f"nv_map_{map_tag(typ)}_copy({code})"
+        if is_set(typ):
+            return f"nv_set_{set_tag(typ)}_copy({code})"
         if is_array(typ):
             return f"nv_arr_{array_tag(typ)}_copy({code})"
         if self.owns_storage(typ):
@@ -1248,6 +1314,10 @@ class CGenerator:
             return f"nv_string_free(&{place});"
         if is_vec(typ):
             return f"nv_vec_{vec_tag(typ)}_free(&{place});"
+        if is_map(typ):
+            return f"nv_map_{map_tag(typ)}_free(&{place});"
+        if is_set(typ):
+            return f"nv_set_{set_tag(typ)}_free(&{place});"
         if is_array(typ):
             return f"nv_arr_{array_tag(typ)}_free(&{place});"
         if self.owns_storage(typ):
@@ -1427,6 +1497,55 @@ class CGenerator:
         note(self.program.functions)
         note(list(self.program.structs) + list(self.program.enums))
         return found
+
+    def map_types(self) -> tuple[list[str], list[str]]:
+        """Every map and every set the checked program mentions, in order."""
+        maps: list[str] = []
+        sets: list[str] = []
+
+        def note(value, depth=0) -> None:
+            if is_map(value):
+                if value not in maps:
+                    maps.append(value)
+                note([map_parts(value)[1]], depth + 1)
+                return
+            if is_set(value):
+                if value not in sets:
+                    sets.append(value)
+                return
+            if depth > 40 or isinstance(value, str):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    note(item, depth + 1)
+                return
+            fields = getattr(value, "__dict__", None)
+            if fields is None:
+                return
+            for item in list(fields.values()):
+                note(item, depth + 1)
+
+        note(self.program.functions)
+        note(list(self.program.structs) + list(self.program.enums))
+        return maps, sets
+
+    def emit_map_declarations(self) -> None:
+        """Names a struct copy or release helper may mention.
+
+        A struct field may hold a map or a set, and the map helpers are defined
+        after the structs — a map needs its key and value types complete — so the
+        prototypes come first, exactly as they do for a vector.
+        """
+        maps, sets = self.map_types()
+        for typ in maps + sets:
+            name = (f"nv_map_{map_tag(typ)}" if is_map(typ) else f"nv_set_{set_tag(typ)}")
+            # The handle is completed where the table is emitted; a prototype
+            # only needs the name.
+            self.line(f"typedef struct {name} {name};")
+            self.line(f"static {name} *{name}_copy({name} *source);")
+            self.line(f"static void {name}_free({name} **slot);")
+        if maps or sets:
+            self.line()
 
     def emit_vectors(self) -> None:
         """One handle type and one set of operations per element type.
@@ -1795,6 +1914,338 @@ class CGenerator:
             self.line()
         self.line()
 
+    def key_hash(self, key: str, expression: str) -> str:
+        """A C expression that hashes one key."""
+        if key == "str":
+            return f"nv_hash_bytes({expression}, (int64_t)strlen({expression}))"
+        if is_string(key):
+            return f"nv_hash_bytes(({expression})->data, ({expression})->len)"
+        return f"nv_hash_i64((int64_t)({expression}))"
+
+    def key_equal(self, key: str, left: str, right: str) -> str:
+        """A C expression that compares two keys by value."""
+        if key == "str":
+            return f"strcmp({left}, {right}) == 0"
+        if is_string(key):
+            return f"nv_string_same({left}, {right})"
+        return f"({left}) == ({right})"
+
+    def emit_maps(self) -> None:
+        """One open-addressed table per map instance and per set instance.
+
+        Linear probing over a power-of-two table, with a tombstone state so that
+        a removal does not break the probe chain of a key that collided with it.
+        The table grows by doubling when three quarters of the slots are taken by
+        live entries and tombstones together, and a rehash moves the keys without
+        copying them.
+
+        An entry that owns storage is copied in on the way in and released when it
+        is overwritten, removed, cleared or freed — the same rule an element of a
+        vector follows, because the reason is the same: the table owns what it
+        holds and nobody else may free it.
+        """
+        maps, sets = self.map_types()
+        if not maps and not sets:
+            return
+        self.line("/* --- maps and sets ------------------------------------------------- */")
+        for typ in maps:
+            self.emit_map(typ)
+        for typ in sets:
+            self.emit_set(typ)
+
+    def emit_slot_helpers(self, prefix: str, tag: str, key: str, carries_value: bool,
+                          value: str | None) -> None:
+        """The probe, the reserve and the copy shared by a map and a set."""
+        name = f"{prefix}_{tag}"
+        slot = f"{prefix}_slot_{tag}"
+        releases = []
+        if self.owns_storage(key):
+            releases.append(self.release_statement(key, "slots[index].key"))
+        if carries_value and value is not None and self.owns_storage(value):
+            releases.append(self.release_statement(value, "slots[index].value"))
+        self.line(f"static void {name}_release_slots({slot} *slots, int64_t cap) {{")
+        self.indent += 1
+        self.line("for (int64_t index = 0; index < cap; index += 1) {")
+        self.indent += 1
+        self.line("if (slots[index].state != 1) continue;")
+        for statement in releases:
+            self.line(statement)
+        self.indent -= 1
+        self.line("}")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static int64_t {name}_find({name} *table, {self.ctype(key)} key, "
+                  f"bool *found) {{")
+        self.indent += 1
+        self.line("uint64_t mask = (uint64_t)table->cap - UINT64_C(1);")
+        self.line(f"uint64_t at = {self.key_hash(key, 'key')} & mask;")
+        self.line("int64_t tombstone = -1;")
+        self.line("for (int64_t step = 0; step < table->cap; step += 1) {")
+        self.indent += 1
+        self.line(f"{slot} *entry = &table->slots[at];")
+        self.line("if (entry->state == 0) {")
+        self.indent += 1
+        self.line("*found = false;")
+        self.line("return tombstone >= 0 ? tombstone : (int64_t)at;")
+        self.indent -= 1
+        self.line("}")
+        self.line("if (entry->state == 2) {")
+        self.indent += 1
+        self.line("if (tombstone < 0) tombstone = (int64_t)at;")
+        self.indent -= 1
+        self.line(f"}} else if ({self.key_equal(key, 'entry->key', 'key')}) {{")
+        self.indent += 1
+        self.line("*found = true;")
+        self.line("return (int64_t)at;")
+        self.indent -= 1
+        self.line("}")
+        self.line("at = (at + UINT64_C(1)) & mask;")
+        self.indent -= 1
+        self.line("}")
+        self.line("*found = false;")
+        self.line("return tombstone;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {name}_reserve({name} *table, int64_t wanted) {{")
+        self.indent += 1
+        self.line("if (table->cap > 0 && nv_mul(nv_add(nv_add(table->len, table->tombs), "
+                  "INT64_C(1)), INT64_C(4)) <= nv_mul(table->cap, INT64_C(3))) return;")
+        self.line("int64_t capacity = table->cap > 0 ? table->cap : INT64_C(8);")
+        self.line("while (nv_mul(nv_add(nv_add(wanted, table->tombs), INT64_C(1)), "
+                  "INT64_C(4)) > nv_mul(capacity, INT64_C(3))) "
+                  "capacity = nv_mul(capacity, INT64_C(2));")
+        self.line(f"{slot} *slots = ({slot} *)nv_array_alloc(capacity, sizeof({slot}));")
+        self.line(f"{slot} *old = table->slots;")
+        self.line("int64_t old_cap = table->cap;")
+        self.line("table->slots = slots;")
+        self.line("table->cap = capacity;")
+        self.line("table->tombs = INT64_C(0);")
+        self.line("for (int64_t index = 0; index < old_cap; index += 1) {")
+        self.indent += 1
+        self.line("if (old[index].state != 1) continue;")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(table, old[index].key, &found);")
+        self.line("table->slots[at] = old[index];")
+        self.indent -= 1
+        self.line("}")
+        self.line("if (old != NULL) { free(old); nv_note_array_free(); }")
+        self.indent -= 1
+        self.line("}")
+        self.line()
+
+    def emit_map(self, typ: str) -> None:
+        key, value = map_parts(typ)
+        tag = map_tag(typ)
+        name = f"nv_map_{tag}"
+        slot = f"nv_map_slot_{tag}"
+        key_c, value_c = self.ctype(key), self.ctype(value)
+        self.line(f"typedef struct {slot} {{ {key_c} key; {value_c} value; "
+                  f"unsigned char state; }} {slot};")
+        self.line(f"struct {name} {{ {slot} *slots; int64_t cap; int64_t len; "
+                  f"int64_t tombs; }};")
+        self.line(f"static {name} *{name}_new(void) {{")
+        self.indent += 1
+        self.line(f"{name} *table = ({name} *)calloc(1, sizeof({name}));")
+        self.line('if (table == NULL) nv_fail("out of memory");')
+        self.line("return table;")
+        self.indent -= 1
+        self.line("}")
+        self.emit_slot_helpers("nv_map", tag, key, True, value)
+        self.line(f"static void {name}_free({name} **slot) {{")
+        self.indent += 1
+        self.line("if (*slot == NULL) return;")
+        self.line(f"{name} *table = *slot;")
+        self.line(f"{name}_release_slots(table->slots, table->cap);")
+        self.line("if (table->slots != NULL) { free(table->slots); nv_note_array_free(); }")
+        self.line("free(table);")
+        self.line("*slot = NULL;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static {name} *{name}_copy({name} *source) {{")
+        self.indent += 1
+        self.line(f"{name} *copy = {name}_new();")
+        self.line("if (source == NULL || source->cap == 0) return copy;")
+        self.line(f"{name}_reserve(copy, source->len);")
+        self.line("for (int64_t index = 0; index < source->cap; index += 1) {")
+        self.indent += 1
+        self.line("if (source->slots[index].state != 1) continue;")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(copy, source->slots[index].key, &found);")
+        self.line(f"copy->slots[at].key = "
+                  f"{self.element_copy(key, 'source->slots[index].key')};")
+        self.line(f"copy->slots[at].value = "
+                  f"{self.element_copy(value, 'source->slots[index].value')};")
+        self.line("copy->slots[at].state = 1;")
+        self.line("copy->len = nv_add(copy->len, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line("return copy;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {name}_set({name} *table, {key_c} key, {value_c} value) {{")
+        self.indent += 1
+        self.line(f"{name}_reserve(table, nv_add(table->len, INT64_C(1)));")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(table, key, &found);")
+        self.line("if (found) {")
+        self.indent += 1
+        if self.owns_storage(value):
+            self.line(self.release_statement(value, "table->slots[at].value"))
+        self.line(f"table->slots[at].value = {self.element_copy(value, 'value')};")
+        self.line("return;")
+        self.indent -= 1
+        self.line("}")
+        self.line("if (table->slots[at].state == 2) "
+                  "table->tombs = nv_sub(table->tombs, INT64_C(1));")
+        self.line(f"table->slots[at].key = {self.element_copy(key, 'key')};")
+        self.line(f"table->slots[at].value = {self.element_copy(value, 'value')};")
+        self.line("table->slots[at].state = 1;")
+        self.line("table->len = nv_add(table->len, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        option = self.enums.get(f"Option({value})")
+        if option is not None:
+            some, none = option.variants[0], option.variants[1]
+            option_c = self.ctype(f"Option({value})")
+            self.line(f"static {option_c} {name}_get({name} *table, {key_c} key) {{")
+            self.indent += 1
+            self.line(f"if (table->cap == 0) return ({option_c}){{ ._tag = {none.tag} }};")
+            self.line("bool found = false;")
+            self.line(f"int64_t at = {name}_find(table, key, &found);")
+            self.line(f"if (!found) return ({option_c}){{ ._tag = {none.tag} }};")
+            self.line(f"return ({option_c}){{ ._tag = {some.tag}, ._payload = {{ "
+                      f"._v_{some.name} = {{ ._f0 = "
+                      f"{self.element_copy(value, 'table->slots[at].value')} }} }} }};")
+            self.indent -= 1
+            self.line("}")
+        self.line(f"static bool {name}_contains({name} *table, {key_c} key) {{")
+        self.indent += 1
+        self.line("if (table->cap == 0) return false;")
+        self.line("bool found = false;")
+        self.line(f"(void){name}_find(table, key, &found);")
+        self.line("return found;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static bool {name}_remove({name} *table, {key_c} key) {{")
+        self.indent += 1
+        self.line("if (table->cap == 0) return false;")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(table, key, &found);")
+        self.line("if (!found) return false;")
+        if self.owns_storage(key):
+            self.line(self.release_statement(key, "table->slots[at].key"))
+        if self.owns_storage(value):
+            self.line(self.release_statement(value, "table->slots[at].value"))
+        self.line("table->slots[at].state = 2;")
+        self.line("table->len = nv_sub(table->len, INT64_C(1));")
+        self.line("table->tombs = nv_add(table->tombs, INT64_C(1));")
+        self.line("return true;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {name}_clear({name} *table) {{")
+        self.indent += 1
+        self.line(f"{name}_release_slots(table->slots, table->cap);")
+        self.line("for (int64_t index = 0; index < table->cap; index += 1) "
+                  "table->slots[index].state = 0;")
+        self.line("table->len = INT64_C(0);")
+        self.line("table->tombs = INT64_C(0);")
+        self.indent -= 1
+        self.line("}")
+        self.line()
+
+    def emit_set(self, typ: str) -> None:
+        element = set_element(typ)
+        tag = set_tag(typ)
+        name = f"nv_set_{tag}"
+        slot = f"nv_set_slot_{tag}"
+        element_c = self.ctype(element)
+        self.line(f"typedef struct {slot} {{ {element_c} key; "
+                  f"unsigned char state; }} {slot};")
+        self.line(f"struct {name} {{ {slot} *slots; int64_t cap; int64_t len; "
+                  f"int64_t tombs; }};")
+        self.line(f"static {name} *{name}_new(void) {{")
+        self.indent += 1
+        self.line(f"{name} *table = ({name} *)calloc(1, sizeof({name}));")
+        self.line('if (table == NULL) nv_fail("out of memory");')
+        self.line("return table;")
+        self.indent -= 1
+        self.line("}")
+        self.emit_slot_helpers("nv_set", tag, element, False, None)
+        self.line(f"static void {name}_free({name} **slot) {{")
+        self.indent += 1
+        self.line("if (*slot == NULL) return;")
+        self.line(f"{name} *table = *slot;")
+        self.line(f"{name}_release_slots(table->slots, table->cap);")
+        self.line("if (table->slots != NULL) { free(table->slots); nv_note_array_free(); }")
+        self.line("free(table);")
+        self.line("*slot = NULL;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static {name} *{name}_copy({name} *source) {{")
+        self.indent += 1
+        self.line(f"{name} *copy = {name}_new();")
+        self.line("if (source == NULL || source->cap == 0) return copy;")
+        self.line(f"{name}_reserve(copy, source->len);")
+        self.line("for (int64_t index = 0; index < source->cap; index += 1) {")
+        self.indent += 1
+        self.line("if (source->slots[index].state != 1) continue;")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(copy, source->slots[index].key, &found);")
+        self.line(f"copy->slots[at].key = "
+                  f"{self.element_copy(element, 'source->slots[index].key')};")
+        self.line("copy->slots[at].state = 1;")
+        self.line("copy->len = nv_add(copy->len, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line("return copy;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {name}_add({name} *table, {element_c} key) {{")
+        self.indent += 1
+        self.line(f"{name}_reserve(table, nv_add(table->len, INT64_C(1)));")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(table, key, &found);")
+        self.line("if (found) return;")
+        self.line("if (table->slots[at].state == 2) "
+                  "table->tombs = nv_sub(table->tombs, INT64_C(1));")
+        self.line(f"table->slots[at].key = {self.element_copy(element, 'key')};")
+        self.line("table->slots[at].state = 1;")
+        self.line("table->len = nv_add(table->len, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static bool {name}_contains({name} *table, {element_c} key) {{")
+        self.indent += 1
+        self.line("if (table->cap == 0) return false;")
+        self.line("bool found = false;")
+        self.line(f"(void){name}_find(table, key, &found);")
+        self.line("return found;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static bool {name}_remove({name} *table, {element_c} key) {{")
+        self.indent += 1
+        self.line("if (table->cap == 0) return false;")
+        self.line("bool found = false;")
+        self.line(f"int64_t at = {name}_find(table, key, &found);")
+        self.line("if (!found) return false;")
+        if self.owns_storage(element):
+            self.line(self.release_statement(element, "table->slots[at].key"))
+        self.line("table->slots[at].state = 2;")
+        self.line("table->len = nv_sub(table->len, INT64_C(1));")
+        self.line("table->tombs = nv_add(table->tombs, INT64_C(1));")
+        self.line("return true;")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"static void {name}_clear({name} *table) {{")
+        self.indent += 1
+        self.line(f"{name}_release_slots(table->slots, table->cap);")
+        self.line("for (int64_t index = 0; index < table->cap; index += 1) "
+                  "table->slots[index].state = 0;")
+        self.line("table->len = INT64_C(0);")
+        self.line("table->tombs = INT64_C(0);")
+        self.indent -= 1
+        self.line("}")
+        self.line()
+
     def emit_value_helpers(self) -> None:
         """A copy and a release for every type that owns array storage.
 
@@ -1894,11 +2345,13 @@ class CGenerator:
         self.emit_function_types()
         self.emit_array_types()
         self.emit_vector_declarations()
+        self.emit_map_declarations()
         self.emit_structs()
         self.emit_element_declarations()
         self.emit_arrays()
         self.emit_value_helpers()
         self.emit_vectors()
+        self.emit_maps()
         # A template function has no C type until a call fixes its parameters, so
         # only the instantiations the checker built are emitted.
         concrete = [function for function in self.program.functions if not function.type_params]
@@ -1982,7 +2435,7 @@ class CGenerator:
         if isinstance(value, Index):
             return True
         return (isinstance(value, Call) and value.module is None
-                and value.name in ("vec_get", "vec_pop"))
+                and value.name in ("vec_get", "vec_pop", "map_get"))
 
     def adopt(self, place: str) -> None:
         """A copy the read already made belongs to the binding, not to the statement.
@@ -2110,12 +2563,12 @@ class CGenerator:
                 typ = statement.symbol.typ
                 borrowed = statement.symbol.borrowed
                 owns_array = is_array(typ) and not borrowed
-                owns_vec = is_vec(typ)
+                owns_vec = is_vec(typ) or is_map(typ) or is_set(typ)
                 owns_text = is_string(typ)
                 # A struct or an enum that holds an array owns that array too, so
                 # the binding is an owner and gets its own copy.
                 owns_value = (self.owns_storage(typ) and not is_array(typ)
-                              and not is_vec(typ) and not is_string(typ) and not borrowed)
+                              and not is_owning_container(typ) and not borrowed)
                 if owns_array:
                     value = self.new_array(statement.value)
                 elif owns_value:
@@ -2146,7 +2599,7 @@ class CGenerator:
             elif isinstance(statement, Assign):
                 typ = statement.symbol.typ
                 name = statement.symbol.cname
-                if is_vec(typ) or is_string(typ):
+                if is_owning_container(typ):
                     # Move the new buffer into the binding, then release what it
                     # held. The order matters: the initializer may not read the
                     # binding it replaces, and a released buffer must never be
@@ -2208,7 +2661,7 @@ class CGenerator:
                     # The result is materialised before the arrays are released,
                     # so no released storage can appear in the returned value.
                     typ = self.current_return_type
-                    if is_vec(typ) or is_string(typ):
+                    if is_owning_container(typ):
                         # A move out of the frame: the value is materialised
                         # first, then the local that held it is emptied, so the
                         # release below frees nothing the caller now owns.
@@ -2322,6 +2775,35 @@ class CGenerator:
                     self.line("}")
                 else:
                     self.labelled_range_loop(statement, symbol, high_name)
+            elif is_map(iterable.typ) or is_set(iterable.typ):
+                # A table is walked slot by slot, skipping the empty and the
+                # tombstoned ones: the order is the table's own, which is
+                # deterministic for the same sequence of operations and is not
+                # sorted. The loop variable is a copy when the key owns storage,
+                # released at the end of the turn like any other element read.
+                source = self.expression(iterable)
+                if is_map(iterable.typ):
+                    prefix = f"nv_map_{map_tag(iterable.typ)}"
+                else:
+                    prefix = f"nv_set_{set_tag(iterable.typ)}"
+                cap_name = self.temp("i64", f"({source})->cap")
+                index_name = self.temp("i64", "INT64_C(0)")
+                if label is None:
+                    self.line(f"for (; {index_name} < {cap_name}; "
+                              f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
+                    self.indent += 1
+                    self.line(f"if ({source}->slots[{index_name}].state != 1) continue;")
+                    key_code = f"{source}->slots[{index_name}].key"
+                    self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
+                              f"{self.loop_element(symbol.typ, key_code)};")
+                    owns = ([(symbol.cname, symbol.typ)]
+                            if self.owns_storage(symbol.typ) else ())
+                    self.loop_body(statement.body, owns=owns)
+                    self.indent -= 1
+                    self.line("}")
+                else:
+                    self.labelled_table_loop(statement, symbol, source, cap_name,
+                                             index_name)
             elif is_vec(iterable.typ):
                 # A vector is already a handle, so the loop reads it directly and
                 # sees every element that existed when the loop began.
@@ -2396,6 +2878,33 @@ class CGenerator:
         self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
                   f"{self.loop_element(symbol.typ, f'nv_arr_{tag}_get({source}, {index_name})')};")
         owns = [(symbol.cname, symbol.typ)] if self.owns_storage(symbol.typ) else ()
+        record = self.loop_body(statement.body, label=statement.label, owns=owns)
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['continue']}: ;")
+        self.line(f"{index_name} = nv_add({index_name}, INT64_C(1));")
+        self.indent -= 1
+        self.line("}")
+        self.line(f"{record['break']}: ;")
+
+    def labelled_table_loop(self, statement: For, symbol, source: str,
+                            cap_name: str, index_name: str) -> None:
+        """A map or set loop written with a label; the step is a statement."""
+        self.line("for (;;) {")
+        self.indent += 1
+        self.line(f"if (!({index_name} < {cap_name})) break;")
+        self.line("if (" + source + "->slots[" + index_name + "].state != 1) {")
+        self.indent += 1
+        self.line(f"{index_name} = nv_add({index_name}, INT64_C(1));")
+        self.line("continue;")
+        self.indent -= 1
+        self.line("}")
+        self.line("{")
+        self.indent += 1
+        key_code = f"{source}->slots[{index_name}].key"
+        self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
+                  f"{self.loop_element(symbol.typ, key_code)};")
+        owns = ([(symbol.cname, symbol.typ)] if self.owns_storage(symbol.typ) else ())
         record = self.loop_body(statement.body, label=statement.label, owns=owns)
         self.indent -= 1
         self.line("}")
@@ -2497,6 +3006,47 @@ class CGenerator:
             return None
         assert name == "vec_pop", f"unknown vector builtin {name!r}"
         return self.temp(expr.typ, f"nv_vec_{tag}_pop({vector})")
+
+    def map_call(self, expr: Call) -> str | None:
+        """The map and set builtins, one C helper each.
+
+        `map_get` hands back an `Option(V)` that owns whatever the value owns, so
+        it is a temporary of the statement that asked for it — the same rule an
+        element read follows, with the same reason.
+        """
+        name = expr.name
+        if name == "map_new":
+            return f"nv_map_{map_tag(expr.typ)}_new()"
+        if name == "set_new":
+            return f"nv_set_{set_tag(expr.typ)}_new()"
+        container = self.expression(expr.args[0])
+        typ = expr.args[0].typ
+        is_map_call = name.startswith("map_")
+        prefix = f"nv_map_{map_tag(typ)}" if is_map_call else f"nv_set_{set_tag(typ)}"
+        if name in ("map_len", "set_len"):
+            return self.temp("i64", f"({container})->len")
+        if name in ("map_clear", "set_clear"):
+            self.line(f"{prefix}_clear({container});")
+            return None
+        key = self.expression(expr.args[1])
+        if name in ("map_contains", "set_contains"):
+            return self.temp("bool", f"{prefix}_contains({container}, {key})")
+        if name in ("map_remove", "set_remove"):
+            return self.temp("bool", f"{prefix}_remove({container}, {key})")
+        if name == "map_get":
+            code = f"{prefix}_get({container}, {key})"
+            if self.owns_storage(expr.typ):
+                place = self.temp(expr.typ, code)
+                self.temporaries.append((place, expr.typ))
+                return place
+            return self.temp(expr.typ, code)
+        if name == "set_add":
+            self.line(f"{prefix}_add({container}, {key});")
+            return None
+        assert name == "map_set", f"unknown map builtin {name!r}"
+        value = self.expression(expr.args[2])
+        self.line(f"{prefix}_set({container}, {key}, {value});")
+        return None
 
     def propagate_let(self, statement: Let) -> None:
         """`let x = call()?`: test the failure tag, return it, bind the payload.
@@ -2678,6 +3228,9 @@ class CGenerator:
             tag = array_tag(expr.array.typ)
             return self.element_read(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
         if isinstance(expr, Call):
+            if expr.module is None and (expr.name in ("map_new", "set_new")
+                                        or expr.name.startswith(("map_", "set_"))):
+                return self.map_call(expr)
             if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_CALLS):
                 return self.vector_call(expr)
             if expr.module is None and (expr.name == "string_new" or expr.name in TEXT_CALLS):
@@ -2723,7 +3276,7 @@ class CGenerator:
                 return None
             name = self.temp(expr.typ, call)
             if (self.owns_storage(expr.typ) and not is_array(expr.typ)
-                    and not is_vec(expr.typ) and not is_string(expr.typ)):
+                    and not is_owning_container(expr.typ)):
                 # A returned value owns the storage it carries, and nobody else
                 # holds it: the statement is its owner until it ends. A binding
                 # that keeps it copies it (`owned_value`), so this temporary is

@@ -12,7 +12,8 @@ enums as values, arrays of every value), N11b (owning fields, with the copy and
 release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, the `str_*` text functions
 and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `Vec` or a `String`
 as a field, a payload or a type argument) and N11g (an element that owns storage)
-are delivered, and N12–N18 are not started.** The
+are delivered; N12 has begun with N12a (`HashMap`/`HashSet`), and N13–N18 are not
+started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -48,8 +49,8 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 9 019 lines,
-13 modules and 282 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 9 850 lines,
+13 modules and 311 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
 last delivery (N11g) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
@@ -310,6 +311,49 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12a (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A map and a set exist, and keep a copy of what they store | `tests/test_tables.py`: `TableFrontendTests.test_a_stored_value_is_copied_in_and_released`, `test_a_struct_value_is_copied_with_its_own_helpers`, `TableRuntimeTests.test_a_stored_value_is_a_copy` | `map_set` generates `nv_string_copy(` and `nv_string_free(` in the same function, `_free` walks the live slots, and a struct value goes through `nv_copy_nv_struct_Bag` / `nv_release_nv_struct_Bag`; growing the source `String` after `map_set` leaves the stored copy at `v` while the source becomes `v!`, and sixteen overwrites of one key print `15` and leak nothing |
+| Growth, removal and rehashing keep every entry | `TableRuntimeTests.test_entries_survive_growth_and_removal` | 200 inserts, 100 removals and 100 re-inserts print `200`, `100`, `100`, `200` and `42`; the live-array counter is `0` |
+| The hash is deterministic, so iteration is too | `TableRuntimeTests.test_iteration_visits_every_entry_once` | 64 set elements are visited exactly once (count `64`, sum `2016`) and 16 map keys sum to `120`; both numbers follow from FNV-1a and the murmur3 finaliser, which are fixed in the generated C, so two runs agree |
+| A key is a hashed value, and a stored value is a value | `test_a_key_must_be_a_value_with_a_hash`, `test_a_string_key_is_copied`, `test_a_collection_is_not_a_value_or_an_element` | `HashMap(f64, i64)`, `HashSet(f64)` and `HashMap(Point, i64)` are `E0447`; `Vec(HashMap(i64, i64))`, `HashMap(str, [i64])`, `HashMap(str, HashMap(i64, i64))` and `HashMap(str, Vec(i64))` are `E0206` — the last one is a shape error only for an *array*, so `Vec` stays storable; a `String` key is copied, so mutating it after `map_set` makes `map_contains` `false` while the untouched spelling finds `7` |
+| The types are written once | `test_the_types_must_be_written_out` | `let m = map_new()` and `let s = set_new()` are `E0448` with the annotation shown in the hint |
+| `map_get` is total | `test_map_get_is_total_and_returns_an_option`, `TableRuntimeTests.test_a_stored_value_is_a_copy` | a missing key is `Option(V)::None` and prints `-1`; a present one is a copy inside `Some` |
+| A mutating call needs a writable target | `test_a_mutating_call_needs_a_writable_target` (three subtests) | `map_set`, `map_clear` and `set_add` through a plain parameter are `E0444`, naming the map or set type; `fixtures/negative/map_mutated_through_a_borrow.nv` records the same for the corpus |
+| A table is moved, never copied | `test_a_map_is_moved_not_copied` | `let b: HashMap(i64, i64) = a` then reading `a` is `E0445`; returning a `HashMap` parameter is `E0446` |
+| A table may be a field, and a returned table keeps its text | `TableRuntimeTests.test_a_struct_field_may_hold_a_map`, `test_a_returned_map_keeps_its_keys` | `struct Registry { counts: HashMap(str, i64), tags: HashSet(i64) }` copies both through the struct's own helpers (four prints of `1`, live arrays `0`); a map returned from `build(32)` still answers `map_contains(m, "17")` and its keys sum to `54` bytes, which is the arena rule extended to keys |
+| Memory safety of the table | `TableRuntimeTests.test_tables_under_the_sanitizers` | 200 entries holding `Slot::Full(Bag)`, iterated, half-removed and cleared: AddressSanitizer and UndefinedBehaviorSanitizer clean, live-array counter `0`, and the printed figures `200`, `200`, `100`, `100`, `0` |
+| The specification and the guide moved with the code | `LANGUAGE.md` (the tables section), `guides/nava-1.md` (the tables section), `guides/manifest.json` | the key set, the total `map_get`, the copy rules, `E0447`, `E0448` and the iteration-order caveat are normative; the specification example prints `2`, `3`, `false`, `2`, `1`, `true`, the guide example prints `2`, `3`, `false`, `2`, `true`, `1`, and the guide is re-pinned at 27 374 bytes, 768 lines, sha256 `ab902802…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | prompt 91 023 tokens (`cl100k_base`) and 91 430 (`o200k_base`), summed over the eleven tasks, of which the guide is 8 217 / 8 254 tokens once (27 374 bytes, 768 lines) |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 9 850 lines, 13 modules, 311 functions under `nava_lang/` after this increment (9 019 / 13 / 282 at N11g) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py` | registry `OK: 660 registered tests, 11 tasks with 76 cases, 188 spec fixtures, 145 diagnostic codes`; suite **730 tests OK** (1 259 subtests); release checks OK |
+
+Negative controls: six new fixtures carry the refusals into the corpus —
+`map_without_a_type.nv` and `set_without_a_type.nv` (`E0448`),
+`map_key_not_hashable.nv` and `set_element_not_hashable.nv` (`E0447`),
+`map_mutated_through_a_borrow.nv` (`E0444`) and `map_in_a_vector.nv` (`E0206`,
+accepted by the grammar for the reason recorded in
+`tests/test_grammar.py:CORPUS_OVERRIDES`). The behavioural controls that carry the
+memory claim are the sanitizer run and the live-array counter: a shallow copy of a
+key or a value would show up as a double free, a missing release as a leak, and an
+aliased value as a wrong number in `test_a_stored_value_is_a_copy`. Three defects
+were found by those controls while the increment was being built and are recorded
+here rather than in prose: the probe function was emitted after the reservation
+that calls it (an implicit declaration), the handle `typedef` was completed in the
+prototype block rather than at the definition, and `emit_maps` returned when the
+program used a map but no set — each is now covered by the frontend tests that
+assert the emitted shape.
+
+Deliberately not done in N12a, and why: **contracts, `nava doc` and the `test`
+module** — the tasks that give N12 its name — because they need the module
+mechanism of the whole library rather than one container, and a contract for
+`map_set` is worth writing once `fmt` and `io` exist to write it beside. A
+**collection inside a collection** stays `E0206`: a nested table would need its own
+storage representation, and the audit's row is about the compiler's own dicts, not
+about Nava holding one.
 
 #### Delivery record N11g (2026-10-29)
 
@@ -781,6 +825,17 @@ case that cannot be triggered fails the guard.
 **Deliverable:** the library, its contracts, generated documentation and the
 self-testing facility.
 
+| Increment | Scope | State |
+|---|---|---|
+| N12a | **Tables**: `HashMap(K, V)` and `HashSet(T)` — keys that hash, a total `map_get -> Option(V)`, open addressing with tombstones, copies in and out under the element rule, and the move rules a container inherits | **Delivered** (record below) |
+| N12b–N12x | contracts, `nava doc`, the `test` module, determinism across backends and the remaining `fmt`/`io`/`fs`/`args`/`collections`/`text`/`math`/`sort`/`time` modules | Not started |
+
+The two collections come first because every later module in the list needs one —
+`fmt` a table of formats, `args` a map of flags — and because N11 moved them here
+with the reason recorded in its section: the audit's dict and set rows are
+compiler bookkeeping, and a table belongs with the library rather than with the
+memory model.
+
 ---
 
 ### Phase N13 — Projects, packages and reproducibility
@@ -1011,7 +1066,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 9 019 Python lines and 282 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 9 850 Python lines and 311 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

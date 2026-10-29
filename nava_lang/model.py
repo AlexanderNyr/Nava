@@ -191,6 +191,11 @@ class Range(Expr):
 
 FUNCTION_TYPE = "fn("
 VECTOR_TYPE = "Vec("
+#: `HashMap(K, V)` and `HashSet(T)`: builtin containers with one owner, like a
+#: vector. The key type decides the hash, and the compiler emits one instance per
+#: pair of types the program writes out.
+MAP_TYPE = "HashMap("
+SET_TYPE = "HashSet("
 #: The growing text builder. `str` is immutable and lives for the run; `String`
 #: is the owner of bytes that a program assembles a piece at a time.
 STRING_TYPE = "String"
@@ -209,6 +214,45 @@ def is_string(typ: object) -> bool:
 def vec_element(typ: str) -> str:
     """`Vec(Point)` -> `Point`."""
     return typ[len(VECTOR_TYPE):-1]
+
+
+def is_map(typ: object) -> bool:
+    """`HashMap(i64, String)` is a table of values, keyed and owned."""
+    return isinstance(typ, str) and typ.startswith(MAP_TYPE) and typ.endswith(")")
+
+
+def is_set(typ: object) -> bool:
+    """`HashSet(str)` is a table of keys with no values."""
+    return isinstance(typ, str) and typ.startswith(SET_TYPE) and typ.endswith(")")
+
+
+def map_parts(typ: str) -> tuple[str, str]:
+    """`HashMap(i64, String)` -> (`i64`, `String`), split at the top-level comma."""
+    inner = typ[len(MAP_TYPE):-1]
+    depth = 0
+    for index, character in enumerate(inner):
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+        elif character == "," and depth == 0:
+            return inner[:index].strip(), inner[index + 1:].strip()
+    raise ValueError(f"not a map type: {typ!r}")
+
+
+def set_element(typ: str) -> str:
+    """`HashSet(str)` -> `str`."""
+    return typ[len(SET_TYPE):-1]
+
+
+def is_owning_container(typ: object) -> bool:
+    """Does this type own storage that a binding has to hand on by moving?
+
+    A `Vec(T)`, a `String`, a `HashMap(K, V)` and a `HashSet(T)` each own one
+    buffer, so a binding of one of them is its owner: it moves, and it is
+    released, exactly like an array.
+    """
+    return is_vec(typ) or is_string(typ) or is_map(typ) or is_set(typ)
 
 
 def is_function_type(typ: object) -> bool:

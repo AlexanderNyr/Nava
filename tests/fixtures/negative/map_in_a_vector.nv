@@ -1,0 +1,8 @@
+edition 2;
+
+fn main() {
+    let table: HashMap(i64, i64) = map_new()
+    let tables: Vec(HashMap(i64, i64)) = vec_new()
+    vec_push(tables, table)
+    print(vec_len(tables))
+}

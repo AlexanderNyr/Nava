@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let weights: HashSet(f64) = set_new()
+    print(set_len(weights))
+}

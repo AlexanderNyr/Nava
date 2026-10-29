@@ -167,6 +167,8 @@ CODES: dict[str, tuple[str, str]] = {
     "E0444": (Severity.ERROR, "a vector argument must be a writable local"),
     "E0445": (Severity.ERROR, "a moved value cannot be used again"),
     "E0446": (Severity.ERROR, "only an owning local can be moved"),
+    "E0447": (Severity.ERROR, "a map key or set element cannot be hashed"),
+    "E0448": (Severity.ERROR, "a map or a set needs its types written out"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

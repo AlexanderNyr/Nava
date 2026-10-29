@@ -92,6 +92,10 @@ GRAMMAR_ACCEPTS = frozenset(
      | {"E0445", "E0446"}
      # A jump that names no enclosing loop, and a jump out of a deferred block.
      | {"E0430", "E0431", "E0433"}
+     # Tables: `HashMap(Point, i64)` is a type instantiation and `let m =
+     # map_new()` is a let with an initializer, so what a key may be and whether
+     # the type was written out are questions for the checker.
+     | {"E0447", "E0448"}
      # Generics: a duplicate parameter, a template used as a type, an argument
      # that cannot be inferred and a second argument list are names and arities.
      # A grammar with no symbol table cannot tell `identity(i64)(7)` from
@@ -109,6 +113,11 @@ CORPUS_OVERRIDES = {
     "ctl_for_iterable_type.nv":
         (True, "iterating a non-array is E0350 from the type checker, not from the "
                "shape of the `for` statement"),
+    "map_in_a_vector.nv":
+        (True, "the grammar writes `Vec(T)` with a type name inside the brackets, so "
+               "`Vec(HashMap(i64, i64))` is a shape it accepts; refusing a collection "
+               "as an element is the checker's E0206, exactly as it is for a "
+               "declared struct whose field holds one"),
 }
 
 

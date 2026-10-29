@@ -168,6 +168,10 @@ class Parser:
         if self.at("(") and self.edition >= STRUCT_EDITION:
             if token.value == "Vec":
                 return self.vector_type(token)
+            if token.value == "HashMap":
+                return self.map_type(token)
+            if token.value == "HashSet":
+                return self.set_type(token)
             return self.generic_type(token)
         if self.edition >= STRUCT_EDITION and (token.value in self.struct_names
                                                or token.value in self.enum_names):
@@ -192,6 +196,26 @@ class Parser:
         element = self.parse_type()
         self.expect(")", "')' after the element type")
         return f"Vec({element})"
+
+    def map_type(self, name: Token) -> str:
+        """`HashMap(i64, String)`: a key type and a value type, in that order.
+
+        The two are written out because a map has no other place to learn them —
+        `map_new()` with no annotation is refused, as `vec_new()` is.
+        """
+        self.expect("(", "'(' after HashMap")
+        key = self.parse_type()
+        self.expect(",", "',' between the key type and the value type")
+        value = self.parse_type()
+        self.expect(")", "')' after the value type")
+        return f"HashMap({key}, {value})"
+
+    def set_type(self, name: Token) -> str:
+        """`HashSet(str)`: one element type, which is also the key type."""
+        self.expect("(", "'(' after HashSet")
+        element = self.parse_type()
+        self.expect(")", "')' after the element type")
+        return f"HashSet({element})"
 
     def function_type(self) -> str:
         """`fn(i64) -> i64`, `fn() -> void`: the signature of a function value."""
