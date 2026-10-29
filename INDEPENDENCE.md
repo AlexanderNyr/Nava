@@ -52,7 +52,7 @@ moment the language has to express a compiler.
 The requirement list below is not a wish list: it is an audit of the 10 631 lines,
 14 modules and 329 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12h) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12i) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,49 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12i (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| The clock is the module, and the module is the clock | `nava_lang/stdlib/time.nv`, `docs/stdlib/time.md` (203 lines, 5 398 bytes), `tests/test_contracts.py` | seven public functions, each with a summary, `pre:`, `post:`, `cost:`, `pure:` and examples; `contracts.check_program` returns `[]` and `nava doc` renders the reference from the blocks |
+| **The question the phase asks of pure functions, answered where it is hardest** | the `pure:` lines, `GuardTests.test_the_module_marks_the_readings_impure_and_the_arithmetic_pure` | the three conversions are `pure: yes` and the four readings are `pure: no`. The reason is not taste: `pure: yes` promises that the same call gives the same answer, and a clock cannot make that promise — the promise is about the answer, not about whether the function changes anything |
+| The claim is checked, not trusted | `GuardTests.test_a_pure_claim_about_the_clock_is_refused`, `test_the_clock_builtins_are_not_on_the_pure_list` | a module claiming `pure: yes` over `clock_millis()` is refused with `sample::stamp: claims `pure: yes` but calls `clock_millis`, which has an effect`; the three clock builtins are absent from `contracts.PURE_BUILTINS`, which is what makes the refusal mechanical. This is the negative control the phase asks for, in the module where the temptation is strongest |
+| The deterministic half stays deterministic | `ArithmeticTests.test_the_conversions_are_the_same_in_two_runs`, `test_a_second_is_rebuilt_from_its_two_parts` | one program printing the five conversions is built twice and run twice, and the two outputs are identical (`3000 3 761 -3 -761`); the remainder rebuilds the value for a negative input (`-1234567`), so truncation towards zero is stated and tested rather than assumed. This is the "identical results across repeated runs" half of the determinism gate; the across-backends half still needs N14 |
+| Two clocks, and the difference matters | `WallClockTests`, `MonotonicClockTests` | the wall clock is compared against the harness's own `time.time()` (a Nava clock off by a second fails), two runs of one binary 20 ms apart see different milliseconds (a constant would not), the monotonic reading advances while the program spins until `elapsed_millis` reaches 30, and a monotonic reading is never below an earlier one |
+| A reading is not a constant, and a subtraction is not a clamp | `WallClockTests.test_two_runs_of_the_same_binary_see_different_times`, `MonotonicClockTests.test_a_mark_in_the_future_gives_a_negative_elapsed_time` | the same binary answers a larger millisecond count 20 ms later; `elapsed_millis(mark + 5000)` is negative, because hiding a fabricated mark behind a clamp would turn a mistake into a measurement of zero |
+| The arithmetic is checked, not wrapped | `ArithmeticTests.test_multiplication_that_does_not_fit_stops_the_program`, the module's documented `error:` line | `seconds_to_millis(i64_max)` stops the program with `i64 overflow in *` and no later line runs; the guard runs the documented failure as well as the test |
+| A wrapper cannot be named like the builtin it wraps | `GuardTests.test_a_wrapper_cannot_be_named_like_the_builtin_it_wraps`, `test_the_module_reaches_the_clock_under_its_own_names` | a module declaring `pub fn clock_seconds` is `E0301 'clock_seconds' is a reserved builtin`, so the primitives are `clock_seconds`, `clock_millis` and `clock_monotonic_millis` and the words a program says are `time::now_seconds()`, `time::now_millis()` and `time::monotonic_millis()`. The builtin table was renamed `SIGNATURE_BUILTINS`: it began as the filesystem's and has held the command line and the clock since |
+| Every public name is tested in the language itself | `tests/fixtures/positive/self_test.nv`, `tests/test_self_test.py` | seven new bodies, one per public name, so this module adds **no** entry to `TESTED_ELSEWHERE`. Each asserts something true of every correct clock — later than 2020, monotonic readings never decrease, a mark in the future gives a negative elapsed time — and the run is 48 `ok` lines and `standard library: ok`, 1 048 bytes, recorded as the positive case |
+| The specification, the guide and the records moved with the code | `LANGUAGE.md` (`## The clock`, `### time`, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the two clocks, the `pure:` rule, the `E0301` naming reason and the absence of sleep, time zone and calendar are normative; the guide names all three builtins and shows a measurement, and is re-pinned at 32 829 bytes, 32 737 characters, 942 lines, sha256 `d37a13ef…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base`, with `tiktoken` installed | the prompt is 108 832 tokens (`cl100k_base`) and 109 250 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 108 196 / 108 614; both records carry `"status": "measured"` |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 10 682 lines, 14 modules, 329 functions — 51 lines more than N12h, in `checker.py` (the three signatures and the renamed table) and `cgen.py` (three runtime functions and `#include <time.h>`) |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, and the `required` lane of `.github/workflows/ci.yml` replayed on a clone of the patch | registry `OK: 774 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **844 tests OK** (1 439 subtests); ten packaged modules in the contract list; release checks OK; the guide digest verifies; the lane passes end to end — and on this host the namespace backend is available, so the isolation gate ran the jail itself (`registry.py --require-namespaces` and the sandbox tests) rather than the documented refusal |
+
+Negative controls: the `pure: yes` claim over a clock (refused by the guard, which
+is the phase's own negative control applied to the one module that makes it
+tempting), the `E0301` clash that explains the builtin names, the checked
+multiplication, and the unclamped subtraction.
+
+The decision this increment had to make, in one paragraph: **a clock reading is an
+effect, so every function that reads one is `pure: no`, and the module's pure half
+is the arithmetic.** The alternative — declaring the readings pure because they
+change nothing — would have made `pure: yes` mean "no writes" rather than "the
+same call gives the same answer", which is the meaning the rest of the library is
+written against and the one the determinism gate can test. The two consequences
+follow from it: `elapsed_millis` is `pure: no` because it subtracts two readings,
+and the conversions are `pure: yes` because they are not readings at all.
+
+Deliberately not done in N12i: a **sleep**, a **time zone**, a **calendar** and a
+**`--allow-clock` grant**. A sleep is an effect with no result to contract for, and
+a program that must wait should be told to wait by whatever runs it; formatting a
+date is `fmt`'s work on top of a number, and a calendar is a table of rules that
+belongs to a library with its own tests rather than to a clock; and the clock takes
+no grant because a grant protects host state and the wall clock is not host state —
+it is the same for every process on the machine and reveals nothing about the
+files this program may read. If a later increment admits ambient readings (an
+environment module, say) the grant question is worth asking again, and it will be
+asked there rather than answered here.
 
 #### Delivery record N12h (2026-10-29)
 
@@ -1064,7 +1107,8 @@ self-testing facility.
 | N12f | **`fs`**: six pure path functions (`basename`, `dirname`, `path_join`, `extension`, `stem`, `is_absolute`) and three filesystem questions (`exists`, `size`, `entries`) over three new builtins — `path_exists`, `file_size`, `list_dir` — on the read-grant model, with the listing ordered by bytes | **Delivered** (record below) |
 | N12g | **`args`**: the words a program was started with — the builtins `arg_count`/`arg_at`, the `--` fence on the command line, six module functions of which two are pure over an array of words and four read the real command line | **Delivered** (record below) |
 | N12h | **`collections`**: the layer above one element at a time — four read-only questions (`sum_of`, `count_of`, `contains_all`, `has_any`) and three functions that fill a container the caller passes in (`count_distinct`, `keys_of`, `elements_of`) | **Delivered** (record below) |
-| N12i–N12x | `time`, the last module of the phase, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12i | **`time`**: the clock, and what `pure:` means when the answer moves — three wall-clock and monotonic readings (`now_seconds`, `now_millis`, `monotonic_millis`), `elapsed_millis`, and three pure conversions, over three builtins named `clock_*` so that the library keeps the words a program says | **Delivered** (record below) |
+| N12j–N12x | determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here

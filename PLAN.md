@@ -1,6 +1,6 @@
 # Nava Development Plan
 
-## Status: N0–N10 DELIVERED (N10a–N10g); N11 DELIVERED (N11a–N11g); N12 UNDER WAY (N12a–N12h); N13–N18 SPECIFIED, NOT STARTED
+## Status: N0–N10 DELIVERED (N10a–N10g); N11 DELIVERED (N11a–N11g); N12 UNDER WAY (N12a–N12i); N13–N18 SPECIFIED, NOT STARTED
 
 N3 has exploratory model results from three runs (a local 135M model and two hosted ones); its empirical run is open. N10–N18 (§4A) are the independence plan: a language that needs neither Python nor a C toolchain to build and run its own programs.
 
@@ -1074,7 +1074,7 @@ and the risks. `PLAN.md` states the dependency order and the non-goal reversal;
 |---|---|---|
 | N10 | Structures, sum types, errors, generics, function values | delivered in seven increments — N10a (editions and structs), N10b (enums and `match`), N10c (`Option`/`Result`, `?`), N10d (arrays of structs, slices), N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g (function values and `fn(T) -> U`); the delivery records are in `INDEPENDENCE.md` |
 | N11 | Memory, collections, strings | delivered — N11a (strings and enums as values, arrays of every value), N11b (owning fields), N11c (`Vec(T)`, the growing vector) and N11d (`String`, the `str_*` text functions and the arena), N11e (moves, and the arena regions they make sound), N11f (`Vec`/`String` as a field, a payload and a type argument) and N11g (an element that owns storage); `HashMap`/`HashSet` moved to N12, where the audit's dict rows are closed |
-| N12 | A standard library with contracts | under way — N12a (`HashMap`/`HashSet`), N12b (doc blocks, `nava doc`, the contracts guard and the generated reference), N12c (`pure:` checked against the body, the `test` module, a qualified function value and a standard library that tests itself) N12d (`fmt`: width, alignment and precision over `i64`, `f64` and `str`) and N12e (`io`: lines of text and the files they come from, on the capability model) N12f (`fs`: paths, and three read-gated filesystem questions) N12g (`args`: the words a program was started with) and N12h (`collections`: the layer above one element at a time) are delivered; determinism across backends and the last module, `time`, are not |
+| N12 | A standard library with contracts | under way — N12a (`HashMap`/`HashSet`), N12b (doc blocks, `nava doc`, the contracts guard and the generated reference), N12c (`pure:` checked against the body, the `test` module, a qualified function value and a standard library that tests itself) N12d (`fmt`: width, alignment and precision over `i64`, `f64` and `str`) and N12e (`io`: lines of text and the files they come from, on the capability model) N12f (`fs`: paths, and three read-gated filesystem questions) N12g (`args`: the words a program was started with), N12h (`collections`: the layer above one element at a time) and N12i (`time`: the clock, and what `pure:` means when the answer moves) are delivered; every module of the phase now has its contract, its examples and its tests, and determinism across backends is what remains |
 | N13 | Projects, packages, reproducibility | specified, not started |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | specified, not started |
 | N15 | Self-hosting and bootstrap | specified, not started |

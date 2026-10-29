@@ -14,6 +14,7 @@ import math;
 import sort;
 import test;
 import text;
+import time;
 
 fn abs_tests() -> i64 {
     let failures = 0
@@ -469,6 +470,79 @@ fn elements_of_tests() -> i64 {
     return failures
 }
 
+fn seconds_to_millis_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(time::seconds_to_millis(2), 2000,
+                                           "two seconds")
+    failures = failures + test::expect_i64(time::seconds_to_millis(-1), -1000,
+                                           "a negative second keeps its sign")
+    return failures
+}
+
+fn millis_to_seconds_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(time::millis_to_seconds(2500), 2,
+                                           "the whole seconds")
+    failures = failures + test::expect_i64(time::millis_to_seconds(-2500), -2,
+                                           "truncation goes towards zero")
+    return failures
+}
+
+fn millis_in_second_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(time::millis_in_second(2500), 500,
+                                           "the part under a second")
+    failures = failures + test::expect_i64(
+        time::millis_to_seconds(2500) * 1000 + time::millis_in_second(2500), 2500,
+        "the two parts rebuild the value")
+    return failures
+}
+
+fn now_seconds_tests() -> i64 {
+    let failures = 0
+    # Every correct wall clock is later than 2020, and a clock answering 0 is
+    # the failure this catches.
+    failures = failures + test::expect_true(time::now_seconds() > 1600000000,
+                                            "the wall clock is later than 2020")
+    return failures
+}
+
+fn now_millis_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_true(time::now_millis() > 1600000000000,
+                                            "the wall clock in milliseconds")
+    failures = failures + test::expect_true(
+        time::millis_to_seconds(time::now_millis()) > 1600000000,
+        "the two wall clock readings agree")
+    return failures
+}
+
+fn monotonic_millis_tests() -> i64 {
+    let failures = 0
+    let first = time::monotonic_millis()
+    let second = time::monotonic_millis()
+    failures = failures + test::expect_true(first >= 0, "the reading is not negative")
+    failures = failures + test::expect_true(second >= first,
+                                            "monotonic readings never decrease")
+    return failures
+}
+
+fn elapsed_millis_tests() -> i64 {
+    let failures = 0
+    let mark = time::monotonic_millis()
+    failures = failures + test::expect_true(time::elapsed_millis(mark) >= 0,
+                                            "no time has passed yet")
+    let spin = 0
+    while time::elapsed_millis(mark) < 2 {
+        spin = spin + 1
+    }
+    failures = failures + test::expect_true(time::elapsed_millis(mark) >= 2,
+                                            "the clock advances while the program runs")
+    failures = failures + test::expect_true(time::elapsed_millis(mark + 5000) < 0,
+                                            "a mark in the future gives a negative")
+    return failures
+}
+
 fn main() -> i64 {
     let failed = 0
     failed = failed + test::run("math::abs", abs_tests)
@@ -511,5 +585,12 @@ fn main() -> i64 {
     failed = failed + test::run("collections::count_distinct", count_distinct_tests)
     failed = failed + test::run("collections::keys_of", keys_of_tests)
     failed = failed + test::run("collections::elements_of", elements_of_tests)
+    failed = failed + test::run("time::seconds_to_millis", seconds_to_millis_tests)
+    failed = failed + test::run("time::millis_to_seconds", millis_to_seconds_tests)
+    failed = failed + test::run("time::millis_in_second", millis_in_second_tests)
+    failed = failed + test::run("time::now_seconds", now_seconds_tests)
+    failed = failed + test::run("time::now_millis", now_millis_tests)
+    failed = failed + test::run("time::monotonic_millis", monotonic_millis_tests)
+    failed = failed + test::run("time::elapsed_millis", elapsed_millis_tests)
     return test::summary("standard library", failed)
 }

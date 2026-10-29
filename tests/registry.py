@@ -182,6 +182,34 @@ REGISTERED_TESTS = {
         "test_two_listings_of_one_table_agree",
         "test_the_same_insertions_give_the_same_order",
     },
+    #: N12i: `time` — the one module whose subject is not deterministic, so the
+    #: file carries what the self-test cannot: the clock compared against the
+    #: harness's own `time.time()`, a wall clock that really moves between two
+    #: runs of one binary, a monotonic reading that advances while the program
+    #: spins, an elapsed time that is not clamped, the checked multiplication, and
+    #: the guard that refuses a `pure: yes` claim about a clock.
+    "WallClockTests": {
+        "test_the_wall_clock_agrees_with_the_harness",
+        "test_milliseconds_and_seconds_read_the_same_clock",
+        "test_two_runs_of_the_same_binary_see_different_times",
+    },
+    "MonotonicClockTests": {
+        "test_the_monotonic_clock_advances_while_the_program_spins",
+        "test_a_mark_in_the_future_gives_a_negative_elapsed_time",
+        "test_a_second_mark_is_never_below_the_first",
+    },
+    "ArithmeticTests": {
+        "test_the_conversions_are_the_same_in_two_runs",
+        "test_a_second_is_rebuilt_from_its_two_parts",
+        "test_multiplication_that_does_not_fit_stops_the_program",
+    },
+    "GuardTests": {
+        "test_a_pure_claim_about_the_clock_is_refused",
+        "test_the_clock_builtins_are_not_on_the_pure_list",
+        "test_the_module_marks_the_readings_impure_and_the_arithmetic_pure",
+        "test_a_wrapper_cannot_be_named_like_the_builtin_it_wraps",
+        "test_the_module_reaches_the_clock_under_its_own_names",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1201,6 +1229,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_fs  # noqa: PLC0415
     import test_args  # noqa: PLC0415
     import test_collections  # noqa: PLC0415
+    import test_time  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1209,7 +1238,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
-                   test_io, test_fs, test_args, test_collections,
+                   test_io, test_fs, test_args, test_collections, test_time,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1283,7 +1312,12 @@ def check_skip_state() -> list[str]:
     import test_fs  # noqa: PLC0415
     import test_args  # noqa: PLC0415
     import test_collections  # noqa: PLC0415
-    for module, class_name in ((test_collections, "ReadingTests"),
+    import test_time  # noqa: PLC0415
+    for module, class_name in ((test_time, "WallClockTests"),
+                               (test_time, "MonotonicClockTests"),
+                               (test_time, "ArithmeticTests"),
+                               (test_time, "GuardTests"),
+                               (test_collections, "ReadingTests"),
                                (test_collections, "FillingTests"),
                                (test_collections, "OrderTests"),
                                (test_args, "ArgumentTests"),

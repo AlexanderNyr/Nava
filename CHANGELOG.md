@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+N12i: **`time`** — the clock, and what `pure:` means when the answer moves.
+
+- Three readings and no way to set one: `time::now_seconds()`,
+  `time::now_millis()` (the wall clock, which can be corrected backwards) and
+  `time::monotonic_millis()` (which only moves forward), plus
+  `time::elapsed_millis(start)` for a duration. All four are `pure: no`: `pure:
+  yes` promises the same answer for the same call, and a clock cannot.
+- Three conversions that are arithmetic, and `pure: yes`:
+  `time::seconds_to_millis` (checked `*`), `time::millis_to_seconds` (truncating
+  towards zero) and `time::millis_in_second` (the remainder, so the two rebuild
+  the value). These are the half of the module the determinism gate covers.
+- The claim is enforced, not trusted: the clock builtins are not on the purity
+  list, so a `pure: yes` function that reads a clock is refused by the guard.
+- The builtins are `clock_seconds()`, `clock_millis()` and
+  `clock_monotonic_millis()`: a builtin's name is reserved in every module
+  (`E0301`), so a builtin and the function wrapping it cannot share a word.
+- `elapsed_millis` is not clamped: a mark that lies in the future gives a
+  negative number rather than a measurement of zero.
+
 N12h: **`collections`** — the layer above one element at a time.
 
 - Four questions that only read, and are `pure: yes`: `sum_of` (checked `+`, so a

@@ -1,0 +1,169 @@
+edition 2;
+
+# Nava standard library: the clock, and the arithmetic that goes with it.
+# Version 1.
+#
+# This is the one module in the library whose subject is not deterministic, so it
+# is also the one where the `pure:` field has to be read carefully.
+#
+#   * **A clock reading is an effect.** `now_seconds`, `now_millis` and
+#     `monotonic_millis` answer a different value every time they are called, so
+#     they are `pure: no` — not because they change anything, but because "the
+#     same call gives the same answer" is the promise `pure: yes` makes and they
+#     cannot keep it. `elapsed_millis` subtracts one reading from another and is
+#     `pure: no` for the same reason: it reads the clock.
+#   * **Arithmetic on a time value is pure.** `seconds_to_millis`,
+#     `millis_to_seconds` and `millis_in_second` are ordinary deterministic
+#     functions over `i64`, so they are `pure: yes` and are covered by the
+#     determinism gate in the ordinary way.
+#
+# The claim is checked rather than trusted: `time::now_millis()` cannot be called
+# from a `pure: yes` function anywhere in a Nava program, because the guard reads
+# the body and the clock builtins are not on its list of pure ones. A module that
+# wanted a "pure" wall-clock read would be refused, and the refusal is a test
+# (`tests/test_time.py`).
+#
+# Two clocks, and the difference matters:
+#
+#   * the **wall clock** (`now_seconds`, `now_millis`) is what a calendar would be
+#     built on. It can be moved backwards — by an operator or a time server — so
+#     two readings do not necessarily grow, and a duration measured with it can be
+#     negative;
+#   * the **monotonic clock** (`monotonic_millis`) only moves forward and does not
+#     count time the machine spent asleep, so subtracting two readings measures a
+#     duration. `elapsed_millis(start)` is that subtraction, written once so that
+#     every program measures the same way.
+#
+# There is deliberately **no** "set the clock", no time zone and no calendar: a
+# date is a formatting problem on top of a number, and `fmt` formats numbers.
+# There is also **no** sleep — a program that waits is a program that should be
+# told to wait by whatever runs it, and a sleep builtin would be an effect with no
+# result to contract for.
+#
+# A program that measures itself:
+#
+#     import time;
+#
+#     fn main() {
+#         let start = time::monotonic_millis()
+#         let total = 0
+#         let i = 0
+#         while i < 1000 {
+#             total = total + i
+#             i = i + 1
+#         }
+#         print(time::elapsed_millis(start) >= 0)      # true
+#         print(time::seconds_to_millis(2))            # 2000
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `seconds_to_millis(seconds)` — a number of seconds as a number of milliseconds.
+///
+/// pre: none
+/// post: `seconds × 1000`, computed with the checked `*`, so a value whose product
+/// does not fit in an `i64` stops the program rather than wrapping round; the sign
+/// is carried through unchanged
+/// cost: O(1)
+/// pure: yes
+/// example: time::seconds_to_millis(2) == 2000
+/// example: time::seconds_to_millis(0) == 0
+/// example: time::seconds_to_millis(-1) == -1000
+/// error: print(time::seconds_to_millis(9223372036854775807)) => i64 overflow in *
+pub fn seconds_to_millis(seconds: i64) -> i64 {
+    return seconds * 1000
+}
+
+/// `millis_to_seconds(millis)` — whole seconds in a number of milliseconds.
+///
+/// pre: none
+/// post: the milliseconds divided by 1000, truncating **towards zero** — so
+/// `2500` is `2`, `-2500` is `-2` and `999` is `0`; the remainder that is dropped
+/// is what `millis_in_second` returns
+/// cost: O(1)
+/// pure: yes
+/// example: time::millis_to_seconds(2500) == 2
+/// example: time::millis_to_seconds(-2500) == -2
+/// example: time::millis_to_seconds(999) == 0
+pub fn millis_to_seconds(millis: i64) -> i64 {
+    return millis / 1000
+}
+
+/// `millis_in_second(millis)` — the part of a millisecond count that is less than
+/// one second.
+///
+/// pre: none
+/// post: `millis` remainder 1000, which is in `0 … 999` for a non-negative value
+/// and in `-999 … 0` for a negative one, because the division truncates towards
+/// zero; `millis_to_seconds(m) * 1000 + millis_in_second(m) == m` holds for every
+/// value
+/// cost: O(1)
+/// pure: yes
+/// example: time::millis_in_second(2500) == 500
+/// example: time::millis_in_second(1999) == 999
+/// example: time::millis_to_seconds(2500) * 1000 + time::millis_in_second(2500) == 2500
+pub fn millis_in_second(millis: i64) -> i64 {
+    return millis % 1000
+}
+
+/// `now_seconds()` — the wall clock, in whole seconds since the Unix epoch.
+///
+/// pre: none
+/// post: the current time according to the machine's wall clock, truncated to
+/// whole seconds; two calls may answer the same value, and the sequence is not
+/// guaranteed to grow because the clock can be corrected backwards
+/// cost: O(1)
+/// pure: no
+/// example: time::now_seconds() > 1600000000
+/// example: time::now_millis() / 1000 - time::now_seconds() < 2 && time::now_seconds() - time::now_millis() / 1000 < 2
+pub fn now_seconds() -> i64 {
+    return clock_seconds()
+}
+
+/// `now_millis()` — the wall clock, in milliseconds since the Unix epoch.
+///
+/// pre: none
+/// post: the current time according to the machine's wall clock, in milliseconds;
+/// the same clock `now_seconds` reads, with the sub-second part kept
+/// cost: O(1)
+/// pure: no
+/// example: time::now_millis() > 1600000000000
+/// example: time::millis_to_seconds(time::now_millis()) > 1600000000
+pub fn now_millis() -> i64 {
+    return clock_millis()
+}
+
+/// `monotonic_millis()` — milliseconds from a point that only moves forward.
+///
+/// pre: none
+/// post: a reading of the monotonic clock, in milliseconds; readings never
+/// decrease, and time the machine spends asleep is not counted, so the difference
+/// between two readings measures a duration rather than a change of date. The
+/// point it counts from is not specified — only differences are meaningful
+/// cost: O(1)
+/// pure: no
+/// example: time::monotonic_millis() >= 0
+/// example: let mark = time::monotonic_millis(); time::monotonic_millis() >= mark
+pub fn monotonic_millis() -> i64 {
+    return clock_monotonic_millis()
+}
+
+/// `elapsed_millis(start)` — how long it has been since a monotonic reading.
+///
+/// pre: `start` is a value `monotonic_millis()` answered earlier in this process,
+/// or `0` to count from the start of the machine's uptime
+/// post: `monotonic_millis() - start`, computed with the checked `-`; for a mark
+/// that was taken earlier the answer is a duration in milliseconds and never
+/// negative. A fabricated mark that lies in the future gives a negative number
+/// rather than a clamp: the subtraction is what it is, and hiding it would turn a
+/// mistake into a measurement of zero
+/// cost: O(1)
+/// pure: no
+/// example: let mark = time::monotonic_millis(); time::elapsed_millis(mark) >= 0
+/// example: time::elapsed_millis(time::monotonic_millis()) >= 0
+/// example: let mark = time::monotonic_millis(); let spin = 0; while time::elapsed_millis(mark) < 2 { spin = spin + 1 }; time::elapsed_millis(mark) >= 2
+pub fn elapsed_millis(start: i64) -> i64 {
+    return clock_monotonic_millis() - start
+}

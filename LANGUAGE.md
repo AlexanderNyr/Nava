@@ -612,6 +612,7 @@ nava_lang/stdlib/io.nv        count_lines, first_line, join_lines, lines_of, rea
 nava_lang/stdlib/fs.nv        basename, dirname, path_join, extension, stem, exists, ...
 nava_lang/stdlib/args.nv      flag_in, value_in, count, get, flag, value
 nava_lang/stdlib/collections.nv  sum_of, count_of, contains_all, has_any, ...
+nava_lang/stdlib/time.nv      seconds_to_millis, now_seconds, elapsed_millis, ...
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -881,6 +882,59 @@ fn main() {
 
 This prints `7`, `2` and `2`.
 
+### `time`
+
+The clock. It is the one module in the library whose subject is not
+deterministic, so it is the one place where the `pure:` field has to be read
+carefully:
+
+| Function | Result |
+|---|---|
+| `time::module_version() -> i64` | the standard library version |
+| `time::seconds_to_millis(seconds: i64) -> i64` | `seconds × 1000`, with the checked `*` |
+| `time::millis_to_seconds(millis: i64) -> i64` | whole seconds, truncating towards zero |
+| `time::millis_in_second(millis: i64) -> i64` | the part under a second; the two rebuild the value |
+| `time::now_seconds() -> i64` | the wall clock, in seconds since the Unix epoch |
+| `time::now_millis() -> i64` | the same clock, in milliseconds |
+| `time::monotonic_millis() -> i64` | a reading that only moves forward |
+| `time::elapsed_millis(start: i64) -> i64` | how long since a monotonic reading |
+
+The three conversions are `pure: yes`: they are arithmetic on an `i64` and the
+same call always answers the same value. The four that read a clock are
+`pure: no`, and not because they change anything — a reading that answered the
+same value every time would be a broken clock. `pure: yes` promises that the same
+call gives the same answer, and a clock cannot make that promise.
+
+The claim is checked, not trusted: a `pure: yes` function may not call
+`clock_seconds`, `clock_millis` or `clock_monotonic_millis`, and the guard reads
+the body to find out. A program that wants a "read the clock" helper writes it as
+`pure: no`.
+
+There are **two** clocks and the difference matters. The wall clock
+(`now_seconds`, `now_millis`) is what a calendar would be built on; it can be
+corrected backwards by an operator or a time server, so two readings do not
+necessarily grow. The monotonic clock (`monotonic_millis`) only moves forward and
+does not count time the machine spent asleep, so the difference between two
+readings is a duration — that is what `elapsed_millis` computes, and it is not
+clamped: a mark that lies in the future gives a negative number rather than a
+misleading zero.
+
+```nava
+import time;
+
+fn main() {
+    let start = time::monotonic_millis()
+    let spin = 0
+    while time::elapsed_millis(start) < 5 {
+        spin = spin + 1
+    }
+    print(time::elapsed_millis(start) >= 5)
+}
+```
+
+There is no sleep, no time zone, no calendar and no way to *set* the clock: a
+date is a formatting problem on top of a number, and `fmt` formats numbers.
+
 ## Doc blocks and `nava doc`
 
 A `///` block above a function is the function's contract, written in the
@@ -1144,6 +1198,28 @@ pure, and neither is any function that calls them, because the same call
 answers differently in a run that was started differently. Nothing is cached:
 a program that asks twice gets the same answer within one run, and a different
 one in the next.
+
+## The clock
+
+Three builtins read the machine's clocks, and there is no way to set one:
+
+| Builtin | Result |
+|---|---|
+| `clock_seconds() -> i64` | the wall clock, seconds since the Unix epoch |
+| `clock_millis() -> i64` | the same clock, in milliseconds |
+| `clock_monotonic_millis() -> i64` | milliseconds from a point that only moves forward |
+
+They are named `clock_*` because a builtin's name is reserved in every module
+(`E0301`), so a builtin and the library function that wraps it cannot share a
+word: the words a program says are `time::now_seconds()`, `time::now_millis()`
+and `time::monotonic_millis()`, and the primitives behind them keep their own
+names. A reading that fails stops the program instead of answering `0`, because a
+clock that invented a plausible value would be a wrong measurement rather than a
+visible failure.
+
+Reading a clock is an **effect**: none of the three is pure, none may be called
+from a `pure: yes` function, and nothing is cached — two calls are two readings,
+which is why a duration is measured by subtracting them.
 
 ## Checked arithmetic
 

@@ -241,7 +241,7 @@ class StdlibContractTests(unittest.TestCase):
         # new module is added here on purpose, so one can never ship without it.
         self.assertEqual([path.stem for path in paths],
                          ["args", "collections", "fmt", "fs", "io", "math", "sort", "test",
-                          "text"])
+                          "text", "time"])
         for path in paths:
             with self.subTest(module=path.stem):
                 program = parse(path.read_text(encoding="utf-8"), path=str(path))

@@ -124,6 +124,12 @@ pub fn double(x: i64) -> i64 {
 - `arg_count() -> i64` and `arg_at(i: i64) -> str` — the words the program was
   started with, without its own name. `nava run prog.nv -- a b` gives it `a`
   and `b`; everything after `--` is the program's, word for word.
+- `clock_seconds() -> i64`, `clock_millis() -> i64` and
+  `clock_monotonic_millis() -> i64` — the machine's clocks, seconds and
+  milliseconds since the Unix epoch and a reading that only moves forward.
+  Reading one is an effect, so none may be called from a `pure: yes` function;
+  `time::now_seconds`, `time::now_millis`, `time::monotonic_millis` and
+  `time::elapsed_millis` are the library names for them.
 
 ## Operators
 
@@ -176,6 +182,10 @@ fn main() {
   `collections::contains_all`, `collections::has_any` (`pure: yes`), and
   `collections::count_distinct`, `collections::keys_of`,
   `collections::elements_of`, which fill a container the caller passes in.
+- `time` — `time::now_seconds`, `time::now_millis`, `time::monotonic_millis`
+  and `time::elapsed_millis` read a clock and are `pure: no`; the three
+  conversions `time::seconds_to_millis`, `time::millis_to_seconds` and
+  `time::millis_in_second` are arithmetic and are `pure: yes`.
 
 Two aligned columns, without a format language to learn:
 
@@ -251,6 +261,21 @@ fn main() {
     vec_push(values, 3)
     print(collections::sum_of(values))
     print(collections::count_of(values, 3))
+}
+```
+
+Measuring how long something takes — the monotonic clock, not the wall clock:
+
+```nava
+import time;
+
+fn main() {
+    let start = time::monotonic_millis()
+    let spin = 0
+    while time::elapsed_millis(start) < 5 {
+        spin = spin + 1
+    }
+    print(time::elapsed_millis(start) >= 5)
 }
 ```
 

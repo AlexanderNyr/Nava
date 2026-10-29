@@ -24,6 +24,11 @@ BUILTINS = {
     "path_exists", "file_size", "list_dir",
     # The command line: how many words the program was given, and one of them.
     "arg_count", "arg_at",
+    # The clock: three readings, and no way to set one. Named `clock_*` on
+    # purpose: the word a program says is `time::now_seconds()`, and a builtin of
+    # that name would be reserved (`E0301`), which would leave the module no name
+    # of its own to offer.
+    "clock_seconds", "clock_millis", "clock_monotonic_millis",
     # The whole vector interface, including the constructor: `vec_new` is
     # resolved like the rest, so a declaration of that name would be dead code.
     "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
@@ -62,15 +67,25 @@ TEXT_SIGNATURES = {
     "string_clear": (("mut String",), "void"),
     "string_text": (("String",), "str"),
 }
-#: The filesystem builtins and their signatures, in the same shape as the text
-#: ones: an argument written with `mut ` must be a writable target, for the same
-#: reason (`list_dir` appends to the caller's vector).
-FS_SIGNATURES = {
+#: The builtins that take no `mut` argument and need more than the one-line
+#: check above, in the same shape as the text ones. The table began as the
+#: filesystem's and has outgrown the name: it holds the command line and the
+#: clock too, which are the three places a program asks the machine a question.
+#: An argument written with `mut ` must be a writable target, for the same reason
+#: (`list_dir` appends to the caller's vector).
+SIGNATURE_BUILTINS = {
     "arg_count": ((), "i64"),
     "arg_at": (("i64",), "str"),
     "path_exists": (("str",), "bool"),
     "file_size": (("str",), "i64"),
     "list_dir": (("str", "mut Vec(str)"), "void"),
+    # The clock. Seconds and milliseconds since the Unix epoch, and milliseconds
+    # from a point that does not move when the wall clock is corrected. All three
+    # are readings: none of them can be called from a `pure: yes` function,
+    # because `PURE_BUILTINS` in `contracts.py` does not list them.
+    "clock_seconds": ((), "i64"),
+    "clock_millis": ((), "i64"),
+    "clock_monotonic_millis": ((), "i64"),
 }
 #: Types a value can have (everything except `void`).
 VALUE_TYPES = {"i64", "bool", "str", "f64"}
@@ -2488,8 +2503,8 @@ class Checker:
                 raise make("E0327", f"argument 2 of byte_at expects i64, got {index_type}",
                            expr.args[1].loc)
             return "i64"
-        if expr.module is None and expr.name in FS_SIGNATURES:
-            return self.signature_builtin(expr, FS_SIGNATURES)
+        if expr.module is None and expr.name in SIGNATURE_BUILTINS:
+            return self.signature_builtin(expr, SIGNATURE_BUILTINS)
         if expr.module is None and expr.name == "read_file":
             if len(expr.args) != 1:
                 raise make("E0326", "read_file expects exactly one argument", expr.loc)
