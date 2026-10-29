@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -39,8 +41,11 @@ for path in (ROOT, ROOT / "tests"):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+from nava_lang.checker import check  # noqa: E402
+from nava_lang.cli import load_program  # noqa: E402
 from nava_lang.model import NavaError  # noqa: E402
-from nava_lang.native import ir, lower  # noqa: E402
+from nava_lang.native import elf64, ir, linker, lower, reader, x86_64  # noqa: E402
+from nava_lang.native.unit import Relocation, Symbol, Unit  # noqa: E402
 from nava_lang.parser import parse  # noqa: E402
 
 NAVA = [sys.executable, str(ROOT / "nava")]
@@ -221,8 +226,20 @@ def run_binary(path: pathlib.Path) -> tuple[str, str, int]:
     return result.stdout, result.stderr, result.returncode
 
 
+def checked(source: str):
+    """A parsed and checked program, which is what a backend consumes."""
+    program = parse(source)
+    check(program)
+    return program
+
+
 def lower_source(source: str) -> ir.Module:
-    return lower.lower(parse(source))
+    return lower.lower(checked(source))
+
+
+def units_of(source: str, sources: dict | None = None):
+    """The units of one program: one per module, then the runtime."""
+    return x86_64.units(lower_source(source), sources)
 
 
 def operands(instruction) -> list[str]:
@@ -581,33 +598,97 @@ class NativeELFTests(unittest.TestCase):
     def test_the_file_is_a_static_x86_64_executable(self):
         with tempfile.TemporaryDirectory() as temp:
             image = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
-        self.assertEqual(image[:4], b"\x7fELF")
-        self.assertEqual(image[4], 2, "a 64-bit ELF file")
-        self.assertEqual(image[5], 1, "little endian")
-        (e_type, e_machine, e_version, e_entry, e_phoff, _e_shoff,
-         _flags, _ehsize, phentsize, phnum) = struct.unpack_from("<HHIQQQIHHH", image, 16)
-        self.assertEqual(e_type, 2, "ET_EXEC: position-dependent, no loader relocation")
-        self.assertEqual(e_machine, 62, "x86-64")
-        self.assertEqual(e_version, 1)
-        self.assertEqual((e_phoff, phentsize, phnum), (64, 56, 2))
-        self.assertEqual(e_entry, 0x400000 + 176, "the entry point is the start of .text")
-        segments = [struct.unpack_from("<IIQQQQQQ", image, e_phoff + index * phentsize)
-                    for index in range(phnum)]
+        parsed = reader.read(image)
+        self.assertEqual(image[:6], b"\x7fELF\x02\x01")
+        header = parsed.header
+        self.assertEqual((header.type, header.machine, header.version), (2, 62, 1),
+                         "ET_EXEC, x86-64, current version")
+        self.assertEqual((header.ehsize, header.phentsize, header.shentsize),
+                         (64, 56, 64))
+        self.assertEqual(header.phnum, 3, "text, read-only data, writable data")
+        entry = parsed.symbol("_start")
+        self.assertEqual(header.entry, entry.value, "the entry point is `_start`")
+        segments = parsed.segments
+        self.assertEqual([segment.type for segment in segments], [1, 1, 1],
+                         "every segment is PT_LOAD")
+        self.assertEqual([segment.permissions for segment in segments], ["RX", "R", "RW"])
         for segment in segments:
-            self.assertEqual(segment[0], 1, "PT_LOAD")
-        text, data = segments
-        self.assertEqual(text[1], 5, "the text segment is readable and executable")
-        self.assertEqual(data[1], 6, "the data segment is readable and writable")
-        self.assertNotEqual(text[4], data[4], "the two segments are mapped apart")
-        self.assertEqual(data[2] % 0x1000, 0, "the data segment starts on a page")
-        self.assertEqual(data[2] % 0x1000, data[3] % 0x1000, "offset matches address")
+            self.assertEqual(segment.offset % 0x1000, segment.address % 0x1000,
+                             "a segment's file offset agrees with its address")
+            self.assertEqual(segment.memsz, segment.filesz,
+                             "nothing is zero-filled at load time")
+        self.assertNotEqual(segments[0].address, segments[2].address,
+                            "text and data are mapped apart")
         self.assertNotIn(b"ld-linux", image, "there is no dynamic loader")
+        self.assertNotIn(b".interp", image, "there is no interpreter segment")
+
+    def test_the_sections_and_the_symbol_table_say_what_was_linked(self):
+        """A file that runs but cannot be read back is a file nobody can debug."""
+        with tempfile.TemporaryDirectory() as temp:
+            image = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
+        parsed = reader.read(image)
+        names = [section.name for section in parsed.sections]
+        self.assertEqual(names, ["", ".text", ".rodata", ".nava.lines", ".data",
+                                 ".symtab", ".strtab", ".shstrtab"])
+        for name in (".text", ".rodata", ".data"):
+            section = parsed.section(name)
+            self.assertGreater(section.size, 0, f"{name} is empty")
+            self.assertEqual(section.offset, section.address - elf64.BASE,
+                             "a loadable section's offset is its address minus BASE")
+        self.assertEqual(parsed.section(".text").flags & (elf64.SHF_ALLOC |
+                                                          elf64.SHF_EXECINSTR),
+                         elf64.SHF_ALLOC | elf64.SHF_EXECINSTR)
+        self.assertTrue(parsed.section(".data").flags & elf64.SHF_WRITE)
+        self.assertEqual(parsed.symbols[0].name, "",
+                         "the symbol table starts with the null symbol, or nm sees none")
+        self.assertEqual([symbol.name for symbol in parsed.symbols[:1]], [""])
+        exported = {symbol.name: symbol for symbol in parsed.symbols
+                    if symbol.binding == "global"}
+        self.assertIn("_start", exported)
+        self.assertIn("nava.entry.main", exported)
+        self.assertIn("nv_trace_table", exported)
+        for name in ("nava.entry.main", "_start", "nv_print_i64"):
+            symbol = parsed.symbol(name)
+            self.assertEqual(symbol.kind, "func", f"{name} is a function symbol")
+            self.assertGreater(symbol.size, 0, f"{name} has a size")
+            self.assertEqual(symbol.section, 1, f"{name} lives in .text")
+
+    def test_the_line_table_names_every_function_of_the_program(self):
+        with tempfile.TemporaryDirectory() as temp:
+            image = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp), "lines")
+        parsed = reader.read(image)
+        functions = [record.name for record in parsed.lines]
+        self.assertEqual(functions, ["nava.entry.fact", "nava.entry.six",
+                                     "nava.entry.main"],
+                         "the line table names every function, in source order")
+        for record in parsed.lines:
+            self.assertEqual(record.file, "lines.nv",
+                             "a line table names the file, never the path")
+            offsets = [at for at, _line in record.lines]
+            self.assertEqual(offsets, sorted(offsets), "line entries ascend")
+            for at, line in record.lines:
+                self.assertGreaterEqual(at, record.start)
+                self.assertLess(at, record.end)
+                self.assertGreater(line, 0)
+        self.assertEqual(parsed.symbolise(parsed.symbol("nava.entry.six").value),
+                         "nava.entry.six (lines.nv:6)")
 
     def test_two_builds_of_one_source_are_the_same_bytes(self):
+        """The same file, built twice in two directories, is one file.
+
+        The *name* of the source is in the binary and is meant to be there: a line
+        table that could not name the file would be a line table nobody can act on.
+        The directory is not, and that is the claim: a build that embedded its own
+        working directory would make two checkouts of one tree two different
+        binaries.
+        """
         with tempfile.TemporaryDirectory() as first, tempfile.TemporaryDirectory() as second:
-            one = self.build(PROGRAMS["labelled_loops"], pathlib.Path(first), "one")
-            two = self.build(PROGRAMS["labelled_loops"], pathlib.Path(second), "two")
+            one = self.build(PROGRAMS["labelled_loops"], pathlib.Path(first), "same")
+            two = self.build(PROGRAMS["labelled_loops"], pathlib.Path(second), "same")
         self.assertEqual(one, two, "the native backend put something variable in the file")
+        self.assertIn(b"same.nv", one, "the file's name reaches the line table")
+        self.assertNotIn(first.encode(), one, "the build directory reached the file")
+        self.assertNotIn(second.encode(), two, "the build directory reached the file")
 
     def test_the_binary_is_marked_executable_and_can_be_run_directly(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -664,6 +745,32 @@ class NativeCommandTests(unittest.TestCase):
         self.assertIn("a floating-point literal", result.stderr)
         self.assertEqual(result.stdout, "", "a refusal writes no IR")
 
+    def test_run_compiles_with_the_native_backend_when_asked(self):
+        """`run` runs the same program twice, and the two ways must agree."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "both", PROGRAMS["calls_and_text"])
+            native = run([*NAVA, "run", str(path), "--backend", "native"])
+            through_c = run([*NAVA, "run", str(path)])
+        self.assertEqual(native.returncode, 7, native.stderr)
+        self.assertEqual(native.stdout, through_c.stdout)
+        self.assertEqual(native.returncode, through_c.returncode,
+                         "the program's own exit status, whichever backend built it")
+        self.assertEqual(native.stdout, "3628800\n21\ntab\there\n"
+                                        "newline \\ \"quoted\"\nПривет, мир\n")
+
+    def test_run_refuses_the_c_build_options_with_the_native_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = write_source(pathlib.Path(temp), "solo",
+                                "fn main() -> i64 {\n    return 0\n}\n")
+            for option in (["--cc", "cc"], ["--opt", "2"]):
+                with self.subTest(option=option[0]):
+                    result = run([*NAVA, "run", str(path), "--backend", "native", *option])
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn("E0903", result.stderr)
+                    self.assertIn("`nava run`", result.stderr,
+                                  "the hint names the command it was given to")
+
     def test_the_json_report_names_the_backend(self):
         with tempfile.TemporaryDirectory() as temp:
             directory = pathlib.Path(temp)
@@ -708,3 +815,393 @@ class NativeRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+#: A two-file program, for the linker: every function is called through its module.
+MODULES = {
+    "helper.nv": """\
+fn double(value: i64) -> i64 {
+    return value * 2
+}
+
+fn label() -> str {
+    return "helper"
+}
+""",
+    "main.nv": """\
+import helper
+
+fn main() -> i64 {
+    print(helper::label())
+    print(helper::double(21))
+    return helper::double(3)
+}
+""",
+}
+
+#: A trap two frames below `main`, for the trace: the line of every frame is known.
+TRACE_PROGRAM = """\
+fn scale(x: i64) -> i64 {
+    return 100 / x
+}
+
+fn report(x: i64) -> i64 {
+    return scale(x)
+}
+
+fn main() -> i64 {
+    print("before")
+    let value = report(0)
+    print(value)
+    return 0
+}
+"""
+
+
+class NativeUnitTests(unittest.TestCase):
+    """A unit states what it defines and what it leaves to the linker."""
+
+    def test_there_is_one_unit_per_module_and_one_for_the_runtime(self):
+        units = units_of(PROGRAMS["calls_and_text"])
+        self.assertEqual([unit.name for unit in units], ["module.entry", "runtime"],
+                         "the entry module first, then the runtime")
+
+    def test_a_function_is_a_global_symbol_and_everything_else_is_private(self):
+        module = units_of(PROGRAMS["calls_and_text"])[0]
+        exported = {symbol.name for symbol in module.symbols if not symbol.local}
+        self.assertEqual(exported, {"nava.entry.main", "nava.entry.fact",
+                                    "nava.entry.six"},
+                         "a function's link-time name is qualified by its module")
+        private = [symbol.name for symbol in module.symbols if symbol.local]
+        self.assertTrue(private, "a unit has labels that are not exported")
+        for name in private:
+            self.assertRegex(name, r"^module\.entry\.(text|rodata|data)\.",
+                             "a private label is qualified by its unit and its section")
+
+    def test_a_reference_every_unit_cannot_resolve_is_a_relocation(self):
+        module = units_of(PROGRAMS["calls_and_text"])[0]
+        targets = {(relocation.symbol, relocation.kind)
+                   for relocation in module.relocations}
+        self.assertIn(("nv_print_i64", "pc32"),
+                      targets, "a call into the runtime is the linker's job")
+        self.assertTrue(any(symbol.startswith("module.entry.rodata.") and kind == "pc32"
+                            for symbol, kind in targets),
+                        "a string literal is a displacement into this unit's .rodata")
+
+    def test_every_call_is_a_relocation_because_a_call_names_its_callee(self):
+        """Inside one unit a call *could* be a distance; it is a name instead.
+
+        A name is what the linker resolves and what `nm` prints, and one rule for
+        every call is worth the four bytes the linker has to fill in. Branches inside
+        a function stay distances, because a block label is not a name.
+        """
+        module = units_of(PROGRAMS["calls_and_text"])[0]
+        relocated = {relocation.symbol for relocation in module.relocations}
+        self.assertIn("nava.entry.fact", relocated, "a recursive call names the callee")
+        self.assertIn("nava.entry.six", relocated)
+        labels = {relocation.symbol for relocation in module.relocations
+                  if relocation.symbol.startswith("module.entry.text.")}
+        self.assertEqual(labels, set(),
+                         "a block label is a distance inside one function, never a "
+                         "name the linker has to resolve")
+
+    def test_every_function_records_its_extent_and_its_lines_in_order(self):
+        for unit in units_of(PROGRAMS["calls_and_text"]):
+            for function in unit.functions:
+                with self.subTest(function=function.symbol):
+                    self.assertLess(function.start, function.end)
+                    self.assertTrue(function.lines, "a function without lines")
+                    offsets = [entry.offset for entry in function.lines]
+                    self.assertEqual(offsets, sorted(offsets), "line entries ascend")
+                    self.assertEqual(len(offsets), len(set(offsets)),
+                                     "one entry per address")
+                    for entry in function.lines:
+                        self.assertGreaterEqual(entry.offset, function.start)
+                        self.assertLess(entry.offset, function.end)
+                        self.assertGreater(entry.line, 0)
+                    self.assertTrue(function.file.endswith(".nv"),
+                                    "a line table names a file, not a path")
+                    self.assertNotIn(os.sep, function.file)
+
+
+class NativeLinkerTests(unittest.TestCase):
+    """The linker is the part a two-file program needs, so it is tested alone."""
+
+    def test_the_line_table_is_the_same_size_in_both_passes(self):
+        """A size that depends on an address would make the second pass move it."""
+        units = units_of(PROGRAMS["calls_and_text"])
+        size_only = linker.build_lines(units)
+        filled = linker.build_lines(units, lambda unit, offset: offset)
+        self.assertEqual(len(size_only), len(filled))
+        self.assertEqual(size_only, bytearray(len(size_only)),
+                         "the size pass writes no content")
+
+    def test_the_image_names_its_sections_its_entry_point_and_its_symbols(self):
+        image = linker.link(units_of(PROGRAMS["calls_and_text"]))
+        self.assertEqual([section.name for section in image.sections],
+                         [".text", ".rodata", ".nava.lines", ".data"])
+        self.assertEqual(image.address("_start"), image.entry)
+        self.assertLess(image.address("nava.entry.main"), image.address("_start"),
+                        "the entry module is laid out before the runtime")
+        self.assertGreater(image.section(".rodata").address,
+                           image.section(".text").address)
+        self.assertGreater(image.section(".data").address,
+                           image.section(".rodata").address)
+
+    def test_an_undefined_symbol_is_refused_by_name(self):
+        unit = Unit("probe", text=b"\x90" * 8,
+                    symbols=[Symbol("_start", "text", 0)],
+                    relocations=[Relocation("text", 4, "nobody.defines.this")])
+        with self.assertRaises(linker.LinkError) as caught:
+            linker.link([unit])
+        self.assertIn("nobody.defines.this", str(caught.exception))
+        self.assertEqual(caught.exception.missing, ["nobody.defines.this"])
+
+    def test_a_missing_entry_point_is_refused(self):
+        with self.assertRaises(linker.LinkError) as caught:
+            linker.link(units_of(PROGRAMS["calls_and_text"]), entry_symbol="no.such.thing")
+        self.assertEqual(caught.exception.missing, ["no.such.thing"])
+
+    def test_two_units_with_one_name_are_refused(self):
+        unit = Unit("same", text=b"\x90" * 8, symbols=[Symbol("_start", "text", 0)])
+        with self.assertRaises(linker.LinkError) as caught:
+            linker.link([unit, Unit("same", text=b"", symbols=[])])
+        self.assertIn("same", str(caught.exception))
+
+
+class NativeModuleTests(unittest.TestCase):
+    """Two files, two units, one executable — the reason the linker exists."""
+
+    def write_program(self, directory: pathlib.Path) -> pathlib.Path:
+        for name, source in MODULES.items():
+            (directory / name).write_text(source, encoding="utf-8")
+        return directory / "main.nv"
+
+    def test_a_program_in_two_files_prints_the_same_through_both_backends(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = self.write_program(directory)
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "native"),
+                         "--backend", "native"])
+            self.assertEqual(built.returncode, 0, built.stderr)
+            compiled = run([*NAVA, "build", str(path), "-o", str(directory / "c")])
+            self.assertEqual(compiled.returncode, 0, compiled.stderr)
+            native = run_binary(directory / "native")
+            through_c = run_binary(directory / "c")
+        self.assertEqual(native, ("helper\n42\n", "", 6))
+        self.assertEqual(native, through_c,
+                         "the two backends disagree about a two-file program")
+
+    def test_each_module_keeps_its_own_symbols(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = self.write_program(directory)
+            program = load_program(path.read_text(encoding="utf-8"), path=path)
+            units = x86_64.units(lower.lower(program))
+        self.assertEqual([unit.name for unit in units],
+                         ["module.entry", "module.helper", "runtime"])
+        exported = {symbol.name
+                    for unit in units[:2] for symbol in unit.symbols if not symbol.local}
+        self.assertEqual(exported, {"nava.entry.main", "nava.helper.double",
+                                    "nava.helper.label"},
+                         "a function's name says which module defined it")
+        entry = next(unit for unit in units if unit.name == "module.entry")
+        called = {relocation.symbol for relocation in entry.relocations}
+        self.assertIn("nava.helper.double", called, "a call across modules is a name")
+        self.assertIn("nava.helper.label", called)
+        helper = next(unit for unit in units if unit.name == "module.helper")
+        outside = {relocation.symbol for relocation in helper.relocations
+                   if not relocation.symbol.startswith("module.helper.")}
+        self.assertEqual(outside, {"nv_fail"},
+                         "a checked multiply reaches the trap path and nothing else: "
+                         "the module names no other module, and the runtime names it")
+
+    def test_a_line_table_names_the_file_each_function_came_from(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = self.write_program(directory)
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "native"),
+                         "--backend", "native"])
+            self.assertEqual(built.returncode, 0, built.stderr)
+            parsed = reader.read(directory / "native")
+        files = {record.name: record.file for record in parsed.lines}
+        self.assertEqual(files["nava.entry.main"], "main.nv")
+        self.assertEqual(files["nava.helper.double"], "helper.nv")
+
+
+class NativeReaderTests(unittest.TestCase):
+    """Our reader, checked against the reader everybody else uses."""
+
+    def build(self, source: str, directory: pathlib.Path, name: str = "program") -> pathlib.Path:
+        path = write_source(directory, name, source)
+        result = run([*NAVA, "build", str(path), "-o", str(directory / name),
+                      "--backend", "native"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return directory / name
+
+    def tool(self, name: str) -> str:
+        found = shutil.which(name)
+        if found is None:
+            self.fail(f"{name} is required to cross-check the ELF writer: a file the "
+                      f"tools cannot read is a file nobody can debug")
+        return found
+
+    def test_the_reader_and_readelf_agree_about_the_header_and_the_segments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
+            text = run([self.tool("readelf"), "-W", "-h", "-l", str(binary)]).stdout
+            parsed = reader.read(binary)
+        entry = re.search(r"Entry point address:\s+(0x[0-9a-f]+)", text)
+        self.assertIsNotNone(entry, text)
+        self.assertEqual(int(entry.group(1), 16), parsed.header.entry)
+        programs = re.search(r"Number of program headers:\s+(\d+)", text)
+        self.assertEqual(int(programs.group(1)), len(parsed.segments))
+        pattern = re.compile(
+            r"^\s+LOAD\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+"
+            r"(0x[0-9a-f]+)\s+(0x[0-9a-f]+)\s+(\S+(?:\s\S)?)\s+(0x[0-9a-f]+)\s*$")
+        loads = [match for match in (pattern.match(line) for line in text.splitlines())
+                 if match is not None]
+        self.assertEqual(len(loads), len(parsed.segments), text)
+        for load, segment in zip(loads, parsed.segments):
+            self.assertEqual(int(load.group(1), 16), segment.offset)
+            self.assertEqual(int(load.group(2), 16), segment.address)
+            self.assertEqual(int(load.group(4), 16), segment.filesz)
+            self.assertEqual(int(load.group(7), 16), segment.alignment)
+            flags = load.group(6)
+            for letter, bit in (("R", 4), ("W", 2), ("E", 1)):
+                self.assertEqual(letter in flags, bool(segment.flags & bit),
+                                 f"{letter} disagrees for {load.group(0)}")
+
+    def test_the_reader_and_nm_agree_about_every_symbol(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
+            text = run([self.tool("nm"), str(binary)])
+            self.assertEqual(text.returncode, 0, "nm could not read the symbol table")
+            parsed = reader.read(binary)
+        listed = {}
+        for line in text.stdout.splitlines():
+            parts = line.split()
+            if len(parts) == 3:
+                listed[parts[2]] = (int(parts[0], 16), parts[1])
+        named = {symbol.name: symbol for symbol in parsed.symbols if symbol.name}
+        self.assertEqual(set(listed), set(named),
+                         "our reader and nm disagree about which symbols exist")
+        for name, (value, kind) in listed.items():
+            symbol = named[name]
+            self.assertEqual(symbol.value, value, name)
+            # `nm` prints a capital for a global and a lower-case letter for a local,
+            # so the letter's case and our binding are two accounts of the same fact.
+            self.assertEqual(kind.isupper(), symbol.binding == "global", name)
+            section = parsed.sections[symbol.section].name
+            expected = {".text": "T", ".rodata": "R", ".data": "D",
+                        ".nava.lines": "R"}[section]
+            self.assertEqual(kind.upper(), expected,
+                             f"{name} is in {section}, so nm's letter is wrong")
+
+    def test_the_reader_names_the_function_and_the_line_of_an_address(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp), "named")
+            parsed = reader.read(binary)
+        main = parsed.symbol("nava.entry.main")
+        self.assertEqual(parsed.symbolise(main.value), "nava.entry.main (named.nv:10)")
+        self.assertIsNone(parsed.symbolise(parsed.symbol("nv_trace_table").value),
+                          "a data address belongs to no function")
+        record = parsed.function_at(main.value)
+        self.assertEqual((record.start, record.end, record.file),
+                         (main.value, main.value + main.size, "named.nv"))
+
+    def test_a_truncated_file_is_rejected_rather_than_guessed_at(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
+            image = binary.read_bytes()
+        for length in (0, 8, 40, 100, len(image) // 2, len(image) - 1):
+            with self.subTest(length=length):
+                with self.assertRaises(reader.Malformed):
+                    reader.read(image[:length])
+
+    def test_something_that_is_not_an_executable_is_rejected(self):
+        for payload in (b"", b"not an elf at all", b"\x7fELF" + bytes(8),
+                        b"\x7fELF\x01\x01\x01\x00" + bytes(56)):
+            with self.subTest(payload=payload[:8]):
+                with self.assertRaises(reader.Malformed):
+                    reader.read(payload)
+
+    def test_the_reader_reads_what_our_writer_wrote_and_nothing_else(self):
+        """The negative control for the reader: a plausible header, a false body."""
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(PROGRAMS["calls_and_text"], pathlib.Path(temp))
+            image = bytearray(binary.read_bytes())
+        parsed = reader.read(bytes(image))
+        lines = parsed.section(".nava.lines")
+        bad_magic = bytearray(image)
+        bad_magic[lines.offset] = 0
+        with self.assertRaises(reader.Malformed):
+            reader.read(bytes(bad_magic))
+        bad_section = bytearray(image)
+        bad_section[parsed.header.shoff + 64 + 32:parsed.header.shoff + 64 + 40] = (
+            (1 << 62).to_bytes(8, "little"))
+        with self.assertRaises(reader.Malformed):
+            reader.read(bytes(bad_section))
+
+
+class NativeTraceTests(unittest.TestCase):
+    """The trace: a symbolised stack, and silence when it is not asked for."""
+
+    def build(self, source: str, directory: pathlib.Path) -> pathlib.Path:
+        path = write_source(directory, "probe", source)
+        result = run([*NAVA, "build", str(path), "-o", str(directory / "probe"),
+                      "--backend", "native"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return directory / "probe"
+
+    def test_without_the_variable_a_trap_prints_exactly_the_message(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(TRACE_PROGRAM, pathlib.Path(temp))
+            result = subprocess.run([str(binary)], capture_output=True, text=True,
+                                    timeout=60, env={"PATH": "/usr/bin:/bin"})
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "before\n")
+        self.assertEqual(result.stderr, "nava runtime error: division by zero\n",
+                         "the trace must be off by default, or the differential "
+                         "would compare two different outputs")
+
+    def test_the_variable_adds_a_frame_for_every_caller_from_the_innermost_out(self):
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(TRACE_PROGRAM, pathlib.Path(temp))
+            result = subprocess.run([str(binary)], capture_output=True, text=True,
+                                    timeout=60,
+                                    env={"PATH": "/usr/bin:/bin", "NAVA_TRACE": "1"})
+            parsed = reader.read(binary)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "before\n")
+        lines = result.stderr.splitlines()
+        self.assertEqual(lines[0], "nava runtime error: division by zero")
+        self.assertEqual(lines[1:], [
+            "  at nava.entry.scale (probe.nv:2)",
+            "  at nava.entry.report (probe.nv:6)",
+            "  at nava.entry.main (probe.nv:11)",
+        ], "the trace walks the frame chain from the failing call outwards")
+        # The trace is not asserted from memory: every line it names is a line the
+        # line table maps, and the frame it starts with is a function of the program.
+        mapped = {}
+        for record in parsed.lines:
+            mapped[record.name] = {line for _address, line in record.lines}
+        for frame in lines[1:]:
+            match = re.match(r"  at (\S+) \((.+):(\d+)\)$", frame)
+            self.assertIsNotNone(match, frame)
+            name, file, line = match.groups()
+            self.assertIn(name, mapped, f"{name} is not a function of the program")
+            self.assertEqual(file, "probe.nv")
+            self.assertIn(int(line), mapped[name],
+                          f"{name} has no line {line} in its line table")
+
+    def test_a_trace_stops_at_the_bottom_of_the_stack(self):
+        """A failing `main` is two frames: the program's own, and nothing invented."""
+        source = "fn main() -> i64 {\n    let zero: i64 = 0\n    return 1 / zero\n}\n"
+        with tempfile.TemporaryDirectory() as temp:
+            binary = self.build(source, pathlib.Path(temp))
+            result = subprocess.run([str(binary)], capture_output=True, text=True,
+                                    timeout=60,
+                                    env={"PATH": "/usr/bin:/bin", "NAVA_TRACE": "1"})
+        self.assertEqual(result.stderr.splitlines()[1:],
+                         ["  at nava.entry.main (probe.nv:3)"])

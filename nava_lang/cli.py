@@ -84,6 +84,20 @@ def load_program(source: str, path: Path | str | None = None,
     return program
 
 
+def source_map(program, path: Path | str | None) -> dict:
+    """Every module's path, with the entry file filled in when nothing was loaded.
+
+    A program with no imports never ran the loader, so the map has to be completed
+    here: the native backend names a line table after the file, and a build record
+    that cannot name the file it compiled would look reproducible for the wrong
+    reason.
+    """
+    sources = dict(getattr(program, "sources", {}) or {})
+    if not sources and path is not None:
+        sources = {"": str(path)}
+    return sources
+
+
 def compile_source(source: str, path: Path | str | None = None,
                    root: Path | str | None = None,
                    stdlib_root: Path | str | None = None,
@@ -91,13 +105,7 @@ def compile_source(source: str, path: Path | str | None = None,
     """Parse, check and emit C. Raises NavaError with a stable code."""
     program = load_program(source, path=path, root=root, stdlib_root=stdlib_root)
     packages = sorted(set(getattr(program, "module_packages", {}).values()))
-    sources = dict(getattr(program, "sources", {}) or {})
-    if not sources and path is not None:
-        # A program with no imports is one file, and `modules.load` never ran, so
-        # the source map has to be filled here: a build record that cannot name the
-        # file it compiled would report an empty source digest and look reproducible
-        # for the wrong reason.
-        sources = {"": str(path)}
+    sources = source_map(program, path)
     return Compilation(generate(program, capabilities), list(program.warnings),
                        packages, sources)
 
@@ -345,8 +353,15 @@ def make_parser() -> argparse.ArgumentParser:
     run.add_argument("source", nargs="?",
                         help="source file; omit it with --project")
     run.add_argument("--timeout", type=positive_float, help="terminate the program after this many seconds")
-    run.add_argument("--cc", help="C compiler command (default: $CC or cc)")
-    run.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
+    # As in `build`, `--cc` and `--opt` are suppressed defaults so that
+    # `run --backend native` can refuse an option the caller actually gave.
+    run.add_argument("--cc", default=argparse.SUPPRESS,
+                     help="C compiler command (default: $CC or cc)")
+    run.add_argument("--opt", choices=("0", "2", "3"), default=argparse.SUPPRESS,
+                     help="optimization level (default: 2)")
+    run.add_argument("--backend", choices=("c", "native"), default="c",
+                     help="code generator: `c` (default) or `native`, which writes "
+                          "the executable itself and needs no C toolchain")
     run.add_argument("--isolation", choices=limits.ISOLATION_MODES, default="auto",
                      help="isolation policy: auto (default), required, or off (explicitly unsafe)")
     run.add_argument("--memory", type=int, default=256,
@@ -419,6 +434,50 @@ def report_warnings(warnings: list[Diagnostic], path: Path, machine: bool) -> No
         print(format_human(str(path), warning), file=sys.stderr)
 
 
+def execute_binary(binary: Path, args: argparse.Namespace, program_args: list[str],
+                   workdir: Path | None) -> int:
+    """Run a built program under the sandbox and answer its exit status.
+
+    One implementation for both backends on purpose: the isolation policy, the
+    limits, the timeout and the survivor check are properties of *running a
+    program*, and a second copy of them for the native backend would be a second
+    place for them to differ.
+    """
+    import shutil
+
+    from . import sandbox
+
+    if workdir is not None:
+        # The sandbox exposes exactly one writable directory; with --workdir it is
+        # the caller's, so the program runs there.
+        staged = workdir / ".nava-program"
+        try:
+            shutil.copy2(binary, staged)
+            staged.chmod(0o755)
+        except OSError as exc:
+            raise make("E0507", f"cannot place the program in {workdir}: {exc}") from exc
+        binary = staged
+    sandbox_limits = sandbox.Limits(
+        wall_seconds=args.timeout,
+        cpu_seconds=max(1, int(args.timeout) if args.timeout else 3600),
+        memory_bytes=max(1, args.memory) * 1024 * 1024,
+    )
+    try:
+        outcome = sandbox.run([str(binary), *program_args], limits=sandbox_limits,
+                              mode=args.isolation,
+                              workdir=workdir or binary.parent, capture=False)
+    except sandbox.SandboxUnavailable as exc:
+        raise make("E0601", str(exc)) from exc
+    for note in outcome.notes:
+        print(f"nava: {note}", file=sys.stderr)
+    if outcome.timed_out:
+        print(f"nava: execution exceeded {args.timeout:g} seconds", file=sys.stderr)
+        return 124
+    if outcome.survivors:
+        raise make("E0602", "child processes survived termination of the program")
+    return outcome.exit_code if outcome.exit_code is not None else 2
+
+
 def refuse_native_options(args: argparse.Namespace) -> None:
     """Refuse the build options the native backend cannot honour.
 
@@ -432,11 +491,12 @@ def refuse_native_options(args: argparse.Namespace) -> None:
                           ("--opt", getattr(args, "opt", None)),
                           ("--record", getattr(args, "record", None))):
         if given is not None:
+            command = getattr(args, "command", "build")
             raise make(
                 "E0903",
                 f"the native backend does not implement {option}",
-                hint="drop the option, or build with the C backend (the default): "
-                     "`nava build` without --backend native",
+                hint=f"drop the option, or use the C backend (the default): "
+                     f"`nava {command}` without --backend native",
             )
 
 
@@ -448,7 +508,7 @@ def build_native(program, output: Path, source: Path, warnings, machine: bool) -
         raise make("E0504", "output must be different from the source file")
     if not output.parent.is_dir():
         raise make("E0505", f"output directory does not exist: {output.parent}")
-    image = native.image(program)
+    image = native.image(program, source_map(program, source))
     output.write_bytes(image)
     # The kernel needs the executable bit to run the file; a backend that replaced
     # the C compiler has to do what the linker would have done about it.
@@ -592,6 +652,22 @@ def main(argv: list[str] | None = None) -> int:
             program = load_program(source, path=path, root=args.root)
             return build_native(program, Path(args.output).resolve(), path,
                                 list(program.warnings), machine)
+        if args.command == "run" and getattr(args, "backend", "c") == "native":
+            # The same shape as `build --backend native`, and the same sandbox as the
+            # C run: `run` does not become a way to execute a program without the
+            # isolation `run` promises.
+            import tempfile
+
+            from . import native
+
+            refuse_native_options(args)
+            program = load_program(source, path=path, root=args.root)
+            report_warnings(list(program.warnings), path, machine)
+            with tempfile.TemporaryDirectory(prefix="nava-run-") as temp:
+                binary = Path(temp) / "program"
+                binary.write_bytes(native.image(program, source_map(program, path)))
+                binary.chmod(0o755)
+                return execute_binary(binary, args, program_args, workdir)
         if args.command == "emit-ir":
             from . import native
 
@@ -725,44 +801,14 @@ def main(argv: list[str] | None = None) -> int:
             # A run prints the program's own output. The package list goes to
             # stderr only when the caller asked for JSON, so a program's stdout
             # stays exactly what the program wrote.
-            import shutil
             import tempfile
-
-            from . import sandbox
 
             with tempfile.TemporaryDirectory(prefix="nava-run-") as temp:
                 binary = Path(temp) / "program"
-                if not compile_c(code, binary, args.cc, args.opt):
+                if not compile_c(code, binary, getattr(args, "cc", None),
+                                 getattr(args, "opt", "2")):
                     return 2
-                if workdir is not None:
-                    # The sandbox exposes exactly one writable directory; with
-                    # --workdir it is the caller's, so the program runs there.
-                    staged = workdir / ".nava-program"
-                    try:
-                        shutil.copy2(binary, staged)
-                        staged.chmod(0o755)
-                    except OSError as exc:
-                        raise make("E0507", f"cannot place the program in {workdir}: {exc}") from exc
-                    binary = staged
-                sandbox_limits = sandbox.Limits(
-                    wall_seconds=args.timeout,
-                    cpu_seconds=max(1, int(args.timeout) if args.timeout else 3600),
-                    memory_bytes=max(1, args.memory) * 1024 * 1024,
-                )
-                try:
-                    outcome = sandbox.run([str(binary), *program_args], limits=sandbox_limits,
-                                          mode=args.isolation,
-                                          workdir=workdir or Path(temp), capture=False)
-                except sandbox.SandboxUnavailable as exc:
-                    raise make("E0601", str(exc)) from exc
-                for note in outcome.notes:
-                    print(f"nava: {note}", file=sys.stderr)
-                if outcome.timed_out:
-                    print(f"nava: execution exceeded {args.timeout:g} seconds", file=sys.stderr)
-                    return 124
-                if outcome.survivors:
-                    raise make("E0602", "child processes survived termination of the program")
-                return outcome.exit_code if outcome.exit_code is not None else 2
+                return execute_binary(binary, args, program_args, workdir)
         raise AssertionError("unknown command")
     except NavaError as exc:
         if machine:

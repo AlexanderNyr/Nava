@@ -175,6 +175,14 @@ class Function:
     params: list[tuple[str, str]]
     returns: str
     blocks: list[Block] = field(default_factory=list)
+    #: The module the function belongs to; "" is the entry file.
+    module: str = ""
+    #: One source line per instruction, in emission order: blocks in order, and the
+    #: instructions of a block in order. `dump()` ignores it — the IR is the same IR
+    #: whether or not the backend writes a line table.
+    lines: list = field(default_factory=list)
+    #: The line the declaration is on, for the prologue.
+    decl_line: int = 0
 
     def value_count(self) -> int:
         """How many values this function defines, block parameters included."""
@@ -186,6 +194,15 @@ class Function:
             total += sum(1 for instruction in block.instructions
                          if isinstance(instruction, Branch))
         return total
+
+
+def symbol(function: Function) -> str:
+    """The name this function has at link time: `<module>.<name>`, in one namespace.
+
+    A module of `""` is the entry file, so `main` in a one-file program is
+    `nava.entry.main` and two modules may each define `abs` without colliding.
+    """
+    return f"nava.{function.module or 'entry'}.{function.name}"
 
 
 @record()
@@ -208,7 +225,8 @@ def dump(module: Module) -> str:
     lines: list[str] = []
     for function in module.functions:
         params = ", ".join(f"{value}: {typ}" for value, typ in function.params)
-        lines.append(f"fn @{function.name}({params}) -> {function.returns}:")
+        name = f"{function.module}.{function.name}" if function.module else function.name
+        lines.append(f"fn @{name}({params}) -> {function.returns}:")
         for block in function.blocks:
             arguments = ", ".join(f"{value}: {typ}" for value, typ in block.params)
             header = f"  ^{block.label}"

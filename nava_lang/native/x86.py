@@ -43,7 +43,11 @@ def _modrm(mod: int, reg: int, rm: int) -> bytes:
 
 
 class Assembler:
-    """A buffer of machine code with named labels and patches."""
+    """A buffer of bytes with named labels and unresolved references.
+
+    `bytes()` answers the buffer with every reference it can resolve itself, and
+    `fixups` is what it could not: the unit turns those into relocations.
+    """
 
     def __init__(self) -> None:
         self.buffer = bytearray()
@@ -195,6 +199,12 @@ class Assembler:
         self.emit(_rex(b=register) + b"\x0F" + bytes([0x90 + codes[condition]])
                   + _modrm(3, 0, register))
 
+    def load_byte(self, destination: int, base: int, displacement: int) -> None:
+        """`movzx r64, byte [base+disp32]`: REX.W + 0F B6 /r."""
+        self.emit(_rex(w=True, r=destination, b=base) + b"\x0F\xB6"
+                  + _modrm(2, destination, base))
+        self.emit(_int32(displacement))
+
     def movzx_byte(self, destination: int, source: int) -> None:
         """`movzx r64, r8`: REX.W + 0F B6 /r."""
         low = BYTE_REGISTERS[source]
@@ -237,26 +247,25 @@ class Assembler:
                   + _modrm(3, source, destination))
 
     # -- resolution ----------------------------------------------------------
-    def assemble(self, base: int = 0, resolver=None) -> bytes:
-        """Patch every label reference and answer the code bytes.
+    def bytes(self) -> bytes:
+        """The buffer with every reference the buffer itself can resolve filled in.
 
-        Labels defined here are *relative to this buffer*, so an address is
-        `base + offset`. A label that lives in another buffer — the data segment of
-        the program image — is asked for by absolute address through `resolver`,
-        which is what lets a `lea r64, [rip+disp32]` reach a string.
+        A 4-byte reference to a label in this same buffer is a distance, so it is
+        computable here and is written in immediately — that is every branch and
+        every jump to a block of the same unit. Everything else stays zero and stays
+        in `fixups`, because its value depends on where the section lands; a unit
+        turns those into relocations and the linker decides.
         """
-        code = bytearray(self.buffer)
+        resolved = bytearray(self.buffer)
         for label, at, width in self.fixups:
-            if label in self.labels:
-                target = base + self.labels[label]
-            elif resolver is not None:
-                target = resolver(label)
-            else:
-                raise ValueError(f"label {label!r} is referenced but never defined")
-            code[at:at + width] = _int32(target - (base + at + width))
-        self.buffer = code
-        self.fixups.clear()
-        return bytes(code)
+            if width == 4 and label in self.labels:
+                resolved[at:at + width] = _int32(self.labels[label] - (at + width))
+        return bytes(resolved)
+
+    def absolute(self, label: str) -> None:
+        """An 8-byte address of `label`: a pointer, resolved by the linker."""
+        self.emit(b"\x00" * 8)
+        self.fixups.append((label, len(self.buffer) - 8, 8))
 
 
 def _int32(value: int) -> bytes:

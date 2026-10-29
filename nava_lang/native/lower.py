@@ -104,15 +104,31 @@ class Loop:
 class Builder:
     """One function's lowering: its blocks, its values, and the environment."""
 
-    def __init__(self, function: Function, signatures: dict[str, str]):
+    def __init__(self, function: Function):
         self.function = function
-        self.signatures = signatures
         self.blocks: list[ir.Block] = []
         self.params: list[tuple[str, str]] = []
         self.next_value = 0
         self.next_block = 0
         self.loops: list[Loop] = []
         self.labels: dict[str, Loop] = {}
+        #: One source line per emitted instruction, in the order the backend emits
+        #: them: blocks in order, and the instructions of a block in order.
+        self.lines: list[int] = []
+        #: Where the function is declared, for its prologue.
+        self.decl_line = function.loc.line if getattr(function, "loc", None) else 0
+        #: The source position being lowered; every instruction emitted until the
+        #: next node is charged to it.
+        self.loc = function.loc
+
+    def emit(self, block: ir.Block, instruction) -> None:
+        """Append one instruction and the line it came from, in one call.
+
+        Recorded together so the two cannot drift: a line table filled in somewhere
+        else is a line table that will one day be filled in wrongly.
+        """
+        block.instructions.append(instruction)
+        self.lines.append(self.loc.line if self.loc is not None else self.decl_line)
 
     # -- names ---------------------------------------------------------------
     def value(self) -> str:
@@ -129,17 +145,19 @@ class Builder:
     # -- expressions ---------------------------------------------------------
     def expression(self, node, block: ir.Block, env: dict) -> tuple[str, str, ir.Block]:
         """Lower one expression; answer (value, type, the block it ended in)."""
+        if getattr(node, "loc", None) is not None:
+            self.loc = node.loc
         if isinstance(node, Number):
             value = self.value()
-            block.instructions.append(ir.Const(value, "i64", int(node.value)))
+            self.emit(block, ir.Const(value, "i64", int(node.value)))
             return value, "i64", block
         if isinstance(node, Boolean):
             value = self.value()
-            block.instructions.append(ir.Const(value, "bool", bool(node.value)))
+            self.emit(block, ir.Const(value, "bool", bool(node.value)))
             return value, "bool", block
         if isinstance(node, String):
             value = self.value()
-            block.instructions.append(ir.Str(value, node.value))
+            self.emit(block, ir.Str(value, node.value))
             return value, "str", block
         if isinstance(node, Variable):
             if node.name not in env:
@@ -152,13 +170,13 @@ class Builder:
                 if typ != "i64":
                     raise Refused(f"unary '-' on a {typ}", node.loc)
                 value = self.value()
-                block.instructions.append(ir.Neg(value, operand))
+                self.emit(block, ir.Neg(value, operand))
                 return value, "i64", block
             if node.op == "!":
                 if typ != "bool":
                     raise Refused(f"'!' on a {typ}", node.loc)
                 value = self.value()
-                block.instructions.append(ir.Not(value, operand))
+                self.emit(block, ir.Not(value, operand))
                 return value, "bool", block
             raise Refused(f"the unary operator '{node.op}'", node.loc)
         if isinstance(node, Binary):
@@ -180,7 +198,7 @@ class Builder:
                 raise Refused(f"'{node.op}' on {left_type}s", node.loc)
             value = self.value()
             opcode = {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod"}[node.op]
-            block.instructions.append(ir.Bin(value, opcode, left, right))
+            self.emit(block, ir.Bin(value, opcode, left, right))
             return value, "i64", block
         if node.op in ("==", "!=", "<", "<=", ">", ">="):
             if left_type not in ("i64", "bool"):
@@ -188,7 +206,7 @@ class Builder:
             value = self.value()
             opcode = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le",
                       ">": "gt", ">=": "ge"}[node.op]
-            block.instructions.append(ir.Cmp(value, opcode, left, right))
+            self.emit(block, ir.Cmp(value, opcode, left, right))
             return value, "bool", block
         raise Refused(f"the operator '{node.op}'", node.loc)
 
@@ -202,46 +220,58 @@ class Builder:
         result = join.params[0][0]
         if node.op == "&&":
             short = self.bool_constant(block, False)
-            block.instructions.append(
+            self.emit(block,
                 ir.Branch(left, right_block.label, [], join.label, [short]))
         else:
             short = self.bool_constant(block, True)
-            block.instructions.append(
+            self.emit(block,
                 ir.Branch(left, join.label, [short], right_block.label, []))
         right, right_type, right_block = self.expression(node.right, right_block, env)
         if right_type != "bool":
             raise Refused(f"'{node.op}' on a {right_type}", node.loc)
-        right_block.instructions.append(ir.Jump(join.label, [right]))
+        self.emit(right_block, ir.Jump(join.label, [right]))
         return result, "bool", join
 
     def bool_constant(self, block: ir.Block, payload: bool) -> str:
         value = self.value()
-        block.instructions.append(ir.Const(value, "bool", payload))
+        self.emit(block, ir.Const(value, "bool", payload))
         return value
 
     def call(self, node: Call, block: ir.Block, env: dict):
-        if node.module:
-            raise Refused(f"a call into the module '{node.module}'", node.loc)
-        if node.name == "print":
-            if len(node.args) != 1:
-                raise Refused("print with more than one argument", node.loc)
-            operand, typ, block = self.expression(node.args[0], block, env)
-            if typ not in PRINTABLE:
-                raise Refused(f"printing a {typ}", node.loc)
-            block.instructions.append(ir.Print(operand, typ))
-            return "", "void", block
-        if node.name in ("read_i64", "read_f64"):
-            raise Refused(f"the builtin '{node.name}'", node.loc)
-        if node.name not in self.signatures:
+        """A call to a declared function, wherever it is declared.
+
+        The checker has already resolved `node.target`, so the native backend does not
+        repeat the name lookup — and a call it cannot make is refused here, with the
+        function named, rather than resolved to something else.
+        """
+        if node.callee is not None:
+            raise Refused("a call through a function value", node.loc)
+        if node.target is None:
+            if node.name == "print":
+                if len(node.args) != 1:
+                    raise Refused("print with more than one argument", node.loc)
+                operand, typ, block = self.expression(node.args[0], block, env)
+                if typ not in PRINTABLE:
+                    raise Refused(f"printing a {typ}", node.loc)
+                self.emit(block, ir.Print(operand, typ))
+                return "", "void", block
+            if node.module:
+                raise Refused(f"a call into the module '{node.module}'", node.loc)
             raise Refused(f"a call to '{node.name}'", node.loc)
+        target = node.target
+        if target.type_params or node.type_args is not None:
+            raise Refused(f"the generic function '{target.qualified}'", node.loc)
+        if target.returns not in ("i64", "bool", "str", "void"):
+            raise Refused(
+                f"a call to '{target.qualified}', which returns {target.returns}",
+                node.loc)
         arguments: list[str] = []
         for argument in node.args:
             value, _typ, block = self.expression(argument, block, env)
             arguments.append(value)
-        returns = self.signatures[node.name]
         value = self.value()
-        block.instructions.append(ir.Call(value, node.name, arguments, returns))
-        return value, returns, block
+        self.emit(block, ir.Call(value, ir.symbol(target), arguments, target.returns))
+        return value, target.returns, block
 
     # -- statements ----------------------------------------------------------
     def statements(self, body, block: ir.Block, env: dict) -> ir.Block:
@@ -255,6 +285,8 @@ class Builder:
         return block
 
     def statement(self, statement, block: ir.Block, env: dict) -> ir.Block:
+        if getattr(statement, "loc", None) is not None:
+            self.loc = statement.loc
         if isinstance(statement, Let):
             value, typ, block = self.expression(statement.value, block, env)
             env[statement.name] = (value, typ)
@@ -279,14 +311,14 @@ class Builder:
             return self.for_statement(statement, block, env)
         if isinstance(statement, Return):
             if statement.value is None:
-                block.instructions.append(ir.Ret(None))
+                self.emit(block, ir.Ret(None))
                 return block
             value, _typ, block = self.expression(statement.value, block, env)
-            block.instructions.append(ir.Ret(value))
+            self.emit(block, ir.Ret(value))
             return block
         if isinstance(statement, Break):
             loop = self.find_loop(statement.label, statement.loc)
-            block.instructions.append(
+            self.emit(block,
                 ir.Jump(loop.exit_label, [env[name][0] for name in loop.names]))
             return block
         if isinstance(statement, Continue):
@@ -317,21 +349,21 @@ class Builder:
         else_block = (self.block("if_else", [(self.value(), env[name][1]) for name in names])
                       if statement.else_body else None)
         join = self.block("if_join", [(self.value(), env[name][1]) for name in names])
-        block.instructions.append(ir.Branch(
+        self.emit(block, ir.Branch(
             condition, then_block.label, [env[name][0] for name in names],
             (else_block or join).label, [env[name][0] for name in names]))
         then_env = {**env, **{name: (then_block.params[index][0], env[name][1])
                               for index, name in enumerate(names)}}
         tail = self.statements(statement.then_body, then_block, then_env)
         if tail.terminator is None:
-            tail.instructions.append(ir.Jump(join.label,
+            self.emit(tail, ir.Jump(join.label,
                                              [then_env[name][0] for name in names]))
         if else_block is not None:
             else_env = {**env, **{name: (else_block.params[index][0], env[name][1])
                                   for index, name in enumerate(names)}}
             tail = self.statements(statement.else_body, else_block, else_env)
             if tail.terminator is None:
-                tail.instructions.append(ir.Jump(join.label,
+                self.emit(tail, ir.Jump(join.label,
                                                  [else_env[name][0] for name in names]))
         for index, name in enumerate(names):
             env[name] = (join.params[index][0], env[name][1])
@@ -342,7 +374,7 @@ class Builder:
         header = self.block("while_head", [(self.value(), env[name][1]) for name in names])
         exit_block = self.block("while_exit", [(self.value(), env[name][1]) for name in names])
         body_block = self.block("while_body")
-        block.instructions.append(ir.Jump(header.label, [env[name][0] for name in names]))
+        self.emit(block, ir.Jump(header.label, [env[name][0] for name in names]))
         header_env = {**env, **{name: (header.params[index][0], env[name][1])
                                 for index, name in enumerate(names)}}
         condition, condition_type, header = self.expression(statement.condition, header,
@@ -352,12 +384,12 @@ class Builder:
         # The exit edge carries the values the header holds at the test: leaving a
         # loop normally is not a `break`, and the exit block is what the code after the
         # loop reads.
-        header.instructions.append(ir.Branch(
+        self.emit(header, ir.Branch(
             condition, body_block.label, [], exit_block.label,
             [header_env[name][0] for name in names]))
 
         def back_edge(builder, current: ir.Block, current_env: dict) -> ir.Block:
-            current.instructions.append(
+            self.emit(current,
                 ir.Jump(header.label, [current_env[name][0] for name in names]))
             return current
 
@@ -396,23 +428,23 @@ class Builder:
                             + [(self.value(), env[name][1]) for name in names])
         exit_block = self.block("for_exit", [(self.value(), env[name][1]) for name in names])
         body_block = self.block("for_body")
-        block.instructions.append(ir.Jump(header.label, [start, *[env[name][0] for name in names]]))
+        self.emit(block, ir.Jump(header.label, [start, *[env[name][0] for name in names]]))
         header_env = {**env, statement.name: (header.params[0][0], "i64")}
         for index, name in enumerate(names):
             header_env[name] = (header.params[index + 1][0], env[name][1])
         condition = self.value()
-        header.instructions.append(ir.Cmp(condition, "lt", header.params[0][0], end))
-        header.instructions.append(ir.Branch(condition, body_block.label, [],
+        self.emit(header, ir.Cmp(condition, "lt", header.params[0][0], end))
+        self.emit(header, ir.Branch(condition, body_block.label, [],
                                              exit_block.label,
                                              [header_env[name][0] for name in names]))
 
         def back_edge(builder, current: ir.Block, current_env: dict) -> ir.Block:
             one = builder.value()
-            current.instructions.append(ir.Const(one, "i64", 1))
+            self.emit(current, ir.Const(one, "i64", 1))
             next_index = builder.value()
-            current.instructions.append(ir.Bin(next_index, "add",
+            self.emit(current, ir.Bin(next_index, "add",
                                                current_env[statement.name][0], one))
-            current.instructions.append(
+            self.emit(current,
                 ir.Jump(header.label,
                         [next_index, *[current_env[name][0] for name in names]]))
             return current
@@ -435,17 +467,87 @@ class Builder:
         return exit_block
 
 
-def lower(program: Program) -> ir.Module:
-    """Lower a checked program to IR, or refuse with `E0901` naming the construct."""
-    signatures: dict[str, str] = {}
-    for function in program.functions:
-        if not function.module:
-            signatures[function.name] = function.returns
-    functions: list[ir.Function] = []
-    for function in program.functions:
-        if function.module:
+def _is_node(value) -> bool:
+    """True for an AST node: everything the parser builds lives in `model`."""
+    return type(value).__module__ == "nava_lang.model"
+
+
+def calls_in(body) -> list:
+    """Every declared function the body calls, in source order, without duplicates.
+
+    The walk is over the node's own fields, so a construct this backend does not
+    implement is still walked — it is the construct, not its callees, that will be
+    refused, and refusing it is what keeps the report about the right line.
+    """
+    found: list = []
+    #: A node graph is not a tree: `Call.target` points at the function being called,
+    #: whose body contains the call. Visiting each node once is what makes the walk
+    #: terminate, and a set of visited ids is cheaper than knowing which fields to
+    #: skip.
+    seen: set[int] = set()
+
+    def visit(node) -> None:
+        if id(node) in seen:
+            return
+        seen.add(id(node))
+        if isinstance(node, Call) and node.target is not None:
+            found.append(node.target)
+        for value in vars(node).values():
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    if _is_node(item):
+                        visit(item)
+            elif _is_node(value):
+                visit(value)
+
+    for statement in body:
+        visit(statement)
+    return found
+
+
+def reachable(program: Program):
+    """`main` and everything it can call, in the order the source declares them.
+
+    A function nothing calls is not compiled, and that is a semantic decision rather
+    than an optimisation: a standard-library module is full of functions no program
+    uses, and refusing to compile the ones it does use is the point — refusing the
+    ones it does not use would make the backend reject programs it can compile.
+    """
+    main = next((function for function in program.functions
+                 if function.name == "main" and not function.module), None)
+    if main is None:
+        # Unreachable through the compiler: the checker requires `fn main()` before a
+        # backend is called (E0303). It is asserted rather than given a diagnostic
+        # code, because a code no program can produce is a code nothing tests.
+        raise AssertionError("lower() was called on a program without fn main()")
+    reached: set[int] = set()
+    stack = [main]
+    while stack:
+        function = stack.pop()
+        if id(function) in reached:
             continue
-        builder = Builder(function, signatures)
+        reached.add(id(function))
+        stack.extend(calls_in(function.body))
+    # The order the source declares them in, not the order the walk found them: the
+    # IR dump and the object file then read like the program does, and two runs of
+    # the compiler cannot disagree about it.
+    return [function for function in program.functions if id(function) in reached]
+
+
+def lower(program: Program) -> ir.Module:
+    """Lower every function `main` can reach, or refuse with `E0901` naming it."""
+    functions: list[ir.Function] = []
+    for function in reachable(program):
+        if function.type_params:
+            raise make(
+                "E0901",
+                f"the native backend does not implement the generic function "
+                f"'{function.qualified}'",
+                function.loc,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
+        builder = Builder(function)
         entry = builder.block("entry")
         env: dict[str, tuple[str, str]] = {}
         for param in function.params:
@@ -453,7 +555,7 @@ def lower(program: Program) -> ir.Module:
                 raise make(
                     "E0901",
                     f"the native backend does not implement a parameter of type "
-                    f"{param.typ} (in '{function.name}')",
+                    f"{param.typ} (in '{function.qualified}')",
                     param.loc,
                     hint="build with the C backend (the default), or pass a number "
                          "or a bool",
@@ -465,24 +567,21 @@ def lower(program: Program) -> ir.Module:
             tail = builder.statements(function.body, entry, env)
             if tail.terminator is None:
                 if function.returns == "void":
-                    tail.instructions.append(ir.Ret(None))
+                    builder.emit(tail, ir.Ret(None))
                 else:
-                    raise Refused(f"a path in '{function.name}' that does not return",
+                    raise Refused(f"a path in '{function.qualified}' that does not return",
                                   function.loc)
         except Refused as refusal:
             raise make(
                 "E0901",
                 f"the native backend does not implement {refusal.what} "
-                f"(in '{function.name}')",
+                f"(in '{function.qualified}')",
                 refusal.loc,
                 hint="build with the C backend (the default): `nava build` without "
                      "--backend native",
             ) from None
-        functions.append(ir.Function(function.name, builder.params, function.returns,
-                                     builder.blocks))
-    if "main" not in signatures:
-        # Unreachable through the compiler: the checker requires `fn main()` before a
-        # backend is called (E0303). It is asserted rather than given a diagnostic
-        # code, because a code no program can produce is a code nothing tests.
-        raise AssertionError("lower() was called on a program without fn main()")
+        functions.append(ir.Function(
+            function.name, builder.params, function.returns, builder.blocks,
+            module=function.module, lines=builder.lines,
+            decl_line=builder.decl_line))
     return ir.Module(functions)

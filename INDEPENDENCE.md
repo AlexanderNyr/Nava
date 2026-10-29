@@ -1331,6 +1331,12 @@ this is the largest single piece of engineering in the plan.
   tables for diagnostics and traces, and a read-only `readelf`-equivalent of our
   own used by the tests.
 
+**N14c — one IR, two backends** (added by N14b, see its record)
+
+- `cgen.py` rewritten as a lowering of the shared IR. This is the plan's original
+  N14a item, and it is a milestone of its own: the IR today covers the subset the
+  native backend compiles, and the C backend consumes the whole language.
+
 **Test gate**
 
 - Behavioural differential against the C backend over the entire corpus: exit
@@ -1351,7 +1357,8 @@ the differential records.
 | Increment | Scope | State |
 |---|---|---|
 | N14a | **One translation unit**: a linear SSA-shaped IR with block parameters (`nava_lang/native/ir.py`) and its lowering from the checked AST (`lower.py`), an instruction encoder and two-pass assembler written in the project (`x86.py`), x86-64 code generation with checked arithmetic (`x86_64.py`), an ELF writer with two `PT_LOAD` segments (`elf64.py`), a syscall-only runtime, `nava build --backend native` and `nava emit-ir` | **Delivered** (record below) |
-| N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `cgen.py` rewritten as a lowering of the shared IR | specified |
+| N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
+| N14c | **One IR, two backends**: `cgen.py` rewritten as a lowering of the shared IR, which first requires the IR to cover the whole language — arrays, `String`, `Vec`, structs, enums, `defer`, `?`, generics and the builtins | specified |
 
 #### Delivery record N14a (2026-10-29)
 
@@ -1401,6 +1408,69 @@ silently. **No speed claim**: there is no register allocator and every value is 
 slot, exactly as the plan's risk R2 predicts, and no benchmark number is quoted
 because none was measured. **No change to the support matrix**: the native backend is
 Linux x86-64 only, and macOS and Windows stay *expected, not exercised*.
+
+#### Delivery record N14b (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| **Two files, two units, one executable** | `NativeModuleTests.test_a_program_in_two_files_prints_the_same_through_both_backends` | a program of two files — `main.nv` importing `helper`, calling `helper::label()` and `helper::double(21)` — prints `helper\n42\n`, exits 6, and does so identically through both backends. The entry unit refers to `nava.helper.double` and `nava.helper.label` **by name**, and the linker is what turns those names into addresses: this is the test the single-unit N14a backend could not have passed |
+| A unit states what it defines and what it leaves to the linker | `NativeUnitTests` | one unit per module plus one for the runtime; a function's link-time name is `nava.<module>.<name>` (`nava.entry.main` for the entry file), every other label is private and qualified by its unit and its section, and the helper module's only reference outside itself is `nv_fail` — the trap path, which checked arithmetic needs |
+| References are relocations, not guesses | `test_a_reference_every_unit_cannot_resolve_is_a_relocation`, `test_every_call_is_a_relocation_because_a_call_names_its_callee` | a call, a string literal and the line table become `pc32`/`abs64` relocations; a **block label never leaves its function**, because a jump is a distance and a call is a name. That split is the assembler's whole rule |
+| **The linker refuses what it cannot resolve** | `NativeLinkerTests.test_an_undefined_symbol_is_refused_by_name`, `test_a_missing_entry_point_is_refused`, `test_two_units_with_one_name_are_refused` | a reference nothing defines stops the link with the symbol named (`nobody.defines.this`); a missing `_start` is named; two units with one name is an error, not a merge. Never a zeroed field: a zeroed call is a jump into nothing that runs |
+| The line table cannot change size between passes | `test_the_line_table_is_the_same_size_in_both_passes` | the size pass and the filling pass agree because the record's pointers are offsets **from the table's first byte**: a size that depended on an address would let the second pass move the thing it was measuring |
+| **The file carries its own account of itself** | `NativeELFTests.test_the_file_is_a_static_x86_64_executable`, `test_the_sections_and_the_symbol_table_say_what_was_linked` | `ET_EXEC`, x86-64, three `PT_LOAD` segments — the headers and `.text` read-execute, `.rodata` and `.nava.lines` read-only, `.data` read-write — each mapped at a page with `offset mod page == address mod page`; sections `.text`, `.rodata`, `.nava.lines`, `.data`, `.symtab`, `.strtab`, `.shstrtab`; a **null symbol first** and `_start`, every function sized and typed `func`; no `INTERP` segment and no `ld-linux` string |
+| **Our reader is a second witness, not a rubber stamp** | `NativeReaderTests.test_the_reader_and_readelf_agree_about_the_header_and_the_segments`, `test_the_reader_and_nm_agree_about_every_symbol` | the entry point, all three segments (offset, address, size, flags, alignment) and every symbol (name, value, binding, section) are compared with `readelf` and `nm` and agree. The test **fails rather than skips** when binutils is absent: a file the tools cannot read is a file nobody can debug |
+| A malformed file is refused, not guessed at | `test_a_truncated_file_is_rejected_rather_than_guessed_at`, `test_something_that_is_not_an_executable_is_rejected`, `test_the_reader_reads_what_our_writer_wrote_and_nothing_else` | six truncation lengths, four non-ELF payloads, a broken line-table magic and a section that runs past the end of the file are all `Malformed`. The reader pads nothing and falls back to nothing |
+| **A trap says where it happened** | `NativeTraceTests.test_the_variable_adds_a_frame_for_every_caller_from_the_innermost_out` | with `NAVA_TRACE` set, a division by zero two calls down prints the message and then `scale`, `report`, `main` innermost first, each with its file and line. Every printed line is checked against the line table the *reader* parses, so the trace is not asserted from memory: two independent implementations of the same format have to agree |
+| **And says nothing when it is not asked** | `test_without_the_variable_a_trap_prints_exactly_the_message`, `test_a_trace_stops_at_the_bottom_of_the_stack` | without the variable, stderr is exactly `nava runtime error: division by zero\n` and the status is 1. A trace that always printed would make every trap a difference between the two backends and quietly destroy the differential below it |
+| `nava run --backend native` | `NativeCommandTests.test_run_compiles_with_the_native_backend_when_asked`, `test_run_refuses_the_c_build_options_with_the_native_backend` | the same program through `run` and through `run --backend native` gives the same stdout and the same exit status (7 — the program's own return value), both under the sandbox with the same isolation policy, limits and timeout; `--cc` and `--opt` are `E0903` with a hint that names `nava run` |
+| Determinism, still, and now with a sharper test | `NativeELFTests.test_two_builds_of_one_source_are_the_same_bytes` | two builds in two directories are one file; the **name** of the source is in the line table (a line table that cannot name its file is useless) and the **directory** is not. This is the second half of N12's determinism gate, *across backends* |
+| The subset grew, and only where it had to | `NativeModuleTests`, `NativeRefusalTests` | a call into another module and a call returning `str` are compilable (a `str` is a pointer and travels like one); a call through a function value, a generic function and everything outside the subset are still `E0901`, naming the construct and the reaching function. Only the functions `main` can reach are compiled, so importing a module does not mean compiling all of it — and a refusal now names a function that really is in the program's call graph |
+| The specification moved with the code | `LANGUAGE.md` (`## The native backend`, the line table and the trace, the code table) | three segments with their permissions, the sections and symbols, the trace variable and its format, `nava run --backend native`, the reachability rule and the subset's change are normative. The code table stays at **173** codes: the trace is an environment variable, not a diagnostic, and an undefined symbol is an internal invariant the linker refuses with a `LinkError` rather than something a program can cause |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py`, `tests/test_plan.py: tree_audit` | **15 721 lines, 26 modules, 560 functions** (14 297 / 23 / 498 at N14a): six modules and 62 functions, and the modules are the ones this increment is made of — `unit`, `linker`, `reader` and the split generator. R1 in §5 updated with them |
+| The overhead record was re-measured rather than assumed unchanged | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, the same number as N14a and for a stated reason: the model-facing guide is unchanged, because `--backend native` is a build flag and `NAVA_TRACE` is not part of the language |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 916 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 173 diagnostic codes`; suite **986 tests OK** (1 559 subtests); release checks OK; the guide digest verifies |
+
+Negative controls: a deliberately **truncated** ELF is rejected by our own reader; a file
+that is not an ELF, a line table whose magic is wrong and a section that runs past the
+end of the file are rejected the same way; a unit that references a symbol nothing
+defines is refused **by name**; two units with one name are refused; and a trap without
+`NAVA_TRACE` prints exactly the message — the control that keeps the trace from
+becoming a difference between the two backends.
+
+Real defects this increment's tests found, all of them in code written in this
+increment: a **symbol table without the null symbol** — `readelf -s` printed it while
+`nm` answered "no symbols", because the tools skip entry zero; **`SHF_*` copied into
+`PF_*`** — the first `segments()` produced a segment that was writable *and* executable
+and the file segfaulted before printing anything, because `SHF_WRITE` is 1 and `PF_X` is
+1; **the line table's pointers** — the writer recorded offsets while the runtime read
+them as absolute addresses, so the trace walked to address `0xa0` and died, and the
+reader had the same misreading in the same format, which is why the format is now
+written down in `linker.py` and why the trace test compares against the reader rather
+than against a string written by hand; **`argc` read from a moved `rsp`** in the
+environment scan, which segfaulted the moment `NAVA_TRACE` was set; and **the
+determinism test itself**, which built one source under two names and therefore proved
+the wrong thing — the file's name is part of the program, the directory is not.
+
+What this increment does **not** claim: that `cgen.py` is a lowering of the shared IR.
+It is not, and the plan's item is now recorded as **N14c** rather than quietly declared
+done. The reason is a dependency, not an omission: the IR covers the subset the native
+backend compiles, and making the C backend *consume* it requires the IR to cover the
+whole language — arrays, `String`, `Vec`, structs, enums, `defer`, `?`, generics and the
+builtins — which is a milestone of its own. Until then the differential is between two
+independent lowerings: stricter than the plan asked for about agreement (a lowering bug
+on either side is visible), and silent about whether the C side could consume the IR at
+all.
+
+Also not done in N14b, and why: **the `mmap`-backed arena, `read` and the collections**
+that N14a's task list names — every feature they serve is still refused, so they would
+be code with no client; they arrive with the IR that covers arrays. **No register
+allocator and no speed claim**: every value is still a frame slot, exactly as R2
+predicts, and no benchmark number is quoted because none was measured. **`nava
+reproduce` and `--record` stay C-only**: a record describes a C toolchain, and inventing
+a toolchain section for a build that has none would be the provenance claim `E0903`
+exists to refuse. **No change to the support matrix**: the native backend is Linux
+x86-64 only, and macOS and Windows remain *expected, not exercised*.
 
 ---
 
@@ -1554,7 +1624,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 14 297 Python lines and 498 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 15 721 Python lines and 560 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

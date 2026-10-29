@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+N14b: **whole programs** — the native backend links, names what it links, and can
+say where a program died.
+
+- A module is a **unit**: its code, its constant data, its writable data, the symbols
+  it defines and the references it cannot resolve. A function's link-time name is
+  `nava.<module>.<name>`, so two modules may each define `abs`; every other label is
+  private and named after its unit.
+- A **static linker** puts the units in one file and resolves their references. A
+  reference nothing defines stops the link with the name of the symbol — never a
+  zeroed field, which is a jump into nothing that runs.
+- The executable carries `.text`, `.rodata`, `.nava.lines`, `.data`, `.symtab`,
+  `.strtab` and section headers, so `nm` and `readelf` read it: a program several
+  files long, one executable, and a reader of our own (`nava_lang/native/reader.py`)
+  that parses it back and is compared with `readelf` and `nm` rather than believed.
+- **Line tables, and a trace**: with `NAVA_TRACE` set, a trap prints
+  `  at nava.entry.scale (prog.nv:2)` for every frame, innermost first. Without it,
+  the output is exactly the message, so the two backends stay comparable byte for
+  byte.
+- `nava run --backend native` builds and runs through the same sandbox as any other
+  run, with the same isolation, limits and timeout; `--cc` and `--opt` are `E0903`
+  there too.
+- A `str`-returning call and a call into another module are now compilable; only the
+  functions `main` can reach are compiled, so importing a module and calling one
+  function of it does not drag in the rest.
+- Two builds of one file in two directories are still the same bytes: the line table
+  names the file and never the path.
+
 N14a: **a second code generator** — Nava to x86-64 ELF, with no C compiler.
 
 - `nava build --backend native` writes a static x86-64 Linux executable itself: no

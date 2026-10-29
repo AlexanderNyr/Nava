@@ -1278,18 +1278,59 @@ REGISTERED_TESTS = {
     "NativeELFTests": {
         "test_the_binary_is_marked_executable_and_can_be_run_directly",
         "test_the_file_is_a_static_x86_64_executable",
+        "test_the_line_table_names_every_function_of_the_program",
+        "test_the_sections_and_the_symbol_table_say_what_was_linked",
         "test_two_builds_of_one_source_are_the_same_bytes",
     },
     "NativeCommandTests": {
         "test_build_needs_no_c_compiler_on_the_path",
         "test_emit_ir_refuses_a_construct_it_cannot_represent",
         "test_emit_ir_writes_the_same_text_to_stdout_and_to_a_file",
+        "test_run_compiles_with_the_native_backend_when_asked",
+        "test_run_refuses_the_c_build_options_with_the_native_backend",
         "test_the_json_report_names_the_backend",
     },
     "NativeRuntimeTests": {
         "test_a_bool_prints_as_true_or_false",
         "test_a_string_is_written_byte_for_byte_and_then_a_newline",
         "test_integers_are_written_in_decimal_including_the_extremes",
+    },
+    #: N14b: whole programs. A unit says what it defines and what it leaves to the
+    #: linker; the linker is tested on its own before it is trusted with a program;
+    #: two files, two units, one executable; our reader cross-checked against
+    #: `readelf` and `nm`; and the trace, whose silence when it is not asked for is
+    #: what keeps the two backends comparable.
+    "NativeUnitTests": {
+        "test_a_function_is_a_global_symbol_and_everything_else_is_private",
+        "test_a_reference_every_unit_cannot_resolve_is_a_relocation",
+        "test_every_call_is_a_relocation_because_a_call_names_its_callee",
+        "test_every_function_records_its_extent_and_its_lines_in_order",
+        "test_there_is_one_unit_per_module_and_one_for_the_runtime",
+    },
+    "NativeLinkerTests": {
+        "test_a_missing_entry_point_is_refused",
+        "test_an_undefined_symbol_is_refused_by_name",
+        "test_the_image_names_its_sections_its_entry_point_and_its_symbols",
+        "test_the_line_table_is_the_same_size_in_both_passes",
+        "test_two_units_with_one_name_are_refused",
+    },
+    "NativeModuleTests": {
+        "test_a_line_table_names_the_file_each_function_came_from",
+        "test_a_program_in_two_files_prints_the_same_through_both_backends",
+        "test_each_module_keeps_its_own_symbols",
+    },
+    "NativeReaderTests": {
+        "test_a_truncated_file_is_rejected_rather_than_guessed_at",
+        "test_something_that_is_not_an_executable_is_rejected",
+        "test_the_reader_and_nm_agree_about_every_symbol",
+        "test_the_reader_and_readelf_agree_about_the_header_and_the_segments",
+        "test_the_reader_names_the_function_and_the_line_of_an_address",
+        "test_the_reader_reads_what_our_writer_wrote_and_nothing_else",
+    },
+    "NativeTraceTests": {
+        "test_a_trace_stops_at_the_bottom_of_the_stack",
+        "test_the_variable_adds_a_frame_for_every_caller_from_the_innermost_out",
+        "test_without_the_variable_a_trap_prints_exactly_the_message",
     },
 }
 
@@ -1542,6 +1583,11 @@ def check_skip_state() -> list[str]:
     import test_native  # noqa: PLC0415
     for module, class_name in ((test_native, "NativeDifferentialTests"),
                                (test_native, "NativeRuntimeTests"),
+                               (test_native, "NativeUnitTests"),
+                               (test_native, "NativeLinkerTests"),
+                               (test_native, "NativeModuleTests"),
+                               (test_native, "NativeReaderTests"),
+                               (test_native, "NativeTraceTests"),
                                (test_reproducible, "ReproduceTests"),
                                (test_reproducible, "DifferenceTests"),
                                (test_reproducible, "CompareTests"),

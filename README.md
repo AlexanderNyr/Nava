@@ -183,6 +183,13 @@ python3 nava emit-c examples/gcd.nv -o gcd.c
 python3 nava build examples/fibonacci.nv -o ./fib --backend native
 ./fib
 
+# Or build and run it in one step, under the same sandbox as any other run.
+python3 nava run examples/fibonacci.nv --backend native
+
+# Ask for a traced trap: NAVA_TRACE makes a runtime error print the frames that
+# led to it, with the file and line of each, from the line table.
+NAVA_TRACE=1 ./fib
+
 # Print the IR the native backend consumes: blocks with parameters, one value
 # per instruction, jump/branch/ret terminators.
 python3 nava emit-ir examples/fibonacci.nv

@@ -1452,8 +1452,17 @@ and needs no C toolchain, no assembler and no linker:
 
 ```
 nava build prog.nv -o prog --backend native
+nava run prog.nv --backend native
 nava emit-ir prog.nv
 ```
+
+`nava run --backend native` writes the same executable and runs it under the same
+sandbox, with the same isolation policy, limits and timeout as any other run: the
+backend is not a way around the isolation `run` promises. A program may be several
+files; each module becomes its own **unit**, and a call from one module to another is a
+relocation the linker resolves rather than a name the generator hopes exists. Two
+modules may each define `abs`, because a function's link-time name is qualified by its
+module.
 
 `emit-ir` writes the intermediate representation both backends of the future share:
 
@@ -1484,16 +1493,23 @@ loop's carried values in its signature:
 The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `bool`,
 string literals, `+ - * / %` with the checks below, `== != < <= > >=`, `!`, `&&`, `||`
 with short-circuit evaluation, `if`/`else`, `while`, `for … in a..b`, `break`,
-`continue`, labelled jumps, calls (including recursion, up to six arguments) and
-`print` of an `i64`, a `bool` or a `str`. Everything else — `f64`, arrays, slices,
-`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`, calls
-into modules and every builtin — is refused with `E0901`, **naming the construct and
-the function**:
+`continue`, labelled jumps, calls (including recursion and calls into modules, up to six
+arguments), a call that returns a `str` (a `str` is a pointer, so it travels like one),
+and `print` of an `i64`, a `bool` or a `str`. Everything else — `f64`, arrays, slices,
+`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`, a call
+through a function value, a generic function and every builtin — is refused with
+`E0901`, **naming the construct and the function**:
 
 ```
 prog.nv:2:18: error[E0901]: the native backend does not implement a floating-point literal (in 'main')
   hint: build with the C backend (the default): `nava build` without --backend native
 ```
+
+Only the functions `main` can reach are compiled, which is why importing a module and
+calling one function of it works even though the module also holds functions this
+backend cannot compile: a function nothing calls cannot change what the program prints,
+and refusing it would be refusing a program the backend can in fact compile. A
+reachable function that uses something outside the subset is still refused, by name.
 
 A refusal is a gap in one backend, not a judgement about the program: the same file
 compiles through the C backend, and the suite asserts exactly that for every construct
@@ -1501,21 +1517,52 @@ the table names. What the backend cannot compile it never compiles *approximatel
 
 The options that describe a C build do not apply, and none of them is ignored:
 `--cc`, `--opt` and `--record` with `--backend native` are `E0903`, because a record
-that named no toolchain — or a build that reported an optimization level it never ran
-— would be a claim the build did not make. `nava run` still builds through C: running
-a native binary under the sandbox is the next step of the phase, not a flag that
-silently falls back.
+that named no toolchain — or a build that reported an optimization level it never ran —
+would be a claim the build did not make. `nava reproduce` is a C build by definition: it
+compares two builds of the C toolchain, and `SOURCE_DATE_EPOCH` is read before either
+backend starts, so an invalid value is refused whichever one runs.
 
-The executable is a static `ET_EXEC` file with two `PT_LOAD` segments — the headers
-and code, readable and executable; the data, readable and writable — mapped at fixed
-addresses, so there is no dynamic loader and no relocation at start-up. The runtime is
-`write` and `exit` and nothing else: printing an `i64` is a decimal conversion loop in
-machine code. Checked arithmetic traps through the same messages the C runtime prints,
-including `%`'s own `remainder by zero`, and a trap exits with status 1. The status of
-`main` is its return value modulo 256, as it is for every other build.
+The executable is a static `ET_EXEC` file — no dynamic loader, no relocation at
+start-up — with three `PT_LOAD` segments:
 
-Two builds of one source produce the same bytes: nothing in the file comes from the
-clock, the host or the path of the source.
+| Segment | Flags | Holds |
+|---|---|---|
+| the headers and `.text` | read, execute | the machine code |
+| `.rodata` and `.nava.lines` | read | string literals and the line tables |
+| `.data` | read, write | the number buffer and the trace flag |
+
+The file also carries `.symtab`, `.strtab` and section headers, so `nm` and `readelf`
+read it: `_start` and every function are symbols named `nava.<module>.<name>`, and a
+function's size is its own. That is not decoration — a trace, a profile and a debugger
+all need it, and a compiler that writes an executable nobody can read back has only
+moved the problem.
+
+The runtime is `write` and `exit` and nothing else: printing an `i64` is a decimal
+conversion loop in machine code. Checked arithmetic traps through the same messages the
+C runtime prints, including `%`'s own `remainder by zero`, and a trap exits with status
+1. The status of `main` is its return value modulo 256, as it is for every other build.
+
+### The line table and the trace
+
+Every function carries the source line of each instruction it is built from, and the
+linker writes them into `.nava.lines`. Nothing reads them unless a program asks: with
+`NAVA_TRACE` set in the environment, a trap prints its message and then the frames that
+led to it, innermost first,
+
+```
+nava runtime error: division by zero
+  at nava.entry.scale (prog.nv:2)
+  at nava.entry.report (prog.nv:6)
+  at nava.entry.main (prog.nv:11)
+```
+
+on `stderr`, and still exits 1. Without the variable the output is exactly the message,
+byte for byte, which is what keeps the two backends comparable: a trace that always
+printed would make every trap a difference between them.
+
+A line table names the *file*, never the path: two builds of one file in two directories
+are the same bytes. Nothing in the file comes from the clock, the host or the working
+directory.
 
 ## The clock
 
@@ -2927,6 +2974,11 @@ never changes meaning; a new condition gets a new code.
 |---|---|---|---|
 | `E0901` | error | the native backend does not implement this construct | `tests/test_native.py: test_a_construct_is_refused_by_name` |
 | `E0903` | error | the native backend does not implement this option | `tests/test_native.py: test_an_unknown_option_is_refused_rather_than_ignored` |
+
+`E0902` does not exist and there is no gap in the numbering to fill: the checker
+requires `fn main()` before a backend runs (`E0303`), so a "the native backend needs a
+main" code could never be produced, and a code that nothing can test is a code that does
+not exist.
 
 **Sandbox and isolation**
 
