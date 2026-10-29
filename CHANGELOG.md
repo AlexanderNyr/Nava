@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+N13a: **`nava.toml`** — a project has a manifest.
+
+- `[package]` (`name`, `version`, `edition`), `[build]` (`entry`, default
+  `main.nv`) and `[dependencies]` (`name = "constraint"`), read as a strict subset
+  of TOML: three tables, strings, integers, booleans, comments. An unknown table,
+  an unknown field, a repeated key or a value of the wrong shape is refused with a
+  code and a line, because a key that is skipped silently is a setting its author
+  believes is in force.
+- Version constraints: `1.2.3`/`=1.2.3` exact, `^1.2.3` to the next major,
+  `~1.2.3` to the next minor, `*` any — with the matching written down and tested
+  rather than assumed.
+- A project name and a dependency name may not be the name of a standard-library
+  module (`E0708`), and a name is a lower-case identifier of at most 64 characters
+  (`E0709`).
+- The manifest's `edition` must be the edition the entry file declares (`E0706`):
+  only one of the two is read by the compiler.
+- `nava project` describes the manifest (`--format json` for a document), and
+  `nava check|build|emit-c|run --project` takes the entry file and the project
+  root from it. Naming a source as well is `E0509`, not a guess.
+- Ten new diagnostic codes: `E0509` and `E0701`–`E0709`.
+
 N12i: **`time`** — the clock, and what `pure:` means when the answer moves.
 
 - Three readings and no way to set one: `time::now_seconds()`,

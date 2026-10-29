@@ -80,6 +80,25 @@ CODES_TESTED_ELSEWHERE = {
     # `nava doc` is the only command that reads modules rather than a program,
     # so its one diagnostic is covered by the contracts guard.
     "E0508": "tests/test_contracts.py: test_an_unknown_module_is_reported",
+    # The manifest's diagnostics need a `nava.toml` next to an entry file, which
+    # a single-file fixture cannot hold, so they are covered by the manifest's
+    # own test module.
+    "E0509": "tests/test_manifest.py: test_neither_a_source_nor_a_project_is_refused, "
+             "test_a_source_and_a_project_together_are_refused",
+    "E0701": "tests/test_manifest.py: test_no_manifest_anywhere_is_its_own_code",
+    "E0702": "tests/test_manifest.py: ParsingTests (repeated key, shapes outside the subset)",
+    "E0703": "tests/test_manifest.py: test_a_missing_required_field_is_its_own_code",
+    "E0704": "tests/test_manifest.py: test_an_unknown_table_is_refused, "
+             "test_an_unknown_field_is_refused_and_lists_the_known_ones",
+    "E0705": "tests/test_manifest.py: test_a_version_is_three_numbers, "
+             "test_a_constraint_needs_a_version_after_its_operator",
+    "E0706": "tests/test_manifest.py: test_an_edition_this_compiler_does_not_have_is_refused, "
+             "test_the_manifest_and_the_entry_must_agree_about_the_edition",
+    "E0707": "tests/test_manifest.py: test_the_entry_must_exist, "
+             "test_the_entry_may_not_leave_the_project",
+    "E0708": "tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name, "
+             "test_a_dependency_may_not_take_one_either",
+    "E0709": "tests/test_manifest.py: test_a_name_is_a_lower_case_identifier",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

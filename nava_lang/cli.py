@@ -127,6 +127,9 @@ def add_project_options(command: argparse.ArgumentParser) -> None:
     """Options shared by every command that compiles a project."""
     command.add_argument("--root", help="project root for module resolution "
                                         "(default: the directory of the source file)")
+    command.add_argument("--project", action="store_true",
+                         help="compile the entry named by nava.toml, found above the "
+                              "working directory or inside --root")
     command.add_argument("--allow-read", action="append", metavar="DIR",
                          help="permit read_file inside DIR (repeatable, no access by "
                               "default)")
@@ -173,6 +176,30 @@ def document_modules(names: list[str], out: Path | None) -> list[Path]:
     return written
 
 
+def resolve_source_argument(args: argparse.Namespace) -> Path:
+    """The entry file a command should compile: the one named, or the project's.
+
+    `--project` reads `nava.toml`, and the entry file and the project root both
+    come from it, so module resolution and the build agree about what the project
+    is. Naming a source as well is refused rather than guessed at: two answers to
+    "which program" is a question the caller did not mean to ask.
+    """
+    from . import manifest as manifest_module
+
+    if getattr(args, "project", False):
+        if args.source:
+            raise make("E0509", f"give a source file or --project, not both: "
+                                f"{args.source!r} and --project disagree")
+        project = manifest_module.resolve(args.root)
+        if not args.root:
+            args.root = str(project.root)
+        return project.entry_path
+    if not args.source:
+        raise make("E0509", "no source file: name one, or pass --project to compile "
+                            "the entry named by nava.toml")
+    return Path(args.source)
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nava",
@@ -188,14 +215,17 @@ def make_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     check_cmd = sub.add_parser("check", help="parse and type-check a source file")
-    check_cmd.add_argument("source")
+    check_cmd.add_argument("source", nargs="?",
+                        help="source file; omit it with --project")
     add_project_options(check_cmd)
     c_cmd = sub.add_parser("emit-c", help="emit portable C11 source")
-    c_cmd.add_argument("source")
+    c_cmd.add_argument("source", nargs="?",
+                        help="source file; omit it with --project")
     c_cmd.add_argument("-o", "--output", help="output path (default: stdout)")
     add_project_options(c_cmd)
     build = sub.add_parser("build", help="compile a native executable")
-    build.add_argument("source")
+    build.add_argument("source", nargs="?",
+                        help="source file; omit it with --project")
     build.add_argument("-o", "--output", required=True, help="executable path")
     build.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     build.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
@@ -211,6 +241,14 @@ def make_parser() -> argparse.ArgumentParser:
     doc_cmd.add_argument("--out", type=Path, metavar="DIR",
                          help="write one Markdown file per module into DIR "
                               "(default: stdout)")
+    project_cmd = sub.add_parser(
+        "project", help="read and check nava.toml",
+        description="Find nava.toml at or above a directory, check it and describe "
+                    "the project it declares. Nothing is compiled and nothing is "
+                    "downloaded.",
+    )
+    project_cmd.add_argument("path", nargs="?", help="directory to start from "
+                                                    "(default: the working directory)")
     run = sub.add_parser(
         "run", help="compile and execute a program",
         description="Compile and run a program. By default the program runs under the best "
@@ -218,7 +256,8 @@ def make_parser() -> argparse.ArgumentParser:
                     "rlimits only with a warning. `--isolation required` refuses to run "
                     "instead of falling back.",
     )
-    run.add_argument("source")
+    run.add_argument("source", nargs="?",
+                        help="source file; omit it with --project")
     run.add_argument("--timeout", type=positive_float, help="terminate the program after this many seconds")
     run.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     run.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
@@ -296,8 +335,32 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"nava: {exc.diagnostic.message}", file=sys.stderr)
             return 2
-    path = Path(args.source)
+    if args.command == "project":
+        # Like `doc`, the project command reads a file that is not a program, so
+        # it needs no `main` and no C compiler.
+        from . import manifest as manifest_module
+
+        try:
+            found = manifest_module.resolve(args.path)
+            if machine:
+                print(report_json(str(found.path), "ok", [],
+                                  manifest_module.summary_json(found)))
+            else:
+                sys.stdout.write(manifest_module.summarize(found))
+            return 0
+        except NavaError as exc:
+            where = str(Path(args.path or ".") / manifest_module.MANIFEST_NAME)
+            if machine:
+                print(report_json(where, "error", [exc.diagnostic]))
+            else:
+                print(f"nava: {exc.diagnostic.message}", file=sys.stderr)
+            return 2
+
+    # `path` is set before the `try` so the error handler has somewhere to point
+    # even when the failure is "you did not name a program".
+    path = Path(args.source) if args.source else Path(getattr(args, "root", None) or ".")
     try:
+        path = resolve_source_argument(args)
         try:
             source = path.read_text(encoding="utf-8")
         except UnicodeDecodeError as exc:

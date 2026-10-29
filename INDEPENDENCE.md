@@ -12,8 +12,9 @@ enums as values, arrays of every value), N11b (owning fields, with the copy and
 release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, the `str_*` text functions
 and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `Vec` or a `String`
 as a field, a payload or a type argument) and N11g (an element that owns storage)
-are delivered; N12 has begun with N12a (`HashMap`/`HashSet`) and N12b (doc blocks,
-`nava doc` and the contracts guard), and N13–N18 are not started.** The
+are delivered; N12 is complete through N12i (every module of the phase, with
+contracts, examples and tests), N13 has begun with N13a (`nava.toml`), and
+N13's remaining increments and N14–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -131,7 +132,7 @@ the guard, and the two implementations must agree on every entry.
 | N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
-| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
+| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a delivered; the lockfile, vendoring, digests and reproducible builds are not |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
@@ -1150,6 +1151,48 @@ rejected.
 
 **Deliverable:** the manifest, the lockfile, the vendoring story and the
 reproducibility records.
+
+| Increment | Scope | State |
+|---|---|---|
+| N13a | **`nava.toml`**: the manifest as a strict subset of TOML — `[package]`, `[build]`, `[dependencies]` — with names checked against the standard library, versions and constraints parsed and matched, the edition checked against the entry file, `nava project` to describe it and `--project` on the commands that compile | **Delivered** (record below) |
+| N13b | **The lockfile**: content-addressed digests, one line per resolved package, and the guard that refuses a lockfile that disagrees with the manifest | Not started |
+| N13c | **Vendoring and `--offline`**: packages live in the tree, by digest, and a substituted or corrupted package fails the build with a named error; the dependency graph is printed | Not started |
+| N13d | **Reproducible builds**: sorted iteration everywhere it reaches output, `SOURCE_DATE_EPOCH`, recorded toolchain identity, and two checkouts producing one byte-identical binary | Not started |
+
+#### Delivery record N13a (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A project has a manifest and the manifest is read | `nava_lang/manifest.py`, `nava project`, `tests/test_manifest.py` (29 tests) | `[package]` (name, version, edition), `[build]` (entry), `[dependencies]` (name = constraint); `nava project` prints `project demo 0.1.0`, `edition 2`, `entry src/main.nv` and one line per dependency, or the same document with `--format json` |
+| The manifest is read **strictly**, because a skipped key is a setting its author believes is in force | `ParsingTests` (10 tests) | three tables, four value shapes; an unknown table, an unknown field, a repeated key, a key before any table, an unquoted word, an inline table, an array where a string belongs, a float where an integer belongs, an unterminated string and text after a string are each `E0702`/`E0704` with the line that holds it. `edtion = 2` is `E0704`, never a silently absent `edition` |
+| A typo and an omission are different repairs, so they are different codes | `test_an_unknown_field_is_refused_and_lists_the_known_ones`, `test_a_missing_required_field_is_its_own_code` | `E0704` names the field and lists the ones the table has; `E0703` says which required field is absent |
+| Two names are checked against the world rather than the file | `NameAndVersionTests.test_a_package_may_not_take_a_standard_module_name`, `test_a_dependency_may_not_take_one_either` | a project called `math` and a dependency called `math` are both `E0708`, with the hint that the standard library provides the name. This is the phase's negative control — *a package that shadows a standard-library module is rejected* — placed where the mistake is made rather than where the loader would later refuse it (`E0360`) |
+| A version and a constraint mean what semantic versioning says | `test_a_version_is_three_numbers`, `test_constraints_match_what_semantic_versioning_says` (13 subcases) | `1.2.3`, `=1.2.3`, `^1.2.3` (up to but not including `2.0.0`), `~1.2.3` (up to but not including `1.3.0`) and `*`; `1`, `1.2`, `01.2.3`, `v1.2.3`, `1.2.x` and `^` are `E0705` with the line |
+| The edition is checked against the entry file, not kept as decoration | `ProjectTests.test_the_manifest_and_the_entry_must_agree_about_the_edition` | a manifest saying `edition = 2` over a file that declares edition 1 — and the reverse — are `E0706`, naming both numbers. Only one of the two is read by the compiler, so a disagreement is a build that does something other than what the manifest says |
+| The entry is inside the project and exists | `test_the_entry_must_exist`, `test_the_entry_may_not_leave_the_project` | `../main.nv`, `/etc/passwd`, `src/../../main.nv` and an empty entry are `E0707`, as is an entry file that is not there |
+| The manifest is found, or the search is reported | `test_the_manifest_is_found_in_a_parent_directory`, `test_no_manifest_anywhere_is_its_own_code` | a manifest three directories up is found and reported with its resolved path; with none anywhere the message names the directory the search started in (`E0701`) |
+| The commands that compile can take their entry from the project | `CommandTests.test_the_compiling_commands_take_their_entry_from_the_manifest` | `nava build --project`, `nava run --project` (prints `42`) and `nava check --project` all read `build.entry` and the project root from the manifest, so module resolution and the build agree about what the project is |
+| A question the caller did not mean to ask is refused | `test_a_source_and_a_project_together_are_refused`, `test_neither_a_source_nor_a_project_is_refused` | `nava check main.nv --project` is `E0509` "not both"; `nava check` with neither is `E0509` "no source file" |
+| The report is the same bytes twice | `test_the_json_report_is_byte_identical_between_two_runs`, `test_dependencies_keep_the_order_written_and_report_sorted` | two runs of `nava project --format json` in one directory produce identical documents; dependencies keep their written order in the manifest and are **reported sorted by name**, so nothing in the output depends on where a line sits in the file |
+| No single-file fixture could hold these diagnostics, and the guard is told so | `tests/test_spec.py: CODES_TESTED_ELSEWHERE`, `tests/registry.py: CODES_TESTED_ELSEWHERE` | the ten new codes are registered, documented in `LANGUAGE.md` with the test that produces them, and excused from the fixture rule with a pointer to `tests/test_manifest.py` — the same mechanism `nava doc`'s one code has used since N12b |
+| The specification moved with the code | `LANGUAGE.md` (`## Projects: nava.toml`, the code table) | the three tables, the four constraint forms, the strictness rules and the two commands are normative; the code table grows to **157** entries (147 at N12i), with a row for each of the ten |
+| The overhead record was re-measured rather than assumed unchanged | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, the same number as N12i and for a stated reason: the guide is unchanged by this increment, so the record is confirmed rather than assumed |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 11 324 lines, 15 modules, 354 functions — 642 lines and 25 functions more than N12i, and the fifteenth module is `manifest.py` itself |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 803 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 157 diagnostic codes`; suite **873 tests OK**; release checks OK; the guide digest verifies |
+
+Negative controls: `edtion = 2` (a typo that a lenient reader would take as an
+absent default), the project and the dependency named `math` (the phase's
+shadowing control), the manifest that disagrees with its entry file about the
+edition, and the entry that leaves the project.
+
+Deliberately not done in N13a, and why: the **lockfile, digests, vendoring,
+`--offline` and reproducible builds**. Each of them is a promise about a *package*,
+and a package does not exist until a manifest can name one and be believed; this
+increment is the part that can be finished and proved on its own, and every later
+one sits on the codes it registered. The **guide** was left alone on purpose: it is
+the model-facing description of writing one program, and a project manifest is a
+different question — a model that must write a program gains nothing from knowing
+that a manifest exists, and every sentence in the guide is paid for on every task.
 
 ---
 

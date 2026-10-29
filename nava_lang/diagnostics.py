@@ -16,6 +16,7 @@ E03xx   Type checking and semantic analysis
 E04xx   Resource limits (nesting, compiler recursion)
 E05xx   Command line and host environment
 E06xx   Sandbox and isolation
+E07xx   Projects, the manifest and packages
 W00xx   Warnings; never fatal
 ======  ====================================================================
 
@@ -186,6 +187,17 @@ CODES: dict[str, tuple[str, str]] = {
     "E0506": (Severity.ERROR, "directory does not exist"),
     "E0507": (Severity.ERROR, "path is not a directory"),
     "E0508": (Severity.ERROR, "no such module to document"),
+    "E0509": (Severity.ERROR, "no program to compile"),
+    # --- projects and the manifest -----------------------------------------
+    "E0701": (Severity.ERROR, "no nava.toml was found"),
+    "E0702": (Severity.ERROR, "malformed nava.toml"),
+    "E0703": (Severity.ERROR, "nava.toml is missing a required field"),
+    "E0704": (Severity.ERROR, "unknown field in nava.toml"),
+    "E0705": (Severity.ERROR, "invalid version or version constraint"),
+    "E0706": (Severity.ERROR, "edition disagreement"),
+    "E0707": (Severity.ERROR, "unusable build entry"),
+    "E0708": (Severity.ERROR, "a package shadows a standard-library module"),
+    "E0709": (Severity.ERROR, "invalid package name"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),

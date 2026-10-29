@@ -210,6 +210,49 @@ REGISTERED_TESTS = {
         "test_a_wrapper_cannot_be_named_like_the_builtin_it_wraps",
         "test_the_module_reaches_the_clock_under_its_own_names",
     },
+    #: N13a: `nava.toml`. The manifest's diagnostics need a manifest next to an
+    #: entry file, which no single-file fixture can carry, so this module is where
+    #: `E0701`–`E0709` and `E0509` are exercised: strict reading of a TOML subset,
+    #: names checked against the standard library, the edition checked against the
+    #: entry file, the two commands that use it, and a report that is the same
+    #: bytes twice.
+    "ParsingTests": {
+        "test_a_valid_manifest_is_read_whole",
+        "test_comments_blank_lines_and_the_default_entry",
+        "test_dependencies_keep_the_order_written_and_report_sorted",
+        "test_an_unknown_table_is_refused",
+        "test_an_unknown_field_is_refused_and_lists_the_known_ones",
+        "test_a_repeated_key_is_refused",
+        "test_a_key_before_any_table_is_refused",
+        "test_shapes_outside_the_subset_are_refused",
+        "test_a_field_of_the_wrong_shape_is_refused",
+        "test_a_missing_required_field_is_its_own_code",
+    },
+    "NameAndVersionTests": {
+        "test_a_package_may_not_take_a_standard_module_name",
+        "test_a_dependency_may_not_take_one_either",
+        "test_a_name_is_a_lower_case_identifier",
+        "test_a_version_is_three_numbers",
+        "test_constraints_match_what_semantic_versioning_says",
+        "test_a_constraint_needs_a_version_after_its_operator",
+        "test_an_edition_this_compiler_does_not_have_is_refused",
+    },
+    "ProjectTests": {
+        "test_the_entry_must_exist",
+        "test_the_entry_may_not_leave_the_project",
+        "test_the_manifest_and_the_entry_must_agree_about_the_edition",
+        "test_the_manifest_is_found_in_a_parent_directory",
+        "test_no_manifest_anywhere_is_its_own_code",
+    },
+    "CommandTests": {
+        "test_the_project_command_describes_the_manifest",
+        "test_the_json_report_is_byte_identical_between_two_runs",
+        "test_a_broken_manifest_is_reported_with_its_code",
+        "test_without_a_manifest_the_command_says_where_it_looked",
+        "test_the_compiling_commands_take_their_entry_from_the_manifest",
+        "test_a_source_and_a_project_together_are_refused",
+        "test_neither_a_source_nor_a_project_is_refused",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1166,6 +1209,18 @@ CODES_TESTED_ELSEWHERE = {
     # `nava doc` is the only command that reads modules rather than a program,
     # so its one diagnostic is covered by the contracts guard.
     "E0508": "tests/test_contracts.py: test_an_unknown_module_is_reported",
+    # The manifest's diagnostics need a `nava.toml` beside an entry file, which a
+    # single-file fixture cannot hold: they are covered by tests/test_manifest.py.
+    "E0509": "tests/test_manifest.py: CommandTests",
+    "E0701": "tests/test_manifest.py: test_no_manifest_anywhere_is_its_own_code",
+    "E0702": "tests/test_manifest.py: ParsingTests",
+    "E0703": "tests/test_manifest.py: test_a_missing_required_field_is_its_own_code",
+    "E0704": "tests/test_manifest.py: test_an_unknown_table_is_refused",
+    "E0705": "tests/test_manifest.py: test_a_version_is_three_numbers",
+    "E0706": "tests/test_manifest.py: test_the_manifest_and_the_entry_must_agree_about_the_edition",
+    "E0707": "tests/test_manifest.py: test_the_entry_may_not_leave_the_project",
+    "E0708": "tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name",
+    "E0709": "tests/test_manifest.py: test_a_name_is_a_lower_case_identifier",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -1230,6 +1285,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_args  # noqa: PLC0415
     import test_collections  # noqa: PLC0415
     import test_time  # noqa: PLC0415
+    import test_manifest  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1239,6 +1295,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
                    test_io, test_fs, test_args, test_collections, test_time,
+                   test_manifest,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1313,7 +1370,12 @@ def check_skip_state() -> list[str]:
     import test_args  # noqa: PLC0415
     import test_collections  # noqa: PLC0415
     import test_time  # noqa: PLC0415
-    for module, class_name in ((test_time, "WallClockTests"),
+    import test_manifest  # noqa: PLC0415
+    for module, class_name in ((test_manifest, "ParsingTests"),
+                               (test_manifest, "NameAndVersionTests"),
+                               (test_manifest, "ProjectTests"),
+                               (test_manifest, "CommandTests"),
+                               (test_time, "WallClockTests"),
                                (test_time, "MonotonicClockTests"),
                                (test_time, "ArithmeticTests"),
                                (test_time, "GuardTests"),

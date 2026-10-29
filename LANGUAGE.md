@@ -1199,6 +1199,84 @@ answers differently in a run that was started differently. Nothing is cached:
 a program that asks twice gets the same answer within one run, and a different
 one in the next.
 
+## Projects: `nava.toml`
+
+A project is a directory with a manifest in it. The manifest is a small subset of
+TOML — three tables, strings, integers, booleans — and it says what the project is
+called, which edition it is written in, where its entry file is and what it
+depends on:
+
+```toml
+# demo project
+[package]
+name = "demo"
+version = "0.1.0"
+edition = 2
+
+[build]
+entry = "src/main.nv"
+
+[dependencies]
+json = "^1.2.3"
+```
+
+| Table | Fields | Meaning |
+|---|---|---|
+| `[package]` | `name`, `version`, `edition` | required; the name is a lower-case identifier, the version is `MAJOR.MINOR.PATCH`, the edition is `1` or `2` |
+| `[build]` | `entry` | the file the project starts from, relative to the manifest; defaults to `main.nv` |
+| `[dependencies]` | `name = "constraint"` | other projects this one needs, each with a version constraint |
+
+`nava project` finds the manifest at or above a directory, checks it and
+describes it; `--format json` prints the same information as a document.
+
+```
+$ nava project
+project demo 0.1.0
+edition 2
+entry src/main.nv
+dependencies 1
+  json ^1.2.3
+```
+
+`nava check`, `nava build`, `nava emit-c` and `nava run` take `--project` instead
+of a source file: the entry file and the project root then both come from the
+manifest, so module resolution and the build agree about what the project is.
+Naming a source as well is `E0509`, not a guess.
+
+A version constraint is one of four forms:
+
+| Constraint | Accepts |
+|---|---|
+| `1.2.3` or `=1.2.3` | exactly `1.2.3` |
+| `^1.2.3` | from `1.2.3` up to but not including `2.0.0` |
+| `~1.2.3` | from `1.2.3` up to but not including `1.3.0` |
+| `*` | any version |
+
+The manifest is read strictly, and that is the point rather than a detail:
+
+- an **unknown table or field** is `E0704`, so a misspelling is visible instead of
+  being read as an absent field with a default (`edtion = 2` is not `edition = 2`);
+- a **repeated key**, an unquoted word, an inline table, a float where an integer
+  belongs, a value of the wrong shape for its field and an unterminated string are
+  all `E0702`;
+- a **missing required field** is `E0703`, which is a different repair from a
+  typo, so it is a different code;
+- a **name** must be a lower-case identifier (`E0709`), must be at most 64
+  characters, and may not be the name of a standard-library module (`E0708`) —
+  neither may a dependency, because `math.nv` in the project would shadow the
+  standard `math` and the loader refuses that anyway (`E0360`);
+- the **entry file** must exist, must be inside the project (no `..`, no absolute
+  path) — `E0707`;
+- the **edition** in the manifest must be the edition the entry file declares:
+  a manifest saying `edition = 2` over a file that does not is `E0706`, because
+  only one of the two is read by the compiler and a manifest that can be wrong is
+  decoration.
+
+`nava.toml` is not a program: it has no dependencies to resolve yet in the sense
+the lockfile will give it, no digests and no vendoring. Those are the next
+increments of the phase; what exists now is the file, read strictly, and the two
+commands that use it.
+
 ## The clock
 
 Three builtins read the machine's clocks, and there is no way to set one:
@@ -2563,6 +2641,21 @@ never changes meaning; a new condition gets a new code.
 | `E0506` | error | directory does not exist | `tests/test_files.py: test_a_missing_grant_directory_is_reported` |
 | `E0507` | error | path is not a directory | `tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported` |
 | `E0508` | error | `nava doc` was asked for a module that does not exist | `tests/test_contracts.py: test_an_unknown_module_is_reported` |
+| `E0509` | error | no program to compile | `tests/test_manifest.py: test_neither_a_source_nor_a_project_is_refused` |
+
+**Projects and the manifest**
+
+| Code | Severity | Meaning | Triggered by |
+|---|---|---|---|
+| `E0701` | error | no `nava.toml` was found | `tests/test_manifest.py: test_no_manifest_anywhere_is_its_own_code` |
+| `E0702` | error | malformed `nava.toml` | `tests/test_manifest.py: test_shapes_outside_the_subset_are_refused` |
+| `E0703` | error | `nava.toml` is missing a required field | `tests/test_manifest.py: test_a_missing_required_field_is_its_own_code` |
+| `E0704` | error | unknown field in `nava.toml` | `tests/test_manifest.py: test_an_unknown_field_is_refused_and_lists_the_known_ones` |
+| `E0705` | error | invalid version or version constraint | `tests/test_manifest.py: test_a_version_is_three_numbers` |
+| `E0706` | error | edition disagreement | `tests/test_manifest.py: test_the_manifest_and_the_entry_must_agree_about_the_edition` |
+| `E0707` | error | unusable build entry | `tests/test_manifest.py: test_the_entry_may_not_leave_the_project` |
+| `E0708` | error | a package shadows a standard-library module | `tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name` |
+| `E0709` | error | invalid package name | `tests/test_manifest.py: test_a_name_is_a_lower_case_identifier` |
 
 **Sandbox and isolation**
 
