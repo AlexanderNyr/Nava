@@ -1,12 +1,21 @@
 """Checked AST → IR (PLAN.md N14a).
 
 This is the lowering the native backend consumes, and it is deliberately narrow:
-`i64`, `bool`, string literals, arithmetic, comparisons, `if`, `while`,
-`for … in a..b`, `break`/`continue`, function calls and `print`. Everything else —
-`f64`, arrays, slices, `Vec`, `String`, `HashMap`, `HashSet`, structs, enums,
-`match`, `defer`, `?`, module functions, the clock, the filesystem — is refused with
-`E0901` **naming the construct**, because the one thing a second backend must not do
-is compile a program it does not understand into something that runs.
+`i64`, `bool`, string literals, arrays of `i64`/`bool`/`str`, arithmetic,
+comparisons, `if`, `while`, `for … in a..b`, `for … in array`,
+`break`/`continue`, function calls and `print`. Everything else — `f64`, slices,
+`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`,
+module functions, the clock, the filesystem — is refused with `E0901` **naming the
+construct**, because the one thing a second backend must not do is compile a
+program it does not understand into something that runs.
+
+Arrays arrived with N14c and bring the first thing in this lowering that is not an
+SSA value: **ownership**. An array is a handle, and a handle has one owner; the
+owner is the binding a block declared, and the block gives it back through
+`release` when it is left — on the normal path, on `return`, and on a
+`break`/`continue` that leaves the block, innermost first. Nothing about that is a
+backend's decision: the C backend turns `release` into `free`, the native one
+turns it into nothing at all, and both are implementing the same instruction.
 
 Two properties matter more than the size of the subset:
 
@@ -27,13 +36,27 @@ from __future__ import annotations
 
 from ..diagnostics import make
 from ..model import (
-    Assign, Binary, Boolean, Break, Call, Continue, ExprStmt, For, Function, If, Let,
-    Number, Program, Range, Return, String, Unary, Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, ExprStmt, For,
+    Function, If, Index, IndexAssign, Let, Number, Program, Range, Return, String,
+    Unary, Variable, While,
 )
 from . import ir
 
 #: Types `print` can write in the native backend.
 PRINTABLE = ("i64", "bool", "str")
+#: The element types an array may hold here. A `Vec`, a struct or a slice is a
+#: different representation, and each arrives with its own increment.
+ELEMENT_TYPES = ("i64", "bool", "str")
+
+
+def is_array(typ: object) -> bool:
+    """Is this type a fixed-length array, `[T]`?"""
+    return isinstance(typ, str) and typ.startswith("[") and typ.endswith("]")
+
+
+def element_of(typ: str) -> str:
+    """`[i64]` -> `i64`."""
+    return typ[1:-1].strip()
 
 
 class Refused(Exception):
@@ -82,7 +105,9 @@ def assigned_names(body) -> set[str]:
         elif isinstance(statement, For):
             names |= assigned_names(statement.body)
             names.add(statement.name)
-        elif isinstance(statement, (Break, Continue, Return, ExprStmt)):
+        elif isinstance(statement, (Break, Continue, Return, ExprStmt, IndexAssign)):
+            # Nothing here binds a name: an element write changes storage that some
+            # other binding already owns, so there is nothing to carry across a join.
             continue
         else:
             raise Refused(describe(statement), getattr(statement, "loc", None))
@@ -93,12 +118,14 @@ class Loop:
     """Where a `break` and a `continue` go, and what a loop carries through them."""
 
     def __init__(self, exit_label: str, names: list[str], label: str | None = None,
-                 back_edge=None):
+                 back_edge=None, frame: int = 0):
         self.exit_label = exit_label
         self.names = names
         self.label = label
         #: Called at a `continue` with (block, env) to jump to the loop's next entry.
         self.back_edge = back_edge
+        #: The body's ownership frame: `break` and `continue` release down to it.
+        self.frame = frame
 
 
 class Builder:
@@ -120,6 +147,12 @@ class Builder:
         #: The source position being lowered; every instruction emitted until the
         #: next node is charged to it.
         self.loc = function.loc
+        #: One entry per enclosing block, innermost last: the arrays that block
+        #: owns, in the order it declared them.
+        self.frames: list[list[tuple[str, str]]] = []
+        #: Arrays built inside one statement: nobody binds them, so the statement
+        #: gives them back when it ends.
+        self.temporaries: list[tuple[str, str]] = []
 
     def emit(self, block: ir.Block, instruction) -> None:
         """Append one instruction and the line it came from, in one call.
@@ -183,7 +216,110 @@ class Builder:
             return self.binary(node, block, env)
         if isinstance(node, Call):
             return self.call(node, block, env)
+        if isinstance(node, ArrayLiteral):
+            return self.array_literal(node, block, env, owned=False)
+        if isinstance(node, Index):
+            return self.index(node, block, env)
         raise Refused(describe(node), getattr(node, "loc", None))
+
+    # -- arrays --------------------------------------------------------------
+    def check_element(self, typ: str, loc) -> None:
+        if not is_array(typ):
+            raise Refused(f"the array type '{typ}'", loc)
+        if element_of(typ) not in ELEMENT_TYPES:
+            raise Refused(f"an array of {element_of(typ)}", loc)
+
+    def array_literal(self, node: ArrayLiteral, block: ir.Block, env: dict,
+                      owned: bool):
+        """`[a, b, c]` — a new array, and the question of who gives it back.
+
+        Inside a `let` the binding owns it; anywhere else the enclosing statement
+        does, and it is released when that statement ends. `owned` says which,
+        because the difference is one entry in one list and getting it wrong is a
+        leak or a double release.
+        """
+        typ = node.typ
+        self.check_element(typ, node.loc)
+        items: list[str] = []
+        for item in node.items:
+            value, item_type, block = self.expression(item, block, env)
+            if item_type != element_of(typ):
+                raise Refused(f"a {item_type} in an array of {element_of(typ)}",
+                              node.loc)
+            items.append(value)
+        value = self.value()
+        self.emit(block, ir.ArrayLiteral(value, typ, items))
+        self.take(value, typ, owned)
+        return value, typ, block
+
+    def array_zeros(self, node: Call, block: ir.Block, env: dict, owned: bool):
+        """`array_zeros(n)` — a zeroed array of `n` elements."""
+        typ = node.typ
+        self.check_element(typ, node.loc)
+        if len(node.args) != 1:
+            raise Refused("an array_zeros without one argument", node.loc)
+        count, count_type, block = self.expression(node.args[0], block, env)
+        if count_type != "i64":
+            raise Refused(f"array_zeros of a {count_type}", node.loc)
+        value = self.value()
+        self.emit(block, ir.ArrayZeros(value, typ, count))
+        self.take(value, typ, owned)
+        return value, typ, block
+
+    def index(self, node: Index, block: ir.Block, env: dict):
+        """`a[i]` — a checked read of one element."""
+        name = node.array.name
+        if name not in env:
+            raise Refused(f"the variable '{name}'", node.loc)
+        base, base_type = env[name]
+        self.check_element(base_type, node.loc)
+        index, index_type, block = self.expression(node.index, block, env)
+        if index_type != "i64":
+            raise Refused(f"an index of type {index_type}", node.loc)
+        element = element_of(base_type)
+        value = self.value()
+        self.emit(block, ir.Index(value, element, base, index))
+        return value, element, block
+
+    def take(self, value: str, typ: str, owned: bool) -> None:
+        """Register a new array as owned by the block, or by the statement."""
+        if owned:
+            self.frames[-1].append((value, typ))
+        else:
+            self.temporaries.append((value, typ))
+
+    # -- ownership -----------------------------------------------------------
+    def body(self, statements, block: ir.Block, env: dict) -> ir.Block:
+        """Lower one block, then give back what it owned.
+
+        The frame is popped before the caller sees the tail block, so a `return`
+        inside the body releases it explicitly and the release here is only the
+        path that fell out of the block.
+        """
+        self.frames.append([])
+        try:
+            tail = self.statements(statements, block, env)
+            if tail.terminator is None:
+                self.release_frame(tail, len(self.frames) - 1)
+        finally:
+            self.frames.pop()
+        return tail
+
+    def release_frame(self, block: ir.Block, index: int) -> None:
+        """Emit `release` for one frame, last declared first."""
+        for value, typ in reversed(self.frames[index]):
+            self.emit(block, ir.Release(typ, value))
+
+    def leave(self, block: ir.Block, down_to: int) -> None:
+        """Leave every block from the innermost down to `down_to`, inclusive."""
+        for index in range(len(self.frames) - 1, down_to - 1, -1):
+            self.release_frame(block, index)
+
+    def release_temporaries(self, block: ir.Block) -> ir.Block:
+        for value, typ in reversed(self.temporaries):
+            self.emit(block, ir.Release(typ, value))
+        self.temporaries = []
+        return block
 
     def binary(self, node: Binary, block: ir.Block, env: dict):
         if node.op in ("&&", "||"):
@@ -247,6 +383,17 @@ class Builder:
         if node.callee is not None:
             raise Refused("a call through a function value", node.loc)
         if node.target is None:
+            if not node.module and node.name == "array_zeros":
+                return self.array_zeros(node, block, env, owned=False)
+            if not node.module and node.name == "len":
+                if len(node.args) != 1:
+                    raise Refused("a len without one argument", node.loc)
+                base, base_type, block = self.expression(node.args[0], block, env)
+                if not is_array(base_type):
+                    raise Refused(f"len of a {base_type}", node.loc)
+                value = self.value()
+                self.emit(block, ir.Length(value, base))
+                return value, "i64", block
             if node.name == "print":
                 if len(node.args) != 1:
                     raise Refused("print with more than one argument", node.loc)
@@ -281,13 +428,36 @@ class Builder:
                 # block is unreachable; the C backend reports it as W0001 and the
                 # native backend simply does not emit it.
                 break
+            outer, self.temporaries = self.temporaries, []
             block = self.statement(statement, block, env)
+            if block.terminator is None:
+                block = self.release_temporaries(block)
+            self.temporaries = outer
         return block
 
     def statement(self, statement, block: ir.Block, env: dict) -> ir.Block:
         if getattr(statement, "loc", None) is not None:
             self.loc = statement.loc
         if isinstance(statement, Let):
+            declared = getattr(statement.symbol, "typ", None)
+            if is_array(declared) and not getattr(statement.symbol, "borrowed", False):
+                # An array binding is its owner. The checker admits only a literal
+                # or `array_zeros` here, so the binding cannot be a second name for
+                # somebody else's storage.
+                if isinstance(statement.value, ArrayLiteral):
+                    value, typ, block = self.array_literal(statement.value, block, env,
+                                                           owned=True)
+                elif (isinstance(statement.value, Call)
+                      and statement.value.target is None
+                      and not statement.value.module
+                      and statement.value.name == "array_zeros"):
+                    value, typ, block = self.array_zeros(statement.value, block, env,
+                                                         owned=True)
+                else:
+                    raise Refused("an array binding that is not a literal or "
+                                  "array_zeros", statement.loc)
+                env[statement.name] = (value, typ)
+                return block
             value, typ, block = self.expression(statement.value, block, env)
             env[statement.name] = (value, typ)
             return block
@@ -300,6 +470,20 @@ class Builder:
                 raise Refused(f"an assignment of a {typ} to a {old_type}", statement.loc)
             env[statement.name] = (value, typ)
             return block
+        if isinstance(statement, IndexAssign):
+            if statement.name not in env:
+                raise Refused(f"the variable '{statement.name}'", statement.loc)
+            base, base_type = env[statement.name]
+            self.check_element(base_type, statement.loc)
+            index, index_type, block = self.expression(statement.index, block, env)
+            if index_type != "i64":
+                raise Refused(f"an index of type {index_type}", statement.loc)
+            value, value_type, block = self.expression(statement.value, block, env)
+            if value_type != element_of(base_type):
+                raise Refused(f"a {value_type} into an array of "
+                              f"{element_of(base_type)}", statement.loc)
+            self.emit(block, ir.IndexStore(base, index, value))
+            return block
         if isinstance(statement, ExprStmt):
             _value, _typ, block = self.expression(statement.expr, block, env)
             return block
@@ -311,13 +495,18 @@ class Builder:
             return self.for_statement(statement, block, env)
         if isinstance(statement, Return):
             if statement.value is None:
+                self.leave(block, 0)
                 self.emit(block, ir.Ret(None))
                 return block
             value, _typ, block = self.expression(statement.value, block, env)
+            # The value is computed before the blocks are left, because a release
+            # may free the array it was read from.
+            self.leave(block, 0)
             self.emit(block, ir.Ret(value))
             return block
         if isinstance(statement, Break):
             loop = self.find_loop(statement.label, statement.loc)
+            self.leave(block, loop.frame)
             self.emit(block,
                 ir.Jump(loop.exit_label, [env[name][0] for name in loop.names]))
             return block
@@ -325,6 +514,7 @@ class Builder:
             loop = self.find_loop(statement.label, statement.loc)
             if loop.back_edge is None:
                 raise Refused("a continue in a loop without a next entry", statement.loc)
+            self.leave(block, loop.frame)
             return loop.back_edge(self, block, env)
         raise Refused(describe(statement), getattr(statement, "loc", None))
 
@@ -354,14 +544,14 @@ class Builder:
             (else_block or join).label, [env[name][0] for name in names]))
         then_env = {**env, **{name: (then_block.params[index][0], env[name][1])
                               for index, name in enumerate(names)}}
-        tail = self.statements(statement.then_body, then_block, then_env)
+        tail = self.body(statement.then_body, then_block, then_env)
         if tail.terminator is None:
             self.emit(tail, ir.Jump(join.label,
                                              [then_env[name][0] for name in names]))
         if else_block is not None:
             else_env = {**env, **{name: (else_block.params[index][0], env[name][1])
                                   for index, name in enumerate(names)}}
-            tail = self.statements(statement.else_body, else_block, else_env)
+            tail = self.body(statement.else_body, else_block, else_env)
             if tail.terminator is None:
                 self.emit(tail, ir.Jump(join.label,
                                                  [else_env[name][0] for name in names]))
@@ -377,14 +567,20 @@ class Builder:
         self.emit(block, ir.Jump(header.label, [env[name][0] for name in names]))
         header_env = {**env, **{name: (header.params[index][0], env[name][1])
                                 for index, name in enumerate(names)}}
-        condition, condition_type, header = self.expression(statement.condition, header,
-                                                            header_env)
+        condition, condition_type, test = self.expression(statement.condition, header,
+                                                          header_env)
         if condition_type != "bool":
             raise Refused(f"a while on a {condition_type}", statement.loc)
         # The exit edge carries the values the header holds at the test: leaving a
         # loop normally is not a `break`, and the exit block is what the code after the
         # loop reads.
-        self.emit(header, ir.Branch(
+        #
+        # The branch is emitted where the condition *ended*, which for `&&` and `||`
+        # is a join block after the header — while the back edge still goes to the
+        # header. Conflating the two made a `while a && b` loop forever on the native
+        # backend as soon as `a` was false on the second turn: the back edge landed in
+        # the join and handed a number to its `bool` parameter.
+        self.emit(test, ir.Branch(
             condition, body_block.label, [], exit_block.label,
             [header_env[name][0] for name in names]))
 
@@ -393,13 +589,14 @@ class Builder:
                 ir.Jump(header.label, [current_env[name][0] for name in names]))
             return current
 
-        loop = Loop(exit_block.label, names, statement.label, back_edge)
+        loop = Loop(exit_block.label, names, statement.label, back_edge,
+                    frame=len(self.frames))
         self.loops.append(loop)
         if statement.label:
             self.labels[statement.label] = loop
         try:
             body_env = dict(header_env)
-            tail = self.statements(statement.body, body_block, body_env)
+            tail = self.body(statement.body, body_block, body_env)
             if tail.terminator is None:
                 back_edge(self, tail, body_env)
         finally:
@@ -411,14 +608,79 @@ class Builder:
         return exit_block
 
     def for_statement(self, statement: For, block: ir.Block, env: dict) -> ir.Block:
+        if not isinstance(statement.iterable, Range):
+            return self.element_loop(statement, block, env)
+        return self.range_loop(statement, block, env)
+
+    def element_loop(self, statement: For, block: ir.Block, env: dict) -> ir.Block:
+        """`for x in array`: the element is a checked read on every turn.
+
+        The index is a block parameter of the header, exactly as in a range loop,
+        and the element is one `index` instruction in the body — so a `continue`
+        inside the loop is an early back edge like any other, and a `break` leaves
+        through the same exit block.
+        """
+        base, base_type, block = self.expression(statement.iterable, block, env)
+        if not is_array(base_type):
+            raise Refused("a 'for' over anything but a range or an array",
+                          statement.loc)
+        self.check_element(base_type, statement.loc)
+        element = element_of(base_type)
+        length = self.value()
+        self.emit(block, ir.Length(length, base))
+        zero = self.value()
+        self.emit(block, ir.Const(zero, "i64", 0))
+        names = [name for name in sorted(assigned_names(statement.body)) if name in env]
+        header = self.block("for_head", [(self.value(), "i64")]
+                            + [(self.value(), env[name][1]) for name in names])
+        exit_block = self.block("for_exit", [(self.value(), env[name][1]) for name in names])
+        body_block = self.block("for_body")
+        self.emit(block, ir.Jump(header.label, [zero, *[env[name][0] for name in names]]))
+        header_env = dict(env)
+        for index, name in enumerate(names):
+            header_env[name] = (header.params[index + 1][0], env[name][1])
+        condition = self.value()
+        self.emit(header, ir.Cmp(condition, "lt", header.params[0][0], length))
+        self.emit(header, ir.Branch(condition, body_block.label, [],
+                                    exit_block.label,
+                                    [header_env[name][0] for name in names]))
+        element_value = self.value()
+        self.emit(body_block, ir.Index(element_value, element, base, header.params[0][0]))
+        body_env = {**header_env, statement.name: (element_value, element)}
+
+        def back_edge(builder, current: ir.Block, current_env: dict) -> ir.Block:
+            one = builder.value()
+            self.emit(current, ir.Const(one, "i64", 1))
+            next_index = builder.value()
+            self.emit(current, ir.Bin(next_index, "add", header.params[0][0], one))
+            self.emit(current, ir.Jump(
+                header.label, [next_index, *[current_env[name][0] for name in names]]))
+            return current
+
+        loop = Loop(exit_block.label, names, statement.label, back_edge,
+                    frame=len(self.frames))
+        self.loops.append(loop)
+        if statement.label:
+            self.labels[statement.label] = loop
+        try:
+            tail = self.body(statement.body, body_block, body_env)
+            if tail.terminator is None:
+                back_edge(self, tail, body_env)
+        finally:
+            self.loops.pop()
+            if statement.label:
+                self.labels.pop(statement.label, None)
+        for index, name in enumerate(names):
+            env[name] = (exit_block.params[index][0], env[name][1])
+        return exit_block
+
+    def range_loop(self, statement: For, block: ir.Block, env: dict) -> ir.Block:
         """`for i in a..b` — the index is a block parameter of the header.
 
         The header receives the index from the entry block and from every back edge,
         so the loop variable is one SSA value and a `continue` is just an early back
         edge that computes the next index where it stands.
         """
-        if not isinstance(statement.iterable, Range):
-            raise Refused("a 'for' over anything but a range", statement.loc)
         start, start_type, block = self.expression(statement.iterable.start, block, env)
         end, end_type, block = self.expression(statement.iterable.end, block, env)
         if start_type != "i64" or end_type != "i64":
@@ -449,13 +711,14 @@ class Builder:
                         [next_index, *[current_env[name][0] for name in names]]))
             return current
 
-        loop = Loop(exit_block.label, names, statement.label, back_edge)
+        loop = Loop(exit_block.label, names, statement.label, back_edge,
+                    frame=len(self.frames))
         self.loops.append(loop)
         if statement.label:
             self.labels[statement.label] = loop
         try:
             body_env = dict(header_env)
-            tail = self.statements(statement.body, body_block, body_env)
+            tail = self.body(statement.body, body_block, body_env)
             if tail.terminator is None:
                 back_edge(self, tail, body_env)
         finally:
@@ -551,7 +814,17 @@ def lower(program: Program) -> ir.Module:
         entry = builder.block("entry")
         env: dict[str, tuple[str, str]] = {}
         for param in function.params:
-            if param.typ not in ("i64", "bool"):
+            if is_array(param.typ):
+                if element_of(param.typ) not in ELEMENT_TYPES:
+                    raise make(
+                        "E0901",
+                        f"the native backend does not implement a parameter of type "
+                        f"{param.typ} (in '{function.qualified}')",
+                        param.loc,
+                        hint="build with the C backend (the default), or pass an "
+                             "array of i64, bool or str",
+                    )
+            elif param.typ not in ("i64", "bool"):
                 raise make(
                     "E0901",
                     f"the native backend does not implement a parameter of type "
@@ -564,7 +837,7 @@ def lower(program: Program) -> ir.Module:
             env[param.name] = (value, param.typ)
             builder.params.append((value, param.typ))
         try:
-            tail = builder.statements(function.body, entry, env)
+            tail = builder.body(function.body, entry, env)
             if tail.terminator is None:
                 if function.returns == "void":
                     builder.emit(tail, ir.Ret(None))

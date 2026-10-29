@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .. import limits
 from ..diagnostics import make
 from . import ir, linker
 from .unit import DATA, RODATA, UnitBuilder
@@ -55,6 +56,18 @@ from .x86 import (
 MAX_ARGUMENTS = len(ARGUMENT_REGISTERS)
 #: What the C runtime prints before a message, kept identical on purpose.
 FAIL_PREFIX = "nava runtime error: "
+#: How many bytes one array element takes in the native backend. All three element
+#: types are one machine word — an `i64`, a `bool` and a pointer to a
+#: length-prefixed string — so there is one stride and no per-type array helper.
+ELEMENT_SIZE = 8
+#: The length limit the C runtime enforces, so that the same program stops at the
+#: same `array_zeros` in either backend rather than running out of arena first.
+MAX_ELEMENTS = limits.MAX_ARRAY_ELEMENTS
+#: The two system calls the arena needs, with the flags a private anonymous
+#: mapping takes on x86-64 Linux.
+SYSCALL_MMAP = 9
+PROT_READ, PROT_WRITE = 1, 2
+MAP_PRIVATE, MAP_ANONYMOUS = 2, 0x20
 I64_MIN = -(2 ** 63)
 #: The variable that turns the trace on. A *variable*, not a flag: the same binary
 #: prints a trace when it is asked to and nothing when it is not.
@@ -214,7 +227,8 @@ class Generator:
             for instruction in block.instructions:
                 value = getattr(instruction, "value", "")
                 if isinstance(instruction, (ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not,
-                                            ir.Cmp, ir.Copy, ir.Call)):
+                                            ir.Cmp, ir.Copy, ir.Call, ir.ArrayLiteral,
+                                            ir.ArrayZeros, ir.Index, ir.Length)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -278,6 +292,26 @@ class Generator:
             return
         if isinstance(instruction, ir.Print):
             self.print_value(instruction)
+            return
+        if isinstance(instruction, ir.ArrayLiteral):
+            self.array_literal(instruction)
+            return
+        if isinstance(instruction, ir.ArrayZeros):
+            self.array_zeros(instruction)
+            return
+        if isinstance(instruction, ir.Index):
+            self.index(instruction)
+            return
+        if isinstance(instruction, ir.IndexStore):
+            self.index_store(instruction)
+            return
+        if isinstance(instruction, ir.Length):
+            self.length(instruction)
+            return
+        if isinstance(instruction, ir.Release):
+            # The arena is never given memory back, so releasing is not an
+            # instruction the machine needs. It is not dead code either: it is where
+            # the IR says who owns what, and a backend that frees implements it.
             return
         if isinstance(instruction, ir.Jump):
             self.jump(instruction)
@@ -345,6 +379,77 @@ class Generator:
         self.code.call(instruction.target)
         if instruction.returns != "void":
             self.store(instruction.value, RAX)
+
+    # -- arrays --------------------------------------------------------------
+    def array_literal(self, instruction: ir.ArrayLiteral) -> None:
+        """A new array: one header from the arena, then one store per element."""
+        code = self.code
+        code.mov_imm(RDI, len(instruction.items))
+        code.call("nv_array_new")
+        self.store(instruction.value, RAX)
+        for offset, item in enumerate(instruction.items):
+            self.load(item, R11)
+            self.load(instruction.value, RAX)
+            code.store(RAX, 16 + ELEMENT_SIZE * offset, R11)
+
+    def array_zeros(self, instruction: ir.ArrayZeros) -> None:
+        self.load(instruction.count, RDI)
+        self.code.call("nv_array_new")
+        self.store(instruction.value, RAX)
+
+    def length(self, instruction: ir.Length) -> None:
+        self.load(instruction.base, RAX)
+        self.code.load(RAX, RAX, 0)
+        self.store(instruction.value, RAX)
+
+    def index(self, instruction: ir.Index) -> None:
+        code = self.code
+        self.load(instruction.base, RAX)
+        code.load(R11, RAX, 0)                  # the length
+        self.load(instruction.index, R10)       # the index
+        self.array_bounds()
+        self.load(instruction.base, RAX)
+        code.load(R11, RAX, 8)                  # the elements
+        code.mov_imm(R9, ELEMENT_SIZE)
+        code.imul_reg(R10, R9)
+        code.add_reg(R11, R10)
+        code.load(RAX, R11, 0)
+        self.store(instruction.value, RAX)
+
+    def index_store(self, instruction: ir.IndexStore) -> None:
+        code = self.code
+        self.load(instruction.base, RAX)
+        code.load(R11, RAX, 0)
+        self.load(instruction.index, R10)
+        self.array_bounds()
+        self.load(instruction.value, R9)
+        self.load(instruction.base, RAX)
+        code.load(R11, RAX, 8)
+        code.mov_imm(R8, ELEMENT_SIZE)
+        code.imul_reg(R10, R8)
+        code.add_reg(R11, R10)
+        code.store(R11, 0, R9)
+
+    def array_bounds(self) -> None:
+        """The language's `Index` is checked: `0 <= index < length` or the program stops.
+
+        The trap is the C runtime's, word for word — `array index 5 is out of bounds
+        for length 3` — because the differential compares standard error too.
+        """
+        code = self.code
+        trap, inside = self.local("bounds"), self.local("in_range")
+        code.mov_imm(R9, 0)
+        code.cmp_reg(R10, R9)
+        code.jcc("l", trap)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", trap)
+        code.jmp(inside)
+        code.label(trap)
+        code.mov_reg(RDI, R10)
+        code.mov_reg(RSI, R11)
+        code.xor_reg(RDX, RDX)
+        code.call("nv_fail_pair")
+        code.label(inside)
 
     def jump(self, instruction: ir.Jump) -> None:
         for value, target in zip(instruction.args, self._parameters(instruction.target)):
@@ -425,7 +530,11 @@ class Generator:
                              ("nv_print_i64", self.print_i64_helper),
                              ("nv_print_bool", self.print_bool_helper),
                              ("nv_trace_stack", self.trace_helper),
-                             ("nv_fail", self.fail_helper)):
+                             ("nv_fail", self.fail_helper),
+                             ("nv_format", self.format_helper),
+                             ("nv_alloc", self.alloc_helper),
+                             ("nv_array_new", self.array_new_helper),
+                             ("nv_fail_pair", self.fail_pair_helper)):
             self.runtime_function(symbol, body)
         return self.builder.finalise()
 
@@ -537,30 +646,16 @@ class Generator:
     def write_u64_helper(self) -> None:
         """`nv_write_u64(rdi)`: the decimal digits of an unsigned value, to stderr.
 
-        Line numbers are small and positive, so this is the unsigned loop without the
-        sign and without the newline that `nv_print_i64` needs.
+        Line numbers are small and positive, so `nv_format` is used for the digits
+        and the newline `nv_print_i64` adds is left off.
         """
         code = self.code
-        buffer = self.raw("nv_number_buffer", bytes(32), DATA)
         code.push(RBP)
         code.mov_reg(RBP, RSP)
         code.sub_rsp(16)
-        code.lea_rip(R8, buffer)
-        code.add_imm8(R8, 32)
-        code.mov_reg(R9, R8)
-        code.mov_reg(RAX, RDI)
-        code.mov_imm(R10, 10)
-        code.label("nv_write_u64.digits")
-        code.xor_reg(RDX, RDX)
-        code.div(R10)
-        code.add_byte_imm(RDX, ord("0"))
-        code.dec(R9)
-        code.store_byte(R9, 0, RDX)
-        code.test_reg(RAX)
-        code.jcc("ne", "nv_write_u64.digits")
-        code.mov_reg(RDX, R8)
-        code.sub_reg(RDX, R9)
-        code.mov_reg(RSI, R9)
+        code.lea_rip(RSI, self.number_buffer(1))
+        code.call("nv_format")
+        code.mov_reg(RSI, RAX)
         code.mov_imm(RDI, 2)
         code.mov_imm(RAX, 1)
         code.syscall()
@@ -571,37 +666,12 @@ class Generator:
     def print_i64_helper(self) -> None:
         """`nv_print_i64(rdi)`: sign, decimal digits, newline, on stdout."""
         code = self.code
-        buffer = self.raw("nv_number_buffer", bytes(32), DATA)
         code.push(RBP)
         code.mov_reg(RBP, RSP)
         code.sub_rsp(16)
-        code.lea_rip(R8, buffer)
-        code.add_imm8(R8, 32)
-        code.mov_reg(R9, R8)
-        code.mov_reg(RAX, RDI)
-        code.xor_reg(RCX, RCX)
-        code.test_reg(RAX)
-        code.jcc("ns", "nv_print_i64.positive")
-        code.neg(RAX)
-        code.mov_imm(RCX, 1)
-        code.label("nv_print_i64.positive")
-        code.mov_imm(R10, 10)
-        code.label("nv_print_i64.digits")
-        code.xor_reg(RDX, RDX)
-        code.div(R10)
-        code.add_byte_imm(RDX, ord("0"))
-        code.dec(R9)
-        code.store_byte(R9, 0, RDX)
-        code.test_reg(RAX)
-        code.jcc("ne", "nv_print_i64.digits")
-        code.test_reg(RCX)
-        code.jcc("e", "nv_print_i64.write")
-        code.dec(R9)
-        code.store_byte_imm(R9, 0, ord("-"))
-        code.label("nv_print_i64.write")
-        code.mov_reg(RDX, R8)
-        code.sub_reg(RDX, R9)
-        code.mov_reg(RSI, R9)
+        code.lea_rip(RSI, self.number_buffer(2))
+        code.call("nv_format")
+        code.mov_reg(RSI, RAX)
         code.mov_imm(RDI, 1)
         code.mov_imm(RAX, 1)
         code.syscall()
@@ -628,6 +698,272 @@ class Generator:
         code.mov_imm(RAX, 1)
         code.syscall()
         code.ret()
+
+    def number_buffer(self, index: int) -> str:
+        """A 32-byte scratch buffer in the writable segment; answers the end label.
+
+        Writing digits backwards from the end is what makes the length known only
+        when the number is finished, so the buffer is asked for by its end.
+        """
+        self.raw(f"nv_number_buffer{index}", bytes(32), DATA)
+        return self.raw(f"nv_number_buffer{index}_end", b"", DATA)
+
+    def format_helper(self) -> None:
+        """`nv_format(rdi = value, rsi = end of a buffer)` -> `(rax = start, rdx = len)`.
+
+        `i64_min` is printed by dividing its **unsigned** magnitude: the negation
+        does not fit in an `i64` but fits in a `u64`, and that is the value the
+        digits come from. The C runtime prints the same digits, which is what makes
+        the two backends comparable on `print(-9223372036854775807 - 1)`.
+        """
+        code = self.code
+        digits, positive, write = (self.local("format_digits"),
+                                   self.local("format_positive"),
+                                   self.local("format_write"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.mov_reg(R8, RSI)                   # the end of the buffer
+        code.mov_reg(R9, R8)
+        code.mov_reg(RAX, RDI)
+        code.xor_reg(R10, R10)                  # the sign
+        code.test_reg(RAX)
+        code.jcc("ns", positive)
+        code.neg(RAX)
+        code.mov_imm(R10, 1)
+        code.label(positive)
+        code.mov_imm(R11, 10)
+        code.label(digits)
+        code.xor_reg(RDX, RDX)
+        code.div(R11)
+        code.add_byte_imm(RDX, ord("0"))
+        code.dec(R9)
+        code.store_byte(R9, 0, RDX)
+        code.test_reg(RAX)
+        code.jcc("ne", digits)
+        code.test_reg(R10)
+        code.jcc("e", write)
+        code.dec(R9)
+        code.store_byte_imm(R9, 0, ord("-"))
+        code.label(write)
+        code.mov_reg(RAX, R9)
+        code.mov_reg(RDX, R8)
+        code.sub_reg(RDX, R9)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def alloc_helper(self) -> None:
+        """`nv_alloc(rdi = bytes)`: a zeroed, 16-byte-aligned block from the arena.
+
+        The arena is a chain of `mmap`ed regions. The first allocation maps one; a
+        request that does not fit maps another at least as large as the request, so
+        running out means the kernel refused. Nothing is ever given back: `release`
+        is a no-op here, and a program that allocates arrays in a loop grows the
+        arena until it exits. That is the documented limit of this backend, and it is
+        the honest one — an arena with no collector is a backend that runs the
+        programs it was asked to run, and saying so is better than a `free` that does
+        nothing quietly.
+
+        Zeroing comes from the kernel: a fresh `mmap` is zero-filled and the bump
+        pointer never revisits a byte, so a block is zeroed without a loop.
+        """
+        code = self.code
+        base = self.raw("nv_arena_base", bytes(8), DATA)
+        left = self.raw("nv_arena_left", bytes(8), DATA)
+        room, large, sized, mapped = (self.local("arena_room"), self.local("arena_large"),
+                                      self.local("arena_sized"), self.local("arena_mapped"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.mov_imm(R11, ELEMENT_SIZE * 2 - 1)
+        code.add_reg(RDI, R11)                  # round up to
+        code.and_imm32(RDI, -16)                # a multiple of sixteen
+        code.store(RBP, -8, RDI)                # the size that was asked for
+        code.lea_rip(R10, left)
+        code.load(R11, R10, 0)
+        code.cmp_reg(RDI, R11)
+        code.jcc("be", room)
+        # Not enough left: a new region, at least as large as the request.
+        code.mov_imm(R11, 1 << 20)
+        code.cmp_reg(RDI, R11)
+        code.jcc("b", sized)
+        code.mov_reg(R11, RDI)
+        code.jmp(large)
+        code.label(sized)
+        code.mov_imm(R11, 1 << 20)
+        code.label(large)
+        code.store(RBP, -16, R11)               # the size of the region
+        code.mov_reg(RSI, R11)
+        code.xor_reg(RDI, RDI)                  # nowhere in particular
+        code.mov_imm(RDX, PROT_READ | PROT_WRITE)
+        code.mov_imm(R10, MAP_PRIVATE | MAP_ANONYMOUS)
+        code.mov_imm(R8, -1)                    # no file
+        code.xor_reg(R9, R9)                    # no offset
+        code.mov_imm(RAX, SYSCALL_MMAP)
+        code.syscall()
+        code.mov_imm(R11, -4096)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", mapped)                   # an address below -errno: it worked
+        self.fail("out of memory allocating an array")
+        code.label(mapped)
+        code.lea_rip(R10, base)
+        code.store(R10, 0, RAX)
+        code.load(R11, RBP, -16)
+        code.lea_rip(R10, left)
+        code.store(R10, 0, R11)
+        # Take the block: `base` moves on, `left` shrinks.
+        code.label(room)
+        code.lea_rip(R10, base)
+        code.load(R11, R10, 0)                  # the next free byte
+        code.mov_reg(RAX, R11)                  # the block
+        code.load(RDX, RBP, -8)
+        code.add_reg(R11, RDX)
+        code.store(R10, 0, R11)
+        code.lea_rip(R10, left)
+        code.load(R11, R10, 0)
+        code.sub_reg(R11, RDX)
+        code.store(R10, 0, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def array_new_helper(self) -> None:
+        """`nv_array_new(rdi = count)`: `[length][elements]`, zeroed, from the arena.
+
+        The header is what makes an array one value: a handle is a pointer to it, so
+        passing an array passes one register and the length travels with the data.
+        The checks are the C runtime's, in its order — a negative length, then the
+        limit — because a program that trips one has to stop in both backends with
+        the same line on standard error.
+        """
+        code = self.code
+        positive = self.local("length_positive")
+        within = self.local("length_within")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)                # the count
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RDI, R11)
+        code.jcc("ge", positive)
+        code.lea_rip(RDI, self.string("array length must not be negative"))
+        code.call("nv_fail")
+        code.label(positive)
+        code.load(RDI, RBP, -8)
+        code.mov_imm(R11, MAX_ELEMENTS)
+        code.cmp_reg(RDI, R11)
+        code.jcc("le", within)
+        code.mov_imm(RSI, MAX_ELEMENTS)
+        code.mov_imm(RDX, 1)                    # the length message
+        code.call("nv_fail_pair")
+        code.label(within)
+        code.load(RDI, RBP, -8)
+        code.mov_imm(R11, ELEMENT_SIZE)
+        code.imul_reg(R11, RDI)                 # the elements
+        code.mov_imm(RDX, 16)
+        code.add_reg(R11, RDX)                  # and the header
+        code.mov_reg(RDI, R11)
+        code.call("nv_alloc")
+        code.store(RBP, -16, RAX)
+        code.load(R11, RBP, -8)
+        code.store(RAX, 0, R11)                 # the length
+        code.lea(R11, RAX, 16)
+        code.store(RAX, 8, R11)                 # the elements
+        code.load(RAX, RBP, -16)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def fail_pair_helper(self) -> None:
+        """`nv_fail_pair(rdi = a, rsi = b, rdx = kind)`: a numbered trap, then exit 1.
+
+        Two kinds, because two runtime errors carry two numbers: an index that is
+        out of bounds for a length, and a length that exceeds the limit. The wording
+        is the C runtime's, character for character.
+        """
+        code = self.code
+        kind_checked = self.local("pair_kind")
+        second = self.local("pair_second")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(96)
+        code.store(RBP, -8, RDI)                # a
+        code.store(RBP, -16, RSI)               # b
+        code.store(RBP, -24, RDX)               # kind
+        code.load(RDI, RBP, -8)
+        code.lea_rip(RSI, self.number_buffer(1))
+        code.call("nv_format")
+        code.store(RBP, -32, RAX)               # the digits of a
+        code.store(RBP, -40, RDX)               # how many
+        code.load(RDI, RBP, -16)
+        code.lea_rip(RSI, self.number_buffer(2))
+        code.call("nv_format")
+        code.store(RBP, -48, RAX)
+        code.store(RBP, -56, RDX)
+        code.lea_rip(RSI, self.raw("nv_prefix", FAIL_PREFIX.encode()))
+        code.mov_imm(RDX, len(FAIL_PREFIX))
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+        code.load(RAX, RBP, -24)
+        code.test_reg(RAX)
+        code.jcc("ne", kind_checked)
+        self.write_bytes("array index ")
+        code.jmp(second)
+        code.label(kind_checked)
+        self.write_bytes("array length ")
+        code.label(second)
+        code.load(RSI, RBP, -32)
+        code.load(RDX, RBP, -40)
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+        code.load(RAX, RBP, -24)
+        code.test_reg(RAX)
+        second_kind = self.local("pair_second_kind")
+        code.jcc("ne", second_kind)
+        self.write_bytes(" is out of bounds for length ")
+        closing = self.local("pair_closing")
+        code.jmp(closing)
+        code.label(second_kind)
+        self.write_bytes(" exceeds the limit of ")
+        code.label(closing)
+        code.load(RSI, RBP, -48)
+        code.load(RDX, RBP, -56)
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+        self.newline_to(2)
+        # A trap is a trap: `NV_TRACE` walks the frames here exactly as `nv_fail`
+        # does, so an index out of bounds says where it happened.
+        flag = self.raw("nv_trace_flag", bytes(8), DATA)
+        no_trace = self.local("no_trace")
+        code.lea_rip(RAX, flag)
+        code.load(RAX, RAX, 0)
+        code.test_reg(RAX)
+        code.jcc("e", no_trace)
+        code.mov_reg(RDI, RBP)
+        code.call("nv_trace_stack")
+        code.label(no_trace)
+        code.mov_imm(RDI, 1)
+        code.mov_imm(RAX, 60)
+        code.syscall()
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def write_bytes(self, text: str) -> None:
+        """`write(2, text)`, for a literal that is part of a message.
+
+        `self.string` stores a length prefix in front of the bytes, so the pointer is
+        advanced past it: what goes on standard error is the text alone.
+        """
+        self.code.lea_rip(RSI, self.string(text))
+        self.code.lea(RSI, RSI, 8)
+        self.code.mov_imm(RDX, len(text.encode("utf-8")))
+        self.code.mov_imm(RDI, 2)
+        self.code.mov_imm(RAX, 1)
+        self.code.syscall()
 
     def trace_helper(self) -> None:
         """`nv_trace_stack(rdi)`: walk the frame chain and name every caller.

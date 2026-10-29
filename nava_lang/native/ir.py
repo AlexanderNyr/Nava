@@ -121,6 +121,77 @@ class Print:
     typ: str
 
 
+# -- arrays (PLAN.md N14c) ---------------------------------------------------
+#
+# An array is one **handle**: `[i64]`, `[bool]` and `[str]` are values whose
+# representation nobody outside a backend knows. The four instructions below are
+# the whole of what a program can do to one, and each of them says what the
+# language says rather than what a machine does: `index` is **checked**, `len`
+# answers the length the array was built with, and `release` gives an owned array
+# back. A backend whose array is a bump-allocated block implements `release` as
+# nothing and is not lying; a backend whose `index` wraps is not implementing
+# `Index`.
+
+
+@record()
+class ArrayLiteral:
+    """`%v = array <typ> [%a, %b, …]` — a new owned array of `len(items)`."""
+
+    value: str
+    typ: str
+    items: list[str]
+
+
+@record()
+class ArrayZeros:
+    """`%v = zeros <typ> %n` — `array_zeros(n)`: a new owned array of length `%n`."""
+
+    value: str
+    typ: str
+    count: str
+
+
+@record()
+class Index:
+    """`%v = index %array[%i]` — a checked read; the result has the element type."""
+
+    value: str
+    typ: str
+    base: str
+    index: str
+
+
+@record()
+class IndexStore:
+    """`index %array[%i] = %v` — a checked write; it defines no value."""
+
+    base: str
+    index: str
+    value: str
+
+
+@record()
+class Length:
+    """`%v = len %array` — the number of elements, as an `i64`."""
+
+    value: str
+    base: str
+
+
+@record()
+class Release:
+    """`release %v` — the owner gives an array back; it defines no value.
+
+    This is where ownership lives in the IR. Which value owns which array is
+    decided by the lowering, because it follows from the language's scopes; what
+    a backend does with the instruction is its own business, and doing nothing is
+    a legitimate answer for a backend that never frees.
+    """
+
+    typ: str
+    operand: str
+
+
 @record()
 class Jump:
     """`jump ^label(%args)` — the block arguments become the target's parameters."""
@@ -263,6 +334,22 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
         return f"{left}call @{instruction.target}({arguments})"
     if isinstance(instruction, Print):
         return f"print {instruction.typ} %{instruction.operand}"
+    if isinstance(instruction, ArrayLiteral):
+        items = ", ".join(f"%{item}" for item in instruction.items)
+        return f"%{instruction.value} = array {instruction.typ} [{items}]"
+    if isinstance(instruction, ArrayZeros):
+        return (f"%{instruction.value} = zeros {instruction.typ} "
+                f"%{instruction.count}")
+    if isinstance(instruction, Index):
+        return (f"%{instruction.value} = index {instruction.typ} "
+                f"%{instruction.base}[%{instruction.index}]")
+    if isinstance(instruction, IndexStore):
+        return (f"index %{instruction.base}[%{instruction.index}] = "
+                f"%{instruction.value}")
+    if isinstance(instruction, Length):
+        return f"%{instruction.value} = len %{instruction.base}"
+    if isinstance(instruction, Release):
+        return f"release {instruction.typ} %{instruction.operand}"
     if isinstance(instruction, Jump):
         return f"jump ^{instruction.target}({_arguments(instruction.args)})"
     if isinstance(instruction, Branch):

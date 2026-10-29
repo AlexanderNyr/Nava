@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a, N14b and N14c delivered: a working backend for `i64`/`bool`/`str` and arrays of them, whole programs, and a differential that covers every construct the subset admits; `f64`, the collections, structs and enums are still refused by name, and `cgen.py` still walks the AST instead of consuming the IR |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1358,7 +1358,8 @@ the differential records.
 |---|---|---|
 | N14a | **One translation unit**: a linear SSA-shaped IR with block parameters (`nava_lang/native/ir.py`) and its lowering from the checked AST (`lower.py`), an instruction encoder and two-pass assembler written in the project (`x86.py`), x86-64 code generation with checked arithmetic (`x86_64.py`), an ELF writer with two `PT_LOAD` segments (`elf64.py`), a syscall-only runtime, `nava build --backend native` and `nava emit-ir` | **Delivered** (record below) |
 | N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
-| N14c | **One IR, two backends**: `cgen.py` rewritten as a lowering of the shared IR, which first requires the IR to cover the whole language — arrays, `String`, `Vec`, structs, enums, `defer`, `?`, generics and the builtins | specified |
+| N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
+| N14d | **One IR, two backends**: `cgen.py` rewritten as a lowering of the shared IR, which requires the IR to cover the rest of the language — `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins | specified (added by N14c, see its record) |
 
 #### Delivery record N14a (2026-10-29)
 
@@ -1471,6 +1472,50 @@ reproduce` and `--record` stay C-only**: a record describes a C toolchain, and i
 a toolchain section for a build that has none would be the provenance claim `E0903`
 exists to refuse. **No change to the support matrix**: the native backend is Linux
 x86-64 only, and macOS and Windows remain *expected, not exercised*.
+
+#### Delivery record N14c (2026-10-29)
+
+**Arrays through one IR.** N14 was recorded as *one IR, two backends*: the IR grows to
+cover the language, then `cgen.py` is rewritten to consume it. This increment delivers
+the first half for one construct family and splits the rest off, because the dependency
+is real and worth naming: to make `cgen.py` consume the IR, the IR must be able to say
+everything the C backend does, and that is `f64`, slices, `String`, `Vec`, `HashMap`,
+`HashSet`, structs, enums, `defer`, `?`, generics and the builtins. That work is now
+**N14d** in §4 rather than an unstated remainder of this one. What *is* closed here is
+the thing that had to come first — an array is now a *value of the IR*, with its own
+instructions and its ownership, instead of a construct each backend understands in its
+own way.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| An array is an instruction set, not a backend's private business | `NativeArrayTests.test_the_ir_states_every_array_operation_the_language_has` | the IR of the differential program contains `ArrayLiteral`, `ArrayZeros`, `Index`, `IndexStore`, `Length` and `Release`, and `nava emit-ir` prints them (`%3 = array [i64] [%0, %1, %2]`, `%6 = index i64 %3[%5]`, `release [i64] %3`) |
+| The same array programs answer the same way through both backends | `test_every_array_fixture_builds_and_runs_through_both_backends`; `NativeDifferentialTests.test_each_program_prints_the_same_through_both_backends` | four fixtures — `arrays_basic`, `arrays_borrow`, `arrays_sort`, `for_loops` — plus a new `arrays_and_loops` program, compared on stdout, stderr and exit status. The three element types are covered: `[i64]`, `[bool]` and `[str]` |
+| Ownership is the lowering's statement, not a comment | `test_the_block_that_declared_an_array_releases_it_last_declared_first`, `test_a_temporary_array_is_released_when_its_statement_ends`, `test_an_array_parameter_is_borrowed_and_never_released` | a block releases what it declared, last declared first, and *before* the `ret` that returns a value read out of it; an array nobody binds belongs to its statement; a `[T]` parameter is a borrow and is never released by the callee |
+| A bounds check is a message and a status, not an assumption | `NativeDifferentialTests.test_each_trap_is_the_same_message_and_status` | four new traps, byte-identical on stderr and status 1 from both backends: `array index 5 is out of bounds for length 3`, `array index -1 is out of bounds for length 3`, `array length must not be negative`, `array length 5000000 exceeds the limit of 4194304`. The limit is the C runtime's `MAX_ARRAY_ELEMENTS`, so a program that stops there stops in the same place whichever backend built it. With `NAVA_TRACE` set the same trap walks the frames like every other trap (`test_a_bounds_trap_traces_like_any_other_trap`), and without it the message is unchanged byte for byte |
+| The backend has memory, and says what the memory costs | `test_the_release_instruction_costs_nothing_in_the_native_backend`; `x86_64.alloc_helper` | `mmap`-backed arena; an array is a 16-byte header — `[length][pointer]` — followed by 8-byte elements, so the three element types share one stride and one helper; `nv_array_new` checks a negative length and the limit in the C runtime's order; `release` encodes as **nothing**, so the arena never returns memory and grows until the program exits. That cost is in the plan rather than in a footnote |
+| A defect the differential found is fixed here | `test_a_while_whose_condition_short_circuits_leaves_the_loop` | `while j >= 0 && a[j] > key` looped forever on the native backend: the back edge of the loop was emitted into the join block of the `&&`, whose single parameter is a `bool`, so the loop re-entered on a number instead of the condition. It is a **latent N14a defect** — no differential program had a short-circuit condition in a `while` — and `arrays_sort` found it on the first run. The lowering now keeps the loop header and the block where the condition ended apart |
+
+The refusals moved and stayed refusals. `an array` is no longer in
+`NativeRefusalTests.CONSTRUCTS`; `a slice` is, because a slice is a view with a
+different representation and its own increment. Everything else is still refused with
+`E0901` naming the construct and the function: `f64`, `Vec`, `String`, `HashMap`,
+`HashSet`, structs, enums, `match`, `defer`, `?`, module calls, `read_i64`, the clock
+and the filesystem. A refused program is still a program the C backend compiles — that
+control is unchanged and still runs.
+
+The audit is re-measured: **16 422 lines, 26 modules, 587 functions** (15 721 / 26 / 560
+at N14b). The suite is **994 tests, 1 573 subtests**, `tests/registry.py` reports 924
+registered tests with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic
+codes, and the overhead record is re-measured rather than assumed: **108 832 tokens**,
+unchanged because the model-facing guide is unchanged — arrays were already part of the
+language the guide describes, and this increment changed which backend compiles them,
+not what a program says.
+
+What this increment does **not** claim: that `cgen.py` consumes the IR (it does not);
+that the arena reclaims memory (it does not); that arrays of `f64`, slices, `Vec`,
+structs or enums run natively (each is its own increment); and nothing about speed —
+every value is still a frame slot and no benchmark number is quoted because none was
+measured.
 
 ---
 
@@ -1624,7 +1669,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 15 721 Python lines and 560 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 16 422 Python lines and 587 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

@@ -20,6 +20,11 @@ compile the same program and the only interesting question is whether the two ag
   writable one, no interpreter, and the same bytes on every build — a backend that
   put a clock or a path in its output would not be reproducible, which is the other
   half of why N12's gate is still open.
+* **An array is one instruction set.** N14c makes arrays a first-class part of the
+  IR — a literal, a zeroed one, a checked read, a checked write, a length and a
+  release — and the differential runs the same array programs through both
+  backends, including the traps: a bounds check is a message and a status, so a
+  backend that forgot the check fails here instead of in a comment.
 * **No C toolchain is involved.** A native build is run with an empty `PATH`; if
   anything in the path reached for `cc`, that test fails.
 """
@@ -161,6 +166,47 @@ fn main() -> i64 {
     return -1
 }
 """,
+    "arrays_and_loops": """\
+fn total(a: [i64]) -> i64 {
+    let sum = 0
+    for value in a {
+        sum = sum + value
+    }
+    return sum
+}
+
+fn fill(a: mut [i64], value: i64) {
+    let i = 0
+    while i < len(a) {
+        a[i] = value
+        i = i + 1
+    }
+}
+
+fn main() -> i64 {
+    let a: [i64] = [1, 2, 3]
+    print(len(a))
+    print(total(a))
+    a[1] = a[0] + a[2]
+    print(a[1])
+    fill(a, 5)
+    print(total(a))
+    let zeros: [i64] = array_zeros(3)
+    print(len(zeros))
+    fill(zeros, 2)
+    print(total(zeros))
+    for value in a {
+        print(value)
+    }
+    let words: [str] = ["alpha", "beta"]
+    print(words[1])
+    let flags: [bool] = [true, false]
+    print(flags[1])
+    print(len([7, 8, 9]))
+    print(total([10, 20]))
+    return 5
+}
+""",
     "bool_parameters": """\
 fn both(x: bool, y: bool) -> bool {
     return x && y
@@ -193,6 +239,11 @@ TRAPS = {
     "division_by_zero": "let a: i64 = 1\n    let b: i64 = 0\n    print(a / b)",
     "remainder_by_zero": "let a: i64 = 1\n    let b: i64 = 0\n    print(a % b)",
     "division_overflow": "let a: i64 = -9223372036854775808\n    let b: i64 = -1\n    print(a / b)",
+    # Arrays (N14c): the bounds check is the C runtime's, word for word.
+    "array_index": "let a: [i64] = [1, 2, 3]\n    let i: i64 = 7\n    print(a[i])",
+    "array_index_negative": "let a: [i64] = [1, 2, 3]\n    let i: i64 = 0 - 1\n    a[i] = 5",
+    "array_length_negative": "let n: i64 = 0 - 1\n    let a: [i64] = array_zeros(n)",
+    "array_length_limit": "let a: [i64] = array_zeros(4194305)",
 }
 
 
@@ -258,12 +309,25 @@ def operands(instruction) -> list[str]:
         return [] if instruction.operand is None else [instruction.operand]
     if isinstance(instruction, (ir.Const, ir.Str)):
         return []
+    if isinstance(instruction, ir.ArrayLiteral):
+        return list(instruction.items)
+    if isinstance(instruction, ir.ArrayZeros):
+        return [instruction.count]
+    if isinstance(instruction, ir.Index):
+        return [instruction.base, instruction.index]
+    if isinstance(instruction, ir.IndexStore):
+        return [instruction.base, instruction.index, instruction.value]
+    if isinstance(instruction, ir.Length):
+        return [instruction.base]
+    if isinstance(instruction, ir.Release):
+        return [instruction.operand]
     raise AssertionError(f"unknown IR instruction {instruction!r}")
 
 
 def defined(instruction) -> str | None:
     """The value an instruction defines, if it defines one."""
-    if isinstance(instruction, (ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.Copy, ir.Str, ir.Const)):
+    if isinstance(instruction, (ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.Copy, ir.Str, ir.Const,
+                                ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.Length)):
         return instruction.value
     if isinstance(instruction, ir.Call) and instruction.returns != "void":
         return instruction.value
@@ -482,9 +546,12 @@ fn main() -> i64 {
     return 0
 }
 """,
-        "an array": """\
+        "a slice": """\
+edition 2;
 fn main() -> i64 {
     let a: [i64] = [1, 2, 3]
+    let part: [i64] = a[0..2]
+    print(len(part))
     return 0
 }
 """,
@@ -583,6 +650,184 @@ fn main() -> i64 {
                     self.assertIn(option[0], result.stderr)
                     self.assertFalse((directory / "x").exists(),
                                      "a refused build must not write a binary")
+
+
+class NativeArrayTests(unittest.TestCase):
+    """Arrays: one instruction set, two lowerings, one answer (PLAN.md N14c).
+
+    The claim is narrow and checkable. An array is a **value of the IR** — a literal,
+    `array_zeros`, a checked read, a checked write, a length and a release — so both
+    backends consume the same six instructions, and the differential, the traps and
+    the fixtures all compare what the two produce. Ownership is not a comment: which
+    block releases which array is decided by the lowering and stated in the IR, and
+    the tests below read it there.
+    """
+
+    #: Every fixture whose arrays the native backend runs today.
+    FIXTURES = ("arrays_basic", "arrays_borrow", "arrays_sort", "for_loops")
+
+    def test_every_array_fixture_builds_and_runs_through_both_backends(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            for name in self.FIXTURES:
+                with self.subTest(fixture=name):
+                    source = ROOT / "tests" / "fixtures" / "positive" / f"{name}.nv"
+                    c_binary, native_binary = build_both(source, directory)
+                    self.assertEqual(run_binary(native_binary), run_binary(c_binary),
+                                     f"{name}: the two backends disagree")
+
+    def test_the_ir_states_every_array_operation_the_language_has(self):
+        module = lower_source(PROGRAMS["arrays_and_loops"])
+        kinds = {type(instruction).__name__
+                 for function in module.functions for block in function.blocks
+                 for instruction in block.instructions}
+        for name in ("ArrayLiteral", "ArrayZeros", "Index", "IndexStore", "Length",
+                     "Release"):
+            self.assertIn(name, kinds, f"the IR never states {name}")
+
+    def test_the_block_that_declared_an_array_releases_it_last_declared_first(self):
+        """Ownership is the lowering's decision, so it is read out of the IR."""
+        module = lower_source("""\
+fn main() -> i64 {
+    let first: [i64] = [1]
+    let second: [i64] = [2, 3]
+    print(len(first) + len(second))
+    return 0
+}
+""")
+        main = next(function for function in module.functions if function.name == "main")
+        instructions = [instruction for block in main.blocks
+                        for instruction in block.instructions]
+        literals = [instruction.value for instruction in instructions
+                    if isinstance(instruction, ir.ArrayLiteral)]
+        releases = [instruction.operand for instruction in instructions
+                    if isinstance(instruction, ir.Release)]
+        self.assertEqual(len(literals), 2)
+        self.assertEqual(releases, list(reversed(literals)),
+                         "an array is released by the block that owns it, last first")
+        self.assertIsInstance(instructions[-1], ir.Ret,
+                              "the releases come before the return, so the array is "
+                              "still alive while the returned value is computed")
+
+    def test_a_temporary_array_is_released_when_its_statement_ends(self):
+        module = lower_source("""\
+fn main() -> i64 {
+    print(len([7, 8, 9]))
+    print(1)
+    return 0
+}
+""")
+        main = next(function for function in module.functions if function.name == "main")
+        instructions = [instruction for block in main.blocks
+                        for instruction in block.instructions]
+        release = next(index for index, instruction in enumerate(instructions)
+                       if isinstance(instruction, ir.Release))
+        last_print = max(index for index, instruction in enumerate(instructions)
+                         if isinstance(instruction, ir.Print))
+        self.assertLess(release, last_print,
+                        "an array nobody binds belongs to the statement that built it")
+
+    def test_an_array_parameter_is_borrowed_and_never_released(self):
+        module = lower_source(PROGRAMS["arrays_and_loops"])
+        for name in ("total", "fill"):
+            with self.subTest(function=name):
+                function = next(item for item in module.functions
+                                if item.name == name)
+                releases = [instruction for block in function.blocks
+                            for instruction in block.instructions
+                            if isinstance(instruction, ir.Release)]
+                self.assertEqual(releases, [],
+                                 f"{name} borrows its array; the caller owns it")
+
+    def test_a_while_whose_condition_short_circuits_leaves_the_loop(self):
+        """The regression N14c found: the back edge landed in the `&&` join block.
+
+        `while j >= 0 && a[j] > key` produced a back edge into the join, whose single
+        parameter is a `bool`; the loop then ran on a number that was never zero. The
+        program below is the insertion sort's inner loop, and it terminates.
+        """
+        source = """\
+fn sort(a: mut [i64]) {
+    let i = 1
+    while i < len(a) {
+        let key = a[i]
+        let j = i - 1
+        while j >= 0 && a[j] > key {
+            a[j + 1] = a[j]
+            j = j - 1
+        }
+        a[j + 1] = key
+        i = i + 1
+    }
+}
+
+fn main() -> i64 {
+    let a: [i64] = [3, 1, 2]
+    sort(a)
+    for value in a {
+        print(value)
+    }
+    return 0
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "short_circuit_loop", source)
+            c_binary, native_binary = build_both(path, directory)
+            native_run = subprocess.run([str(native_binary)], capture_output=True,
+                                        text=True, timeout=30)
+            c_run = subprocess.run([str(c_binary)], capture_output=True, text=True,
+                                   timeout=30)
+        self.assertEqual((native_run.stdout, native_run.returncode),
+                         (c_run.stdout, c_run.returncode))
+        self.assertEqual(native_run.stdout, "1\n2\n3\n")
+
+    def test_a_bounds_trap_traces_like_any_other_trap(self):
+        """A trap says where it happened, and is silent about that when not asked."""
+        source = """\
+fn read_at(a: [i64], index: i64) -> i64 {
+    return a[index]
+}
+
+fn main() -> i64 {
+    let a: [i64] = [1, 2, 3]
+    print(read_at(a, 5))
+    return 0
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "traced", source)
+            _, native_binary = build_both(path, directory)
+            plain = subprocess.run([str(native_binary)], capture_output=True, text=True,
+                                   timeout=30)
+            traced = subprocess.run([str(native_binary)], capture_output=True, text=True,
+                                    timeout=30, env={**os.environ, "NAVA_TRACE": "1"})
+        self.assertEqual(plain.returncode, 1)
+        self.assertEqual(
+            plain.stderr,
+            "nava runtime error: array index 5 is out of bounds for length 3\n",
+            "without NAVA_TRACE a trap is exactly the message the C backend prints")
+        self.assertIn("  at nava.entry.read_at (traced.nv:2)\n", traced.stderr)
+        self.assertIn("  at nava.entry.main (traced.nv:7)\n", traced.stderr)
+
+    def test_the_release_instruction_costs_nothing_in_the_native_backend(self):
+        """The arena never gives bytes back, so `release` encodes as nothing.
+
+        That is a decision with a cost, so it is measured rather than asserted: a
+        build of a program with arrays contains no `free` and no `munmap`, and the
+        *whole* text of two programs that differ only in their arrays need not be
+        compared — what is compared is that the file is still an executable.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "released", PROGRAMS["arrays_and_loops"])
+            _, native_binary = build_both(path, directory)
+            parsed = reader.read(native_binary)
+        symbols = [symbol.name for symbol in parsed.symbols]
+        self.assertNotIn("free", symbols)
+        self.assertNotIn("malloc", symbols)
+        self.assertIn("nv_array_new", symbols)
 
 
 class NativeELFTests(unittest.TestCase):

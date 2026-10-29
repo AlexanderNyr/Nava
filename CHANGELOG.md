@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+N14c: **arrays through one IR** — an array is a value of the intermediate
+representation, with its own instructions and its own ownership.
+
+- `array`, `zeros`, `index`, `index store`, `len` and `release` are IR
+  instructions, so both backends read the same six; `index` is checked and `len`
+  answers the length the array was built with.
+- Ownership is the lowering's decision and is written down: the block that declared
+  an array gives it back when it is left — on `return`, on `break`/`continue` that
+  leave the block — last declared first, and an array nobody binds belongs to the
+  statement that built it. A `[T]` parameter is a borrow and is never released.
+- The native backend gains an `mmap`-backed arena and one array helper for all three
+  element types (`i64`, `bool`, `str` share one word and one stride). `release`
+  encodes as nothing there: the arena never returns memory, and that is stated.
+- The three array traps are the C runtime's, word for word and status for status:
+  index out of bounds, a negative length, and a length above `MAX_ARRAY_ELEMENTS`.
+- The differential covers arrays: `arrays_basic`, `arrays_borrow`, `arrays_sort`,
+  `for_loops` and a new `arrays_and_loops` program are identical on stdout, stderr
+  and exit status through both backends.
+- Fixed, found by that differential: `while a && b` looped forever on the native
+  backend — the back edge went into the `&&` join block instead of the loop header.
+
 N14b: **whole programs** — the native backend links, names what it links, and can
 say where a program died.
 

@@ -1491,14 +1491,16 @@ loop's carried values in its signature:
 ```
 
 The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `bool`,
-string literals, `+ - * / %` with the checks below, `== != < <= > >=`, `!`, `&&`, `||`
-with short-circuit evaluation, `if`/`else`, `while`, `for … in a..b`, `break`,
-`continue`, labelled jumps, calls (including recursion and calls into modules, up to six
-arguments), a call that returns a `str` (a `str` is a pointer, so it travels like one),
-and `print` of an `i64`, a `bool` or a `str`. Everything else — `f64`, arrays, slices,
-`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`, a call
-through a function value, a generic function and every builtin — is refused with
-`E0901`, **naming the construct and the function**:
+string literals, arrays of them — `[i64]`, `[bool]` and `[str]`, with a literal,
+`array_zeros`, a checked read, a checked write, `len` and `for … in array` — `+ - * / %`
+with the checks below, `== != < <= > >=`, `!`, `&&`, `||` with short-circuit
+evaluation, `if`/`else`, `while`, `for … in a..b`, `break`, `continue`, labelled jumps,
+calls (including recursion and calls into modules, up to six arguments), a call that
+returns a `str` (a `str` is a pointer, so it travels like one), and `print` of an `i64`,
+a `bool` or a `str`. Everything else — `f64`, slices, `Vec`, `String`, `HashMap`,
+`HashSet`, structs, enums, `match`, `defer`, `?`, a call through a function value, a
+generic function and every other builtin — is refused with `E0901`, **naming the
+construct and the function**:
 
 ```
 prog.nv:2:18: error[E0901]: the native backend does not implement a floating-point literal (in 'main')
@@ -1529,7 +1531,7 @@ start-up — with three `PT_LOAD` segments:
 |---|---|---|
 | the headers and `.text` | read, execute | the machine code |
 | `.rodata` and `.nava.lines` | read | string literals and the line tables |
-| `.data` | read, write | the number buffer and the trace flag |
+| `.data` | read, write | the number buffers, the trace flag and the arena pointer |
 
 The file also carries `.symtab`, `.strtab` and section headers, so `nm` and `readelf`
 read it: `_start` and every function are symbols named `nava.<module>.<name>`, and a
@@ -1537,10 +1539,35 @@ function's size is its own. That is not decoration — a trace, a profile and a 
 all need it, and a compiler that writes an executable nobody can read back has only
 moved the problem.
 
-The runtime is `write` and `exit` and nothing else: printing an `i64` is a decimal
-conversion loop in machine code. Checked arithmetic traps through the same messages the
-C runtime prints, including `%`'s own `remainder by zero`, and a trap exits with status
-1. The status of `main` is its return value modulo 256, as it is for every other build.
+The runtime is `write`, `exit` and `mmap`, and nothing else: printing an `i64` is a
+decimal conversion loop in machine code. Checked arithmetic traps through the same
+messages the C runtime prints, including `%`'s own `remainder by zero`, and a trap exits
+with status 1. The status of `main` is its return value modulo 256, as it is for every
+other build.
+
+### Arrays, and the memory behind them
+
+An array is a **value of the IR**, not a construct each backend understands on its own:
+`array`, `zeros`, `index`, `index store`, `len` and `release`. The first five are what
+the language says — `index` is checked, `len` answers the length the array was built
+with — and the sixth is where ownership lives: the block that declared an array gives it
+back when it is left, on the normal path, on `return` and on a `break`/`continue` that
+leaves the block, innermost first and last declared first. The C backend turns `release`
+into `free`; the native backend turns it into nothing, because its memory is an arena.
+
+That arena is a chain of `mmap`ed regions, and an array is a sixteen-byte header —
+a length and a pointer to the elements — followed by eight-byte elements, so all three
+element types share one stride and one helper. Nothing is ever given back: a program
+that allocates arrays in a loop grows the arena until it exits. This is a limit of the
+backend, stated here rather than discovered later; the three traps are the C runtime's,
+word for word, and the same program stops at the same line whichever backend built it:
+
+```
+nava runtime error: array index 5 is out of bounds for length 3
+nava runtime error: array index -1 is out of bounds for length 3
+nava runtime error: array length must not be negative
+nava runtime error: array length 5000000 exceeds the limit of 4194304
+```
 
 ### The line table and the trace
 

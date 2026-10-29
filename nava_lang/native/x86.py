@@ -171,6 +171,11 @@ class Assembler:
         self.emit(_rex(w=True, b=register) + b"\x83" + _modrm(3, 0, register)
                   + bytes([value & 0xFF]))
 
+    def and_imm32(self, register: int, value: int) -> None:
+        """`and r64, imm32`: REX.W + 81 /4 id — sign-extended, so -16 aligns."""
+        self.emit(_rex(w=True, b=register) + b"\x81" + _modrm(3, 4, register))
+        self.emit(_int32(value))
+
     def sub_rsp(self, value: int) -> None:
         """`sub rsp, imm32`: REX.W + 81 /5 id."""
         self.emit(_rex(w=True, b=RSP) + b"\x81" + _modrm(3, 5, RSP))
@@ -219,8 +224,8 @@ class Assembler:
 
     def jcc(self, condition: str, label: str) -> None:
         """`jcc rel32`: 0F 80+cc rel32."""
-        codes = {"o": 0, "no": 1, "e": 4, "ne": 5, "s": 8, "ns": 9,
-                 "l": 0xC, "ge": 0xD, "le": 0xE, "g": 0xF, "b": 2, "ae": 3}
+        codes = {"o": 0, "no": 1, "b": 2, "ae": 3, "e": 4, "ne": 5, "be": 6, "a": 7,
+                 "s": 8, "ns": 9, "l": 0xC, "ge": 0xD, "le": 0xE, "g": 0xF}
         self.emit(b"\x0F" + bytes([0x80 + codes[condition]]))
         self.emit(self._relative(label))
 

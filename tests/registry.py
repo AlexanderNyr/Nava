@@ -1332,6 +1332,20 @@ REGISTERED_TESTS = {
         "test_the_variable_adds_a_frame_for_every_caller_from_the_innermost_out",
         "test_without_the_variable_a_trap_prints_exactly_the_message",
     },
+    #: N14c: arrays through one IR. The gate is the differential on the same array
+    #: programs, plus the three traps (a bounds check, a negative length and the
+    #: length limit) whose message and status the two backends share, plus the
+    #: ownership the IR states and the one regression this increment found.
+    "NativeArrayTests": {
+        "test_a_bounds_trap_traces_like_any_other_trap",
+        "test_a_temporary_array_is_released_when_its_statement_ends",
+        "test_a_while_whose_condition_short_circuits_leaves_the_loop",
+        "test_an_array_parameter_is_borrowed_and_never_released",
+        "test_every_array_fixture_builds_and_runs_through_both_backends",
+        "test_the_block_that_declared_an_array_releases_it_last_declared_first",
+        "test_the_ir_states_every_array_operation_the_language_has",
+        "test_the_release_instruction_costs_nothing_in_the_native_backend",
+    },
 }
 
 #: Registered public tasks and their expected number of cases.  A task that
@@ -1582,6 +1596,7 @@ def check_skip_state() -> list[str]:
     import test_reproducible  # noqa: PLC0415
     import test_native  # noqa: PLC0415
     for module, class_name in ((test_native, "NativeDifferentialTests"),
+                               (test_native, "NativeArrayTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),
