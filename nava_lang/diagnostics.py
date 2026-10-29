@@ -211,6 +211,10 @@ CODES: dict[str, tuple[str, str]] = {
     "E0810": (Severity.ERROR, "a module is provided by a package the lockfile does not name"),
     "E0811": (Severity.ERROR, "two packages provide the same module"),
     "E0812": (Severity.ERROR, "network access is not available"),
+    # --- reproducible builds -------------------------------------------------
+    "E0813": (Severity.ERROR, "invalid SOURCE_DATE_EPOCH"),
+    "E0814": (Severity.ERROR, "two builds of one source are not identical"),
+    "E0815": (Severity.ERROR, "a build record does not describe this build"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),

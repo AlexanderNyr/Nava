@@ -114,6 +114,12 @@ CODES_TESTED_ELSEWHERE = {
     "E0810": "tests/test_packages.py: test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810",
     "E0811": "tests/test_packages.py: test_two_packages_may_not_provide_the_same_module",
     "E0812": "tests/test_packages.py: test_network_is_refused_with_its_own_code",
+    # Build records are written by `nava build --record` and compared by
+    # `nava reproduce`, which needs a tree, a compiler and two temporary
+    # directories: tests/test_reproducible.py holds them.
+    "E0813": "tests/test_reproducible.py: test_the_environment_variable_is_validated",
+    "E0814": "tests/test_reproducible.py: DifferenceTests",
+    "E0815": "tests/test_reproducible.py: test_a_record_that_is_not_a_record_is_refused",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

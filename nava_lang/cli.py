@@ -45,6 +45,9 @@ class Compilation:
     #: lists these, so "which packages are in this binary" is answerable from the
     #: build rather than from a reading of the sources.
     packages: list[str] = field(default_factory=list)
+    #: Module name -> the file its source came from. The build record digests these
+    #: files, so it describes what was compiled rather than what is on disk later.
+    sources: dict[str, str] = field(default_factory=dict)
 
 
 def compile_source(source: str, path: Path | str | None = None,
@@ -76,7 +79,15 @@ def compile_source(source: str, path: Path | str | None = None,
                                entry_program=program)
     check(program)
     packages = sorted(set(getattr(program, "module_packages", {}).values()))
-    return Compilation(generate(program, capabilities), list(program.warnings), packages)
+    sources = dict(getattr(program, "sources", {}) or {})
+    if not sources and path is not None:
+        # A program with no imports is one file, and `modules.load` never ran, so
+        # the source map has to be filled here: a build record that cannot name the
+        # file it compiled would report an empty source digest and look reproducible
+        # for the wrong reason.
+        sources = {"": str(path)}
+    return Compilation(generate(program, capabilities), list(program.warnings),
+                       packages, sources)
 
 
 def compile_file(path: Path | str, root: Path | str | None = None,
@@ -241,6 +252,10 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("-o", "--output", required=True, help="executable path")
     build.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     build.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
+    build.add_argument("--record", type=Path, metavar="PATH",
+                       help="write a build record (JSON) describing what went into "
+                            "this binary: source digests, the generated C, the "
+                            "toolchain and SOURCE_DATE_EPOCH")
     add_project_options(build)
     doc_cmd = sub.add_parser(
         "doc", help="write the reference generated from the modules' contracts",
@@ -271,6 +286,22 @@ def make_parser() -> argparse.ArgumentParser:
                                                  "(default: the working directory)")
     lock_cmd.add_argument("--check", action="store_true",
                           help="check the lockfile instead of writing it")
+    reproduce_cmd = sub.add_parser(
+        "reproduce", help="build a program twice and require the same bytes",
+        description="Build the same source twice, in two temporary directories, and "
+                    "compare the records: the source digests, the generated C, the "
+                    "binary, the toolchain and SOURCE_DATE_EPOCH. With --record, the "
+                    "first build is additionally compared with a previous record.",
+    )
+    reproduce_cmd.add_argument("source", help="source file to build")
+    reproduce_cmd.add_argument("--runs", type=int, default=2,
+                               help="how many builds to compare (default: 2)")
+    reproduce_cmd.add_argument("--record", type=Path, metavar="PATH",
+                               help="compare the build with a record written earlier")
+    reproduce_cmd.add_argument("--cc", help="C compiler command (default: $CC or cc)")
+    reproduce_cmd.add_argument("--opt", choices=("0", "2", "3"), default="2",
+                               help="optimization level (default: 2)")
+    add_project_options(reproduce_cmd)
     run = sub.add_parser(
         "run", help="compile and execute a program",
         description="Compile and run a program. By default the program runs under the best "
@@ -324,6 +355,13 @@ def compile_c(code: str, binary: Path, cc: str | None, opt: str) -> bool:
             print("nava: C compiler failed", file=sys.stderr)
             return False
     return True
+
+
+def tempfile_for_reproduce():
+    """A fresh temporary directory for one build of `nava reproduce`."""
+    import tempfile
+
+    return tempfile.TemporaryDirectory(prefix="nava-reproduce-")
 
 
 def print_diagnostic(error: NavaError) -> None:
@@ -442,6 +480,12 @@ def main(argv: list[str] | None = None) -> int:
                 "vendor/ and has no registry to reach",
                 hint="offline is the only mode; drop --network, or vendor the package",
             )
+        if args.command in ("build", "reproduce", "run"):
+            # The convention is about builds, so a build reads it even when no
+            # record is written: a value that cannot be used is refused up front.
+            from . import reproducible
+
+            reproducible.source_date_epoch()
         path = resolve_source_argument(args)
         try:
             source = path.read_text(encoding="utf-8")
@@ -510,16 +554,70 @@ def main(argv: list[str] | None = None) -> int:
                 raise make("E0505", f"output directory does not exist: {output.parent}")
             if not compile_c(code, output, args.cc, args.opt):
                 return 2
+            build = None
+            if getattr(args, "record", None):
+                from . import reproducible
+                build = reproducible.record(compilation.sources, code, output,
+                                            compilation.packages, args.cc)
+                args.record.parent.mkdir(parents=True, exist_ok=True)
+                args.record.write_text(reproducible.render(build), encoding="utf-8")
+            extra = {"output": str(output), "packages": compilation.packages,
+                     "network": "offline"}
+            if build is not None:
+                extra["record"] = str(args.record)
+                extra["binary_digest"] = build.binary_digest
+                extra["c_digest"] = build.c_digest
+                extra["source_digest"] = build.source_digest
             if machine:
-                print(report_json(str(path), "ok", compilation.warnings,
-                                  {"output": str(output),
-                                   "packages": compilation.packages,
-                                   "network": "offline"}))
+                print(report_json(str(path), "ok", compilation.warnings, extra))
             else:
                 if compilation.packages:
                     print(f"Packages: {', '.join(compilation.packages)} (from nava.lock)")
                 print(f"Built: {output}")
+                if build is not None:
+                    print(f"Record: {args.record} ({build.binary_digest})")
             return 0
+        if args.command == "reproduce":
+            from . import reproducible
+
+            runs = max(2, int(getattr(args, "runs", 2) or 2))
+            records = []
+            for number in range(runs):
+                with tempfile_for_reproduce() as directory:
+                    binary = Path(directory) / f"program-{number}"
+                    if not compile_c(code, binary, args.cc, args.opt):
+                        return 2
+                    records.append(reproducible.record(
+                        compilation.sources, code, binary, compilation.packages, args.cc))
+            # Every pair is compared with the first, and every difference from every
+            # comparison is reported: a build that is reproducible once and not twice
+            # is not reproducible.
+            differences: list[str] = []
+            for other in records[1:]:
+                differences.extend(reproducible.compare(records[0], other))
+            if getattr(args, "record", None):
+                previous = reproducible.parse(args.record.read_text(encoding="utf-8"),
+                                              str(args.record))
+                differences.extend(reproducible.compare(previous, records[0]))
+            digest = records[0].binary_digest
+            if differences:
+                raise make(
+                    "E0814",
+                    f"{runs} builds of {path} are not identical:\n  "
+                    + "\n  ".join(dict.fromkeys(differences)),
+                    hint="a difference in the toolchain explains a difference in the "
+                         "digests; pin the compiler, and set SOURCE_DATE_EPOCH if the "
+                         "toolchain embeds a time",
+                )
+            if machine:
+                print(report_json(str(path), "ok", compilation.warnings,
+                                  {"reproducible": True, "runs": runs,
+                                   "binary_digest": digest,
+                                   "record": str(args.record) if getattr(args, "record", None) else None}))
+            else:
+                print(f"reproducible over {runs} builds: {digest}")
+            return 0
+
         if args.command == "run":
             # A run prints the program's own output. The package list goes to
             # stderr only when the caller asked for JSON, so a program's stdout

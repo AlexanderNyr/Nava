@@ -331,6 +331,31 @@ REGISTERED_TESTS = {
         "test_network_is_refused_before_anything_is_read",
         "test_offline_is_accepted_and_recorded",
     },
+    #: N13d: reproducible builds. Two builds of one source must be one binary; a
+    #: second checkout must write the same record bytes and the same executable; the
+    #: generated C must be identical across checkouts; `SOURCE_DATE_EPOCH` is the one
+    #: clock a build may see and is validated; and a difference is always *named*,
+    #: with a toolchain difference listed before the digests it explains.
+    "ReproduceTests": {
+        "test_two_builds_of_one_source_are_one_binary",
+        "test_more_runs_are_compared_with_the_first",
+        "test_the_record_carries_every_source_and_no_time_of_its_own",
+        "test_a_second_checkout_produces_the_same_record_and_binary",
+        "test_the_generated_c_is_the_same_in_two_checkouts",
+    },
+    "DifferenceTests": {
+        "test_a_modified_source_is_named",
+        "test_source_date_epoch_is_recorded_and_a_change_to_it_is_named",
+        "test_a_different_toolchain_is_a_toolchain_difference_first",
+        "test_a_record_that_is_not_a_record_is_refused",
+        "test_the_environment_variable_is_validated",
+        "test_a_build_refuses_a_broken_epoch_even_without_a_record",
+    },
+    "CompareTests": {
+        "test_equal_records_differ_in_nothing",
+        "test_every_difference_is_named_and_the_toolchain_comes_first",
+        "test_the_rendered_record_is_stable",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1310,6 +1335,9 @@ CODES_TESTED_ELSEWHERE = {
     "E0810": "tests/test_packages.py: test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810",
     "E0811": "tests/test_packages.py: test_two_packages_may_not_provide_the_same_module",
     "E0812": "tests/test_packages.py: test_network_is_refused_with_its_own_code",
+    "E0813": "tests/test_reproducible.py: test_the_environment_variable_is_validated",
+    "E0814": "tests/test_reproducible.py: test_a_modified_source_is_named",
+    "E0815": "tests/test_reproducible.py: test_a_record_that_is_not_a_record_is_refused",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -1377,6 +1405,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_manifest  # noqa: PLC0415
     import test_lockfile  # noqa: PLC0415
     import test_packages  # noqa: PLC0415
+    import test_reproducible  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1386,7 +1415,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
                    test_io, test_fs, test_args, test_collections, test_time,
-                   test_manifest, test_lockfile, test_packages,
+                   test_manifest, test_lockfile, test_packages, test_reproducible,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1464,7 +1493,11 @@ def check_skip_state() -> list[str]:
     import test_manifest  # noqa: PLC0415
     import test_lockfile  # noqa: PLC0415
     import test_packages  # noqa: PLC0415
-    for module, class_name in ((test_packages, "PackageModuleTests"),
+    import test_reproducible  # noqa: PLC0415
+    for module, class_name in ((test_reproducible, "ReproduceTests"),
+                               (test_reproducible, "DifferenceTests"),
+                               (test_reproducible, "CompareTests"),
+                               (test_packages, "PackageModuleTests"),
                                (test_packages, "BoundaryTests"),
                                (test_packages, "NetworkTests"),
                                (test_lockfile, "DigestTests"),

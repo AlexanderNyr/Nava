@@ -1382,6 +1382,68 @@ Built: /tmp/prog
 in this binary" is answerable from the build rather than from a reading of the
 sources.
 
+## Reproducible builds: records and `nava reproduce`
+
+Two builds of one tree are meant to be one binary, and the way to know is to record
+what went into a build and compare the records.
+
+`nava build --record PATH` writes a record — JSON, sorted keys, one trailing
+newline:
+
+```json
+{
+  "binary_digest": "sha256:ba9a93ae…",
+  "c_digest": "sha256:dc6fea5b…",
+  "format": 1,
+  "packages": ["json", "util"],
+  "source_date_epoch": null,
+  "source_digest": "sha256:d736aa39…",
+  "sources": {"entry": "sha256:505d838d…", "json": "…", "util": "…"},
+  "toolchain": {
+    "cc_command": "cc", "cc_path": "/usr/bin/cc",
+    "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
+    "ld_version": "GNU ld (GNU Binutils for Debian) 2.44",
+    "machine": "x86_64", "platform": "linux"
+  }
+}
+```
+
+Nothing in a record comes from the machine that is not part of the build: no time of
+the build, no absolute paths (modules are named, not located), no user, no order
+from a directory listing. The same tree in two checkouts therefore writes the same
+record bytes, and the entry module is called `entry` rather than the empty string it
+has inside the compiler.
+
+`nava reproduce SOURCE [--runs N] [--record PATH]` builds the source `N` times
+(default 2) in fresh temporary directories, compares every build with the first, and
+— when `--record` names a record — compares the first build with that too. It prints
+one line on success:
+
+```
+reproducible over 2 builds: sha256:ba9a93ae…
+```
+
+and otherwise stops with `E0814`, listing every difference by name:
+
+```
+error[E0814]: 2 builds of src/main.nv are not identical:
+  toolchain.cc_command: 'cc' != '/usr/bin/cc'
+```
+
+A toolchain difference is listed **first**, before the digests it caused, because it
+is the difference that explains the others — that is the difference a record is for.
+
+`SOURCE_DATE_EPOCH` is the one clock a build may see. It is read from the
+environment, recorded, passed through to the C compiler (the reproducible-builds
+convention), and checked by every command that produces a binary — `build`,
+`reproduce` and `run` — so a value that is not a whole non-negative number is
+`E0813` rather than a build that quietly looks pinned. A record that names one
+value and a build that ran with another is `E0814`.
+
+The compiler's own output is part of the claim: the generated C for one project in
+two different directories is byte-identical, which `nava emit-c` produces and the
+suite checks.
+
 ## The clock
 
 Three builtins read the machine's clocks, and there is no way to set one:
@@ -2747,6 +2809,14 @@ never changes meaning; a new condition gets a new code.
 | `E0507` | error | path is not a directory | `tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported` |
 | `E0508` | error | `nava doc` was asked for a module that does not exist | `tests/test_contracts.py: test_an_unknown_module_is_reported` |
 | `E0509` | error | no program to compile | `tests/test_manifest.py: test_neither_a_source_nor_a_project_is_refused` |
+
+**Reproducible builds**
+
+| Code | Severity | Meaning | Triggered by |
+|---|---|---|---|
+| `E0813` | error | invalid `SOURCE_DATE_EPOCH` | `tests/test_reproducible.py: test_the_environment_variable_is_validated` |
+| `E0814` | error | two builds of one source are not identical | `tests/test_reproducible.py: test_a_modified_source_is_named` |
+| `E0815` | error | a build record does not describe this build | `tests/test_reproducible.py: test_a_record_that_is_not_a_record_is_refused` |
 
 **Packages and the lockfile**
 

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+N13d: **reproducible builds** — records, and proof that two builds are one build.
+
+- `nava build --record PATH` writes a build record: the digest of every `.nv` file
+  compiled (`entry`, then each module by name), the digest of all of them, the
+  digest of the generated C, the digest of the binary, the packages that
+  contributed, the toolchain (the C compiler's command, path and version, the
+  linker's version, platform and machine) and `SOURCE_DATE_EPOCH`. JSON with sorted
+  keys and no build time, so the same tree writes the same bytes on any machine.
+- `nava reproduce SOURCE [--runs N] [--record PATH]` builds `N` times in fresh
+  temporary directories, compares every build with the first and optionally with a
+  record written earlier, and prints `reproducible over 2 builds: sha256:…`. A
+  difference stops it with `E0814` and is **named**: `toolchain.cc_command: … != …`
+  first, then the source, C and binary digests it explains.
+- `SOURCE_DATE_EPOCH` is read, recorded and passed to the compiler, and validated by
+  every command that produces a binary (`build`, `reproduce`, `run`): anything that
+  is not a whole non-negative number is `E0813`.
+- A record that is not a record is `E0815`, not a guess.
+
 N13c: **building against vendored packages**.
 
 - `import name;` searches the project's own files, then `vendor/<package>/name.nv`

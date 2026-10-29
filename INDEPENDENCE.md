@@ -14,9 +14,10 @@ and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `V
 as a field, a payload or a type argument) and N11g (an element that owns storage)
 are delivered; N12 is complete through N12i (every module of the phase, with
 contracts, examples and tests), N13 is in progress: N13a (`nava.toml`) and N13b
-(`nava.lock`, vendored packages and content digests) and N13c (a build that reads
-its modules out of the lockfile, and the refused network mode) are delivered, and
-N13d and N14–N18 are not started.** The
+(`nava.lock`, vendored packages and content digests), N13c (a build that reads its
+modules out of the lockfile, and the refused network mode) and N13d (build records,
+`nava reproduce`, `SOURCE_DATE_EPOCH`) are delivered — **N13 is complete** — and
+N14–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -134,7 +135,7 @@ the guard, and the two implementations must agree on every entry.
 | N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
-| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a–N13c delivered: the manifest, vendored packages by digest, the lockfile and its tamper checks, and a build that takes its modules from the lockfile and verifies their bytes before compiling; byte-identical rebuilds are not |
+| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
@@ -1159,7 +1160,46 @@ reproducibility records.
 | N13a | **`nava.toml`**: the manifest as a strict subset of TOML — `[package]`, `[build]`, `[dependencies]` — with names checked against the standard library, versions and constraints parsed and matched, the edition checked against the entry file, `nava project` to describe it and `--project` on the commands that compile | **Delivered** (record below) |
 | N13b | **The lockfile**: vendored packages identified by a content digest, a resolver that walks the graph and refuses a cycle or a version outside its constraint, `nava lock` to write `nava.lock`, and `nava lock --check` to stop at the first disagreement — the tamper list the phase names, one code per accident | **Delivered** (record below) |
 | N13c | **Building against packages**: `import name` searches the project, then the packages `nava.lock` names, then the standard library; an unlocked `vendor/` directory is `E0810`, two packages providing one name is `E0811`, a package file shadowing a standard module is `E0360`; the digest check runs before the build; `--network` is refused with `E0812` and `--offline` is recorded | **Delivered** (record below) |
-| N13d | **Reproducible builds**: sorted iteration everywhere it reaches output, `SOURCE_DATE_EPOCH`, recorded toolchain identity, and two checkouts producing one byte-identical binary | Not started |
+| N13d | **Reproducible builds**: a build record (source, C and binary digests, toolchain identity, `SOURCE_DATE_EPOCH`), `nava reproduce` to build twice and compare, a validation of the one clock a build may see, and two checkouts proven to produce one binary — every difference reported by name, toolchain first | **Delivered** (record below) |
+
+#### Delivery record N13d (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| **Two checkouts produce one binary** | `ReproduceTests.test_a_second_checkout_produces_the_same_record_and_binary`, `test_the_generated_c_is_the_same_in_two_checkouts` | the project is copied to a second directory with a different absolute path (a different inode for every file) and built there: the two **record files are the same bytes** and the two executables the same digest, and `nava reproduce --record` of the second against the first's record is clean. The generated C is compared the same way and is byte-identical, so the claim is about the compiler's output and not only about what the C compiler does with it |
+| A build records what went into it | `test_the_record_carries_every_source_and_no_time_of_its_own` | the record names every module (`entry`, `json`, `util`) with its digest, the digest of all of them, the digest of the generated C, the digest of the binary, the packages, the toolchain and `SOURCE_DATE_EPOCH`. The record contains no path of the machine and no build time (`assertNotIn(str(root), text)`) |
+| The record has no clock and no order of its own | `CompareTests.test_the_rendered_record_is_stable`, `reproducible.render` | JSON with sorted keys, maps sorted by module name, one trailing newline; rendered twice it is the same bytes; parsed back, it compares equal to the record it came from |
+| **`SOURCE_DATE_EPOCH` is the one clock a build may see** | `DifferenceTests.test_the_environment_variable_is_validated`, `test_a_build_refuses_a_broken_epoch_even_without_a_record`, `test_source_date_epoch_is_recorded_and_a_change_to_it_is_named` | `abc`, `-1`, `1.5` and ` 12x` are `E0813`; the check runs for `build`, `reproduce` and `run`, so a build with a broken value is refused even when no record is written; a valid value is recorded (`"source_date_epoch": 1700000000`) and a build that ran with another value is `E0814` naming `SOURCE_DATE_EPOCH: 1700000000 != None` |
+| **A difference is named, and a toolchain difference comes first** | `DifferenceTests.test_a_different_toolchain_is_a_toolchain_difference_first`, `test_a_modified_source_is_named`, `CompareTests.test_every_difference_is_named_and_the_toolchain_comes_first` | building with `--cc /usr/bin/cc` against a record written by `cc` stops with `E0814` and lists `toolchain.cc_command: 'cc' != '/usr/bin/cc'` **first**; with two fabricated records the difference list begins with the toolchain field and then names `source entry: … != …`, `c_digest`, `binary_digest`. This is the phase's negative control — *a build with a different toolchain records the difference rather than silently producing a second hash* — as a function with a test on its ordering |
+| A record that is not a record is refused | `test_a_record_that_is_not_a_record_is_refused` | `{"format": 2}`, a record with no fields, `{"format": 1}` alone and plain text are `E0815`, not a guess |
+| `nava reproduce` compares every run with the first | `ReproduceTests.test_more_runs_are_compared_with_the_first` | `--runs 3` builds three times in three fresh temporary directories and compares each with the first, printing `reproducible over 3 builds: sha256:…`. A build that is reproducible once and not twice would be caught, which is the point of more than two |
+| A program with no imports still records its one file | `test_the_record_carries_every_source_and_no_time_of_its_own` (the `entry` key), `cli.compile_source` | the source map is filled for the entry file even when `modules.load` never runs — a record that reported an empty source digest for a single-file program would look reproducible for the wrong reason. This was a real defect found while writing the tests, not a hypothetical |
+| The specification moved with the code | `LANGUAGE.md` (`## Reproducible builds`, the code table) | the record's fields, the `reproduce` contract, the ordering rule for differences and the `SOURCE_DATE_EPOCH` policy are normative; the code table grows to **171** entries (168 at N13c) |
+| The overhead record was re-measured rather than assumed unchanged | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, the same number as N13c, and for a stated reason: the model-facing guide is unchanged |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 12 541 lines, 17 modules, 392 functions — 358 lines and 13 functions more than N13c; the seventeenth module is `reproducible.py` |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 867 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 171 diagnostic codes`; suite **937 tests OK** (1 495 subtests); release checks OK; the guide digest verifies |
+
+Negative controls: the modified source (`E0814`, named per module), the changed
+`SOURCE_DATE_EPOCH` (`E0814`), the different toolchain (a toolchain difference
+listed first), the malformed record (`E0815`), and the invalid environment value
+(`E0813`).
+
+What this increment does **not** claim: that an arbitrary C compiler is
+deterministic. It claims that a build records which compiler ran, with what flags,
+at what pinned time, over which sources — and that two builds of one tree are one
+binary *on the toolchains recorded here*, with a difference reported by name when
+they are not. The honest qualification is in the record rather than in a footnote:
+`platform` and `machine` are fields, so "the same binary on Linux x86-64 with GCC
+14.2" is checkable and "the same binary everywhere" is not claimed.
+
+Deliberately not done in N13d, and why: **a `--reproducible` build mode that
+rewrites toolchain flags** (`-ffile-prefix-map`, `-frandom-seed`). The generated C
+carries no absolute path and no `__FILE__`, so those flags would be insurance
+against a compiler this project does not use; if a later toolchain needs them, the
+record will show the difference and the flags can be added where the difference
+appeared. **A signature** over the record: that is supply-chain work with key
+management behind it, and a signature nobody can verify is worse than a digest
+everybody can.
 
 #### Delivery record N13c (2026-10-29)
 
