@@ -149,8 +149,6 @@ CODES: dict[str, tuple[str, str]] = {
     "E0422": (Severity.ERROR, "a slice is a read-only view"),
     "E0423": (Severity.ERROR, "a slice cannot be passed as a `mut` parameter"),
     "E0425": (Severity.ERROR, "array_zeros needs a zero value"),
-    "E0426": (Severity.ERROR, "an array element cannot own storage"),
-    "E0427": (Severity.ERROR, "a vector element cannot own storage"),
     "E0428": (Severity.ERROR, "an owning value has exactly one owner"),
     "E0429": (Severity.ERROR, "vec_new needs an annotated element type"),
     "E0430": (Severity.ERROR, "a deferred block cannot leave the function"),

@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+N11g: an **element** of an array or a vector may be a value that owns storage —
+`[String]`, `Vec(String)`, `[Bag]`, `Vec(Bag)`, `Vec(Slot)` — with a deep copy on
+the way in, a deep copy on every read, and a release that frees every element.
+
+- Copy in: `vec_push`, `vec_set`, `xs[i] = x` and an array literal copy the value
+  into the storage (`nv_string_copy` for a `String`, the type's own helper for a
+  struct or an enum), and a write releases the slot it overwrites first.
+- Copy out: `xs[0]`, `vec_get(v, 0)` and the variable of `for x in v` are copies
+  that own their bytes and are released at the end of the statement, the block, or
+  the turn of the loop — `continue` and `break` included. `vec_pop` moves the
+  element out instead.
+- Release: freeing an array or a vector releases each element it holds, then the
+  buffer; growth moves handles between buffers without copying them.
+- `array_zeros(n)` of an owning element is `E0425`: an all-zero `String` is a null
+  buffer, not an empty string, so an owning element has no zero value.
+- `E0426` and `E0427` are **retired**: no element type owns "too much" any more.
+  What they used to carry is now a shape rule — a collection is not an element —
+  and `[[i64]]`, `[Vec(i64)]`, `Vec(Vec(i64))` and `Vec([i64])` are `E0206`.
+- Three fixtures were retired with them (`array_of_owning_values.nv`,
+  `vector_of_owning_values.nv`, `array_of_strings.nv`): each asserted a refusal
+  this increment turns into a feature, and `tests/test_elements.py` is the positive
+  counterpart that replaces them.
+
 N11f: a `Vec` or a `String` can be **stored** — as a struct field, a variant
 payload or a type argument — and the holder keeps a deep copy of its own buffer.
 

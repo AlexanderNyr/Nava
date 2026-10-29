@@ -997,29 +997,31 @@ class Checker:
         return False
 
     def validate_vec(self, typ: str, loc) -> str:
-        """The element type of `Vec(T)`, and the reason a vector owns storage.
+        """The element type of `Vec(T)`.
 
-        A vector may hold the same values an array may hold, and for the same
-        reason: an element is copied on every read and every write, so an element
-        that owned storage of its own would need those copies to be deep.
+        A vector may hold the same values an array may hold, and since N11g that
+        includes a value that owns storage: the vector copies an element in,
+        releases the slot it overwrites and releases what it still holds when it
+        is released, so `Vec(String)` and `Vec(Bag)` are as sound as `Vec(i64)`.
+        What stays refused is a *collection* as an element — `Vec(Vec(i64))` is a
+        nested collection, which Nava does not have (`E0206`).
         """
         element = vec_element(typ)
-        if is_vec(element) or is_string(element) or self.owns_storage(element):
-            holder = ("owns a buffer" if is_vec(element)
-                      else "owns its bytes" if is_string(element) else "holds an array")
+        if is_vec(element) or is_array(element):
             raise make(
-                "E0427",
-                f"a vector element cannot own storage, but {element} {holder}",
+                "E0206",
+                f"a vector cannot contain {element}",
                 loc,
-                hint="an element is copied on every push and every read; a vector of "
-                     "owning values waits for the element work of N11g",
+                hint="nested collections are not part of Nava: hold one collection "
+                     "at a time, or declare a struct with two fields",
             )
-        if element in VALUE_TYPES or self.is_struct(element) or self.is_enum(element):
+        if element in VALUE_TYPES or is_string(element) or self.is_struct(element) \
+                or self.is_enum(element):
             return element
         raise make(
             "E0203",
-            f"unknown type {element!r}; use i64, bool, str, f64, a declared struct "
-            f"or enum",
+            f"unknown type {element!r}; use i64, bool, str, f64, String, a declared "
+            f"struct or enum",
             loc,
         )
 
@@ -1036,9 +1038,14 @@ class Checker:
         """
         noun = "vector" if is_vec(typ) else "String"
         if isinstance(value, Call):
-            # A constructor, or a call whose result the callee moved out. The
-            # type was already checked against the binding, so nothing is
-            # converted here.
+            # A constructor, a call whose result the callee moved out, or a
+            # `vec_get` — which copies the element out of the vector. The type
+            # was already checked against the binding, so nothing is converted
+            # here, and the source keeps what it holds.
+            return
+        if isinstance(value, Index):
+            # An array element is read by value, and since N11g the read of an
+            # element that owns storage makes a copy of its own.
             return
         if isinstance(value, Variable):
             symbol = value.symbol
@@ -1170,26 +1177,29 @@ class Checker:
         return result
 
     def check_element_type(self, typ: str, loc, end=None) -> None:
-        """An array element is a value with no owner: a scalar, a struct or an enum.
+        """An array element is a value: a scalar, a `String`, a struct or an enum.
 
-        A struct and an enum are both copied by value and neither owns storage,
-        and a `str` inside one is an immortal pointer, so an array of them is an
-        array of plain values with one owner: the array itself.
+        An element is copied on every read and on every write, so an element that
+        owns storage needs those copies to be deep — and since N11g they are: the
+        array copies an element in, releases the slot it overwrites and releases
+        every element it still holds when it is released. A struct or an enum
+        counts as owning storage when any of its own fields or payloads does.
+        What stays refused is a *collection* as an element — `[[i64]]`,
+        `[Vec(i64)]` — because nested collections are not part of Nava (`E0206`).
         """
         if not is_array(typ):
             return
         element = element_of(typ)
-        if is_string(element) or self.owns_storage(element):
-            holder = "owns its bytes" if is_string(element) else "holds an array"
+        if is_array(element):
             raise make(
-                "E0426",
-                f"an array element cannot own storage, but {element} {holder}",
-                *((loc,) if end is None else (loc, end)),
-                hint="an element is copied on every read and every write; making those "
-                     "copies deep is the element work of N11g, so an array of owning "
-                     "values is refused rather than shared",
+                "E0206",
+                f"an array cannot contain {element}",
+                *(loc, end) if end is not None else (loc,),
+                hint="nested collections are not part of Nava: hold one collection at "
+                     "a time, or declare a struct with two fields",
             )
-        if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
+        if is_string(element) or element in SCALAR_ELEMENTS or self.is_struct(element) \
+                or self.is_enum(element):
             return
         # The parser refuses the reserved type words (`f64`, `void`) before this
         # runs, so what is left is a name that declares nothing.
@@ -2128,11 +2138,11 @@ class Checker:
             # A struct is an element type in edition 2 either way; an array, a
             # str-owning value or an enum is still refused, and says so with the
             # element-type rule rather than as a generic mismatch.
-            if actual not in VALUE_TYPES and not self.is_struct(actual) \
-                    and not self.is_enum(actual):
+            if actual not in VALUE_TYPES and not is_string(actual) \
+                    and not self.is_struct(actual) and not self.is_enum(actual):
                 raise make("E0334",
-                           f"array literal elements must be i64, bool, str or a struct, "
-                           f"got {actual}",
+                           f"array literal elements must be a value: i64, bool, str, "
+                           f"String, a struct or an enum, got {actual}",
                            item.loc)
             if element is None:
                 element = actual

@@ -1193,6 +1193,38 @@ class CGenerator:
             return f"{self.copy_helper(typ)}({code})"
         return code
 
+    def copied_element(self, typ: str, code: str) -> str:
+        """A read of an element, as a copy this statement owns and releases.
+
+        An element is read by value, so a read of one that owns storage hands
+        back a value with no storage of its own unless a copy is made. The copy
+        must exist — the container still owns what it holds — and it must be
+        released, because nothing else will ever see it. Both halves are here:
+        the copy is materialised into a temporary and registered with the
+        statement, which releases it when the statement ends.
+        """
+        name = self.temp(typ, self.copy_code(typ, code))
+        self.temporaries.append((name, typ))
+        return name
+
+    def loop_element(self, typ: str, code: str) -> str:
+        """The copy a loop variable holds.
+
+        A turn's copy belongs to the turn: it is released when the body ends, and
+        a `continue` or a `break` releases it too, because the loop body is a
+        block that owns it. It is therefore not a temporary of the whole
+        statement — the loop outlives it.
+        """
+        if self.owns_storage(typ):
+            return self.temp(typ, self.copy_code(typ, code))
+        return self.temp(typ, code)
+
+    def element_read(self, typ: str, code: str) -> str:
+        """An element read: a copy when the element owns storage, a read otherwise."""
+        if self.owns_storage(typ):
+            return self.copied_element(typ, code)
+        return self.temp(typ, code)
+
     def owned_here(self, place: str) -> bool:
         """Does one of the open blocks own this local?"""
         return any(entry == place for frame in self.owned for entry, _ in frame)
@@ -1404,6 +1436,14 @@ class CGenerator:
         pushes costs amortised constant time per element. `pop` returns the
         element it removed as `Option(T)`, which is the prelude enum the checker
         instantiated for that very call.
+
+        Growth moves handles between buffers, which is not a copy: the old
+        buffer is released without touching what its slots hold. Everything that
+        crosses the vector's boundary is a copy — `push` and `set` copy the value
+        in, `set` releases what the slot held first, `copy` copies every element,
+        and the release frees every element it still owns — but only when the
+        element type owns storage. An element that owns nothing keeps the
+        plain assignment, which is what makes `Vec(i64)` the same as it was.
         """
         types = self.vector_types()
         if not types:
@@ -1413,6 +1453,7 @@ class CGenerator:
             tag = vec_tag(typ)
             element = self.ctype(vec_element(typ))
             name = f"nv_vec_{tag}"
+            owning = self.owns_storage(vec_element(typ))
             self.line(f"typedef struct {name} {{ {element} *data; int64_t len; "
                       f"int64_t cap; }} {name};")
             self.line()
@@ -1427,8 +1468,18 @@ class CGenerator:
             self.indent += 1
             self.line(f"{name} *vector = *slot;")
             self.line("if (vector == NULL) return;")
-            self.line("if (vector->data != NULL) { free(vector->data); "
-                      "nv_note_array_free(); }")
+            self.line("if (vector->data != NULL) {")
+            self.indent += 1
+            if owning:
+                # Every element the vector still holds is released before the
+                # buffer that holds the handles goes away.
+                self.line("for (int64_t at = 0; at < vector->len; at += 1)")
+                self.indent += 1
+                self.line(self.release_statement(vec_element(typ), "vector->data[at]"))
+                self.indent -= 1
+            self.line("free(vector->data); nv_note_array_free();")
+            self.indent -= 1
+            self.line("}")
             self.line("free(vector);")
             self.line("*slot = NULL;")
             self.indent -= 1
@@ -1454,7 +1505,15 @@ class CGenerator:
             self.line("if (source != NULL && source->len > 0) {")
             self.indent += 1
             self.line(f"{name}_reserve(copy, source->len);")
-            self.line(f"memcpy(copy->data, source->data, (size_t)source->len * sizeof({element}));")
+            if owning:
+                self.line("for (int64_t at = 0; at < source->len; at += 1)")
+                self.indent += 1
+                self.line(f"copy->data[at] = "
+                          f"{self.element_copy(vec_element(typ), 'source->data[at]')};")
+                self.indent -= 1
+            else:
+                self.line(f"memcpy(copy->data, source->data, "
+                          f"(size_t)source->len * sizeof({element}));")
             self.line("copy->len = source->len;")
             self.indent -= 1
             self.line("}")
@@ -1464,7 +1523,11 @@ class CGenerator:
             self.line(f"static void {name}_push({name} *vector, {element} value) {{")
             self.indent += 1
             self.line(f"{name}_reserve(vector, nv_add(vector->len, INT64_C(1)));")
-            self.line("vector->data[vector->len] = value;")
+            if owning:
+                self.line(f"vector->data[vector->len] = "
+                          f"{self.element_copy(vec_element(typ), 'value')};")
+            else:
+                self.line("vector->data[vector->len] = value;")
             self.line("vector->len = nv_add(vector->len, INT64_C(1));")
             self.indent -= 1
             self.line("}")
@@ -1476,7 +1539,13 @@ class CGenerator:
             self.line(f"static void {name}_set({name} *vector, int64_t index, "
                       f"{element} value) {{")
             self.indent += 1
-            self.line("vector->data[nv_check_index(index, vector->len)] = value;")
+            self.line("int64_t at = nv_check_index(index, vector->len);")
+            if owning:
+                self.line(self.release_statement(vec_element(typ), "vector->data[at]"))
+                self.line(f"vector->data[at] = "
+                          f"{self.element_copy(vec_element(typ), 'value')};")
+            else:
+                self.line("vector->data[at] = value;")
             self.indent -= 1
             self.line("}")
             if vec_element(typ) == "str":
@@ -1582,14 +1651,45 @@ class CGenerator:
         note(self.program.functions)
         return found
 
+    def element_owns(self, typ: str) -> bool:
+        """Does an element of this collection type own storage of its own?"""
+        return self.owns_storage(element_of(typ) if is_array(typ) else vec_element(typ))
+
+    def element_copy(self, element: str, code: str) -> str:
+        """A C expression that gives an element its own storage."""
+        return self.copy_code(element, code)
+
+    def emit_element_declarations(self) -> None:
+        """Names an array or a vector helper may mention before the type is done.
+
+        An array or a vector whose element owns storage copies the element on
+        every write and releases it on every overwrite and on release, so its
+        helpers call the element type's copy and release. Those are defined with
+        the other value helpers, which come after this point in the file — and a
+        prototype needs the complete type, which is why this block sits after
+        `emit_structs` rather than with the vector declarations.
+        """
+        owners = [name for name in self.ordered_types() if self.owns_storage(name)]
+        if not owners:
+            return
+        for name in owners:
+            cname = self.ctype(name)
+            self.line(f"static {cname} {self.copy_helper(name)}({cname} value);")
+            self.line(f"static void {self.release_helper(name)}({cname} *slot);")
+        self.line()
+
     def emit_arrays(self) -> None:
-        """Per-type helpers for arrays of structs and enums, one slice per type.
+        """Per-type helpers for arrays of values and enums, one slice per type.
 
         An array of structs reuses the scalar layout: a length and a pointer to
-        storage the binding owns. `memcpy` of a value type is a copy, so the
-        only thing that differs is the element C type. A slice returns the same
-        handle pointing into somebody else's storage, which is why every bound
-        is checked before the pointer moves.
+        storage the binding owns. For an element that owns nothing of its own,
+        `memcpy` of a value is a copy and the helpers are that trivial. For an
+        element that owns storage — a `String`, or a struct or an enum holding
+        one — a `memcpy` would leave two owners of one buffer, so every element
+        is copied when it enters the array, released when it is overwritten and
+        released when the array is released. A slice returns the same handle
+        pointing into somebody else's storage, which is why every bound is
+        checked before the pointer moves.
         """
         types = self.array_types()
         # The three scalar element types take their helpers from the runtime;
@@ -1602,26 +1702,45 @@ class CGenerator:
         for typ in value_arrays:
             tag = array_tag(typ)
             element = self.ctype(element_of(typ))
+            owning = self.element_owns(typ)
             self.line(f"static nv_arr_{tag} nv_arr_{tag}_new(int64_t len) {{")
             self.indent += 1
             self.line(f"nv_arr_{tag} result;")
             self.line("result.len = len;")
+            # `nv_array_alloc` zeroes, and a zeroed value owns nothing, so every
+            # slot the array never fills is safe to release.
             self.line(f"result.data = ({element} *)nv_array_alloc(len, sizeof({element}));")
             self.line("return result;")
             self.indent -= 1
             self.line("}")
-            self.line(f"static nv_arr_{tag} nv_arr_{tag}_init(int64_t len, const {element} *items) {{")
+            # `{element} const *` rather than `const {element} *`: an element that
+            # owns storage is a pointer (`nv_string *`), and a compound literal
+            # of them is `nv_string **`.
+            self.line(f"static nv_arr_{tag} nv_arr_{tag}_init(int64_t len, {element} const *items) {{")
             self.indent += 1
             self.line(f"nv_arr_{tag} result = nv_arr_{tag}_new(len);")
-            self.line(f"if (len > 0) memcpy(result.data, items, (size_t)len * sizeof({element}));")
+            if owning:
+                self.line("for (int64_t at = 0; at < len; at += 1)")
+                self.indent += 1
+                self.line(f"result.data[at] = {self.element_copy(element_of(typ), 'items[at]')};")
+                self.indent -= 1
+            else:
+                self.line(f"if (len > 0) memcpy(result.data, items, (size_t)len * sizeof({element}));")
             self.line("return result;")
             self.indent -= 1
             self.line("}")
             self.line(f"static nv_arr_{tag} nv_arr_{tag}_copy(nv_arr_{tag} array) {{")
             self.indent += 1
             self.line(f"nv_arr_{tag} result = nv_arr_{tag}_new(array.len);")
-            self.line(f"if (array.len > 0) memcpy(result.data, array.data, "
-                      f"(size_t)array.len * sizeof({element}));")
+            if owning:
+                self.line("for (int64_t at = 0; at < array.len; at += 1)")
+                self.indent += 1
+                self.line(f"result.data[at] = "
+                          f"{self.element_copy(element_of(typ), 'array.data[at]')};")
+                self.indent -= 1
+            else:
+                self.line(f"if (array.len > 0) memcpy(result.data, array.data, "
+                          f"(size_t)array.len * sizeof({element}));")
             self.line("return result;")
             self.indent -= 1
             self.line("}")
@@ -1633,12 +1752,29 @@ class CGenerator:
             self.line(f"static inline void nv_arr_{tag}_set(nv_arr_{tag} *array, int64_t index, "
                       f"{element} value) {{")
             self.indent += 1
-            self.line("array->data[nv_check_index(index, array->len)] = value;")
+            self.line("int64_t at = nv_check_index(index, array->len);")
+            if owning:
+                # The slot is released before it is overwritten, and the value
+                # that replaces it is copied in: the caller keeps its own.
+                self.line(self.release_statement(element_of(typ), "array->data[at]"))
+                self.line(f"array->data[at] = "
+                          f"{self.element_copy(element_of(typ), 'value')};")
+            else:
+                self.line("array->data[at] = value;")
             self.indent -= 1
             self.line("}")
             self.line(f"static void nv_arr_{tag}_free(nv_arr_{tag} *array) {{")
             self.indent += 1
-            self.line("if (array->data != NULL) { free(array->data); nv_note_array_free(); }")
+            self.line("if (array->data != NULL) {")
+            self.indent += 1
+            if owning:
+                self.line("for (int64_t at = 0; at < array->len; at += 1)")
+                self.indent += 1
+                self.line(self.release_statement(element_of(typ), "array->data[at]"))
+                self.indent -= 1
+            self.line("free(array->data); nv_note_array_free();")
+            self.indent -= 1
+            self.line("}")
             self.line("array->data = NULL;")
             self.line("array->len = 0;")
             self.indent -= 1
@@ -1759,6 +1895,7 @@ class CGenerator:
         self.emit_array_types()
         self.emit_vector_declarations()
         self.emit_structs()
+        self.emit_element_declarations()
         self.emit_arrays()
         self.emit_value_helpers()
         self.emit_vectors()
@@ -1839,17 +1976,43 @@ class CGenerator:
             self.line(self.release_statement(typ, cname))
         self.temporaries = []
 
+    @staticmethod
+    def is_element_read(value) -> bool:
+        """Is this expression a read of an element out of a container?"""
+        if isinstance(value, Index):
+            return True
+        return (isinstance(value, Call) and value.module is None
+                and value.name in ("vec_get", "vec_pop"))
+
+    def adopt(self, place: str) -> None:
+        """A copy the read already made belongs to the binding, not to the statement.
+
+        An element read of a value that owns storage hands back a copy, which is
+        registered as a temporary of the enclosing statement. When a binding
+        takes that copy, the statement must not release it as well: the binding
+        owns it now and its block releases it once.
+        """
+        self.temporaries = [entry for entry in self.temporaries if entry[0] != place]
+
     def owned_value(self, typ: str, value) -> str:
         """The initializer of a binding that becomes the owner of `typ`.
 
         A constructor builds a value nobody else holds, so it is taken as written.
-        Anything else — a binding, a field, an element, or a call result that
-        lives only until the end of the statement — is copied, because the
-        binding must outlive it and releasing one owner must not free what the
-        other one reads. The compiler does not yet elide that copy.
+        So is a read of an element, because the read itself copies the element
+        out and owns nothing else. Anything else — a binding, a field, or a call
+        result that lives only until the end of the statement — is copied,
+        because the binding must outlive it and releasing one owner must not free
+        what the other one reads. The compiler does not yet elide that copy.
         """
         code = self.expression(value)
         if isinstance(value, (StructLiteral, VariantValue)):
+            # Nobody else holds the construction, so it is taken as written —
+            # and adopted, so the statement does not release what the binding now
+            # owns.
+            self.adopt(code)
+            return code
+        if self.is_element_read(value):
+            self.adopt(code)
             return code
         return self.copy_code(typ, code)
 
@@ -1888,9 +2051,15 @@ class CGenerator:
         self.owned.pop()
         self.defers.pop()
 
-    def loop_body(self, statements, label=None) -> dict:
-        """A loop body is a block whose frame `break` and `continue` must leave."""
-        self.owned.append([])
+    def loop_body(self, statements, label=None, owns=()) -> dict:
+        """A loop body is a block whose frame `break` and `continue` must leave.
+
+        `owns` seeds the frame with values the loop body has already declared —
+        the copy of an element that owns storage, for one — so that ending the
+        turn, jumping out of the loop and being cut short by `break` all release
+        them the same way.
+        """
+        self.owned.append(list(owns))
         self.defers.append([])
         if label is None:
             record = {"frame": len(self.owned) - 1, "name": None,
@@ -1953,6 +2122,10 @@ class CGenerator:
                     value = self.owned_value(typ, statement.value)
                 else:
                     value = self.expression(statement.value)
+                if (owns_vec or owns_text) and self.is_element_read(statement.value):
+                    # The copy the read made is the binding's; the statement must
+                    # not release it as well.
+                    self.adopt(value)
                 self.line(f"{self.ctype(typ)} {statement.symbol.cname} = {value};")
                 if (owns_vec or owns_text) and isinstance(statement.value, Variable):
                     # A move: the new binding keeps the handle and the old one
@@ -1981,6 +2154,8 @@ class CGenerator:
                     material = self.temp(typ, self.expression(statement.value))
                     if isinstance(statement.value, Variable):
                         self.line(f"{statement.value.symbol.cname} = NULL;")
+                    elif self.is_element_read(statement.value):
+                        self.adopt(material)
                     self.line(self.release_statement(typ, name))
                     self.line(f"{name} = {material};")
                 elif self.owns_storage(typ) and not is_array(typ):
@@ -2046,12 +2221,13 @@ class CGenerator:
                             self.line(f"nv_arena_release_to({self.region});")
                         self.line(f"return {value};")
                         return
-                    if self.owns_storage(typ) and not is_array(typ) \
-                            and not isinstance(statement.value, (StructLiteral, VariantValue)):
+                    if self.owns_storage(typ) and not is_array(typ):
                         # A returned value is a copy: the local it came from is
                         # released here, and the caller becomes the owner of the
-                        # copy. The copy survives the release because it is never
-                        # registered as a temporary of the statement.
+                        # copy. A construction and an element read arrive as a
+                        # value nobody else holds and are adopted instead; either
+                        # way the value survives the release, because `owned_value`
+                        # takes it out of the statement's temporaries.
                         value = self.temp(typ, self.owned_value(typ, statement.value))
                     else:
                         value = self.expression(statement.value)
@@ -2157,8 +2333,9 @@ class CGenerator:
                           f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
                 self.indent += 1
                 self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
-                          f"nv_vec_{tag}_get({source}, {index_name});")
-                self.loop_body(statement.body)
+                          f"{self.loop_element(symbol.typ, f'nv_vec_{tag}_get({source}, {index_name})')};")
+                owns = [(symbol.cname, symbol.typ)] if self.owns_storage(symbol.typ) else ()
+                self.loop_body(statement.body, owns=owns)
                 self.indent -= 1
                 self.line("}")
             else:
@@ -2173,8 +2350,9 @@ class CGenerator:
                               f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
                     self.indent += 1
                     self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
-                              f"nv_arr_{tag}_get({source}, {index_name});")
-                    self.loop_body(statement.body)
+                              f"{self.loop_element(symbol.typ, f'nv_arr_{tag}_get({source}, {index_name})')};")
+                    owns = [(symbol.cname, symbol.typ)] if self.owns_storage(symbol.typ) else ()
+                    self.loop_body(statement.body, owns=owns)
                     self.indent -= 1
                     self.line("}")
                 else:
@@ -2216,8 +2394,9 @@ class CGenerator:
         self.line("{")
         self.indent += 1
         self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
-                  f"nv_arr_{tag}_get({source}, {index_name});")
-        record = self.loop_body(statement.body, label=statement.label)
+                  f"{self.loop_element(symbol.typ, f'nv_arr_{tag}_get({source}, {index_name})')};")
+        owns = [(symbol.cname, symbol.typ)] if self.owns_storage(symbol.typ) else ()
+        record = self.loop_body(statement.body, label=statement.label, owns=owns)
         self.indent -= 1
         self.line("}")
         self.line(f"{record['continue']}: ;")
@@ -2302,7 +2481,7 @@ class CGenerator:
             return self.temp("i64", f"({vector})->cap")
         if name == "vec_get":
             index = self.expression(expr.args[1])
-            return self.temp(expr.typ, f"nv_vec_{tag}_get({vector}, {index})")
+            return self.element_read(expr.typ, f"nv_vec_{tag}_get({vector}, {index})")
         if name == "vec_set":
             # The index is checked before the value is evaluated, so a failed
             # write has no observable side effect — the rule an array write
@@ -2465,10 +2644,19 @@ class CGenerator:
             return expr.symbol.cname
         if isinstance(expr, Member):
             return self.member_path(expr)
-        if isinstance(expr, StructLiteral):
-            return self.struct_literal(expr)
-        if isinstance(expr, VariantValue):
-            return self.variant_value(expr)
+        if isinstance(expr, (StructLiteral, VariantValue)):
+            code = (self.struct_literal(expr) if isinstance(expr, StructLiteral)
+                    else self.variant_value(expr))
+            if self.owns_storage(expr.typ):
+                # The construction owns what its fields were copied into, and
+                # this position copies it again — into a vector, an array slot or
+                # a call argument. The temporary therefore has to be released when
+                # the statement ends. A binding that adopts it takes it out of the
+                # statement first (see `owned_value`).
+                name = self.temp(expr.typ, code)
+                self.temporaries.append((name, expr.typ))
+                return name
+            return code
         if isinstance(expr, ArrayLiteral):
             # Every item is materialised first, so left-to-right evaluation and
             # a single allocation are both preserved. In value position the new
@@ -2488,7 +2676,7 @@ class CGenerator:
             base = self.expression(expr.array)
             index = self.expression(expr.index)
             tag = array_tag(expr.array.typ)
-            return self.temp(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
+            return self.element_read(expr.typ, f"nv_arr_{tag}_get({base}, {index})")
         if isinstance(expr, Call):
             if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_CALLS):
                 return self.vector_call(expr)

@@ -10,7 +10,7 @@ value a binding holds is a pointer rather than a struct.
 The second claim is what the type refuses, and each refusal is one code from one
 place. A vector cannot be copied (`E0428`: two holders would free one buffer),
 returned (`E0428`), stored in a field or a payload (`E0428`), or reassigned
-(`E0428`); its element cannot own storage (`E0427`), because a shrinking vector
+(`E0428`); since N11g its element may own storage, but a collection is
 would have to release elements it never copied; `vec_new()` must be annotated
 (`E0429`), because the element type is not inferable from an empty vector; and a
 mutating operation needs a writable local or a `mut Vec(T)` parameter (`E0444`),
@@ -226,23 +226,31 @@ class VectorFrontendTests(unittest.TestCase):
                                  "}\n", "E0429")
         self.assertIn("element type", error.message)
 
-    def test_an_element_cannot_own_storage(self):
-        """A shrinking vector would have to release elements it never copied."""
-        for element, owner in (("Bag", "an array"), ("[i64]", "an array")):
-            error = self.assert_code("edition 2;\n" + BAG + "\n"
-                                     "fn main() {\n"
-                                     f"    let xs: Vec({element}) = vec_new()\n"
-                                     "    print(vec_len(xs))\n"
-                                     "}\n", "E0427")
-            self.assertIn(owner, error.message)
+    def test_an_element_may_own_storage(self):
+        """`Vec(String)` and `Vec(Bag)` copy an element in and release it later."""
+        for source in ("edition 2;\nfn main() {\n"
+                       "    let xs: Vec(String) = vec_new()\n"
+                       "    print(vec_len(xs))\n}\n",
+                       "edition 2;\n" + BAG + "\n"
+                       "fn main() {\n"
+                       "    let xs: Vec(Bag) = vec_new()\n"
+                       "    print(vec_len(xs))\n}\n"):
+            with self.subTest(source=source.splitlines()[3].strip()):
+                self.assertTrue(compile_source(source).code)
 
-    def test_a_vector_of_vectors_is_refused(self):
-        """A vector owns a buffer, so an element that is a vector owns storage."""
+    def test_a_collection_is_not_an_element(self):
+        """Nesting is a shape rule, and it outlives the ownership rule."""
+        error = self.assert_code("edition 2;\n"
+                                 "fn main() {\n"
+                                 "    let rows: Vec(Vec(i64)) = vec_new()\n"
+                                 "    print(vec_len(rows))\n"
+                                 "}\n", "E0206")
+        self.assertIn("a vector cannot contain Vec(i64)", error.message)
         self.assert_code("edition 2;\n"
                          "fn main() {\n"
-                         "    let rows: Vec(Vec(i64)) = vec_new()\n"
+                         "    let rows: Vec([i64]) = vec_new()\n"
                          "    print(vec_len(rows))\n"
-                         "}\n", "E0427")
+                         "}\n", "E0206")
 
     def test_a_mut_vector_argument_must_be_created_here(self):
         """A read-only parameter cannot hand its vector to a mutating callee."""

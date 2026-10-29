@@ -208,9 +208,8 @@ class MoveFrontendTests(unittest.TestCase):
                          "}\n"
                          "fn main() { text() }\n", "E0428")
 
-    def test_an_owning_value_is_stored_but_not_as_an_element(self):
-        """A field and a payload hold a copy; an element cannot, because an
-        element is read by value on every access."""
+    def test_an_owning_value_is_stored_and_may_be_an_element(self):
+        """A field, a payload and an element all hold a copy of their own."""
         compile_source("edition 2;\n"
                        "struct Bag {\n"
                        "    items: Vec(i64)\n"
@@ -223,11 +222,17 @@ class MoveFrontendTests(unittest.TestCase):
                        "    let xs: Vec(i64) = vec_new()\n"
                        "    let bag: Bag = Bag(items: xs)\n"
                        "    print(vec_len(bag.items))\n"
+                       "    let bags: [Bag] = [bag]\n"
+                       "    let slots: Vec(Slot) = vec_new()\n"
+                       "    vec_push(slots, Slot::Empty)\n"
+                       "    print(len(bags) + vec_len(slots))\n"
                        "}\n")
+        # A collection is still not an element: nesting is a shape Nava has no
+        # representation for, which is a different rule from ownership.
         self.assert_code("edition 2;\n"
                          "fn main() {\n"
                          "    let v: Vec(Vec(i64)) = vec_new()\n"
-                         "}\n", "E0427")
+                         "}\n", "E0206")
 
     def test_moving_is_a_value_transfer_and_not_a_general_expression(self):
         """Only a local, a constructor or a call can hand a buffer on."""

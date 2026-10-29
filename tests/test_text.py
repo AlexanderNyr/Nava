@@ -11,7 +11,7 @@ points into a buffer that may grow underneath it.
 The second claim is what the type refuses, and each refusal is one code from one
 place. A `String` cannot be copied, reassigned, returned, stored in a field or a
 payload, or used as a type argument (`E0428`); an element of an array or a vector
-may not be a `String` (`E0426` / `E0427`), which is also how `Vec(String)` fails;
+may be a `String` since N11g, copied on every read;
 a mutating call needs a writable local or a `mut String` parameter (`E0444`); and
 a `mut String` argument must be created in the calling function (`E0333`).
 
@@ -202,19 +202,22 @@ class TextFrontendTests(unittest.TestCase):
                        "    print(string_len(p.first))\n"
                        "}\n")
 
-    def test_a_string_cannot_be_an_element(self):
-        """An element is read by value; an element that owns storage would have
-        to be copied on every read and released on every write."""
-        self.assert_code("edition 2;\n"
-                         "fn main() {\n"
-                         "    let words: [String] = [\"a\", \"b\"]\n"
-                         "    print(len(words))\n"
-                         "}\n", "E0426")
-        self.assert_code("edition 2;\n"
-                         "fn main() {\n"
-                         "    let v: Vec(String) = vec_new()\n"
-                         "    print(vec_len(v))\n"
-                         "}\n", "E0427")
+    def test_a_string_may_be_an_element(self):
+        """An element read copies the element, so a `String` may be one."""
+        self.assertTrue(compile_source("edition 2;\n"
+                                       "fn main() {\n"
+                                       "    let a: String = string_new()\n"
+                                       "    string_push(a, \"a\")\n"
+                                       "    let words: [String] = [a, a]\n"
+                                       "    print(len(words))\n"
+                                       "}\n").code)
+        self.assertTrue(compile_source("edition 2;\n"
+                                       "fn main() {\n"
+                                       "    let a: String = string_new()\n"
+                                       "    let v: Vec(String) = vec_new()\n"
+                                       "    vec_push(v, a)\n"
+                                       "    print(vec_len(v))\n"
+                                       "}\n").code)
 
     def test_a_mutating_call_needs_a_writable_string(self):
         error = self.assert_code("edition 2;\n"

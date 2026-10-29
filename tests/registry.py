@@ -487,7 +487,7 @@ REGISTERED_TESTS = {
     "ValueFrontendTests": {
         "test_a_string_is_a_field_and_a_payload",
         "test_a_zeroable_element_type_still_works",
-        "test_an_array_field_and_an_array_payload_are_refused_as_elements",
+        "test_an_array_field_and_an_array_payload_may_be_elements",
         "test_an_enum_is_an_array_element",
         "test_an_undeclared_element_name_is_an_unknown_type",
         "test_array_zeros_needs_a_zero_value",
@@ -503,7 +503,7 @@ REGISTERED_TESTS = {
     # --- N11b: fields and payloads that own array storage --------------------
     "TextFrontendTests": {
         "test_a_mutating_call_needs_a_writable_string",
-        "test_a_string_cannot_be_an_element",
+        "test_a_string_may_be_an_element",
         "test_a_string_can_be_a_field_or_a_payload",
         "test_a_string_can_be_a_type_argument",
         "test_a_string_is_returned_by_moving_it",
@@ -545,7 +545,7 @@ REGISTERED_TESTS = {
         "test_a_region_is_emitted_only_where_it_is_sound",
         "test_a_vector_and_a_string_can_be_moved_out_of_a_function",
         "test_an_owning_result_must_be_bound",
-        "test_an_owning_value_is_stored_but_not_as_an_element",
+        "test_an_owning_value_is_stored_and_may_be_an_element",
         "test_moving_is_a_value_transfer_and_not_a_general_expression",
     },
     "MoveRuntimeTests": {
@@ -559,7 +559,7 @@ REGISTERED_TESTS = {
     "StorageFrontendTests": {
         "test_a_field_holds_a_vector_and_a_string",
         "test_a_field_is_read_but_never_moved_out",
-        "test_a_holder_of_storage_is_not_an_element",
+        "test_a_holder_of_storage_may_be_an_element",
         "test_a_mutating_call_on_a_field_needs_a_local",
         "test_a_nested_field_copies_both_levels",
         "test_a_payload_holds_a_vector_and_a_string",
@@ -575,6 +575,26 @@ REGISTERED_TESTS = {
         "test_a_type_argument_value_is_independent",
         "test_a_value_that_owns_fields_is_released_with_its_block",
         "test_stored_values_under_the_sanitizers",
+    },
+    "ElementFrontendTests": {
+        "test_a_collection_is_still_not_an_element",
+        "test_a_holder_of_storage_is_an_element",
+        "test_a_loop_variable_is_a_copy_released_with_its_turn",
+        "test_a_read_of_an_element_is_a_copy_that_the_statement_releases",
+        "test_a_slot_is_released_before_it_is_overwritten",
+        "test_a_vector_of_strings_copies_an_element_in_on_push_and_set",
+        "test_a_zeroed_slot_is_not_a_value_of_an_owning_element",
+        "test_an_array_of_strings_copies_elements_in_and_releases_them",
+        "test_an_enum_element_is_copied_and_released",
+        "test_the_honest_message_survives_for_an_unknown_element",
+    },
+    "ElementRuntimeTests": {
+        "test_a_loop_copies_each_element",
+        "test_a_stored_string_is_independent_of_its_source",
+        "test_a_vector_of_strings_pushes_reads_and_pops",
+        "test_a_write_to_a_slot_releases_what_it_held",
+        "test_an_array_of_bags_is_released_with_its_elements",
+        "test_elements_under_the_sanitizers",
     },
     "ArenaRegionTests": {
         "test_a_frame_that_builds_text_gets_its_region_back",
@@ -592,8 +612,8 @@ REGISTERED_TESTS = {
         "test_a_vector_can_be_a_field_or_a_payload",
         "test_a_vector_is_created_in_a_block_and_grown_by_builtins",
         "test_a_vector_of_structs_and_a_vector_of_enums_compile",
-        "test_a_vector_of_vectors_is_refused",
-        "test_an_element_cannot_own_storage",
+        "test_a_collection_is_not_an_element",
+        "test_an_element_may_own_storage",
         "test_a_mutating_builtin_needs_a_writable_target",
         "test_the_argument_types_are_checked",
         "test_the_vector_names_are_reserved",
@@ -625,8 +645,8 @@ REGISTERED_TESTS = {
         "test_an_array_field_and_an_array_payload_are_values",
         "test_an_array_field_can_be_replaced",
         "test_an_array_field_is_read_like_any_other_array",
-        "test_an_enum_with_an_owning_payload_cannot_be_an_element_either",
-        "test_an_owning_value_cannot_be_an_array_element",
+        "test_an_enum_with_an_owning_payload_is_an_element_too",
+        "test_an_owning_value_may_be_an_array_element",
         "test_the_generated_c_copies_and_releases_only_where_needed",
     },
     "OwningFieldRuntimeTests": {
@@ -894,7 +914,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 141,
+    "tests/fixtures/negative": 138,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -980,13 +1000,15 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
     import test_moves  # noqa: PLC0415
+    import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
                    test_float, test_functions, test_generics, test_grammar, test_guides,
                    test_local_model_server,
-                   test_moves, test_modules, test_nava, test_ownership, test_plan,
+                   test_elements, test_moves, test_modules, test_nava, test_ownership,
+                   test_plan,
                    test_registry, test_release, test_results, test_sandbox, test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
                    test_text, test_values, test_vec):
@@ -1050,6 +1072,7 @@ def check_skip_state() -> list[str]:
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
     import test_moves  # noqa: PLC0415
+    import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
@@ -1068,6 +1091,7 @@ def check_skip_state() -> list[str]:
                                (test_moves, "MoveRuntimeTests"),
                                (test_moves, "ArenaRegionTests"),
                                (test_storage, "StorageRuntimeTests"),
+                               (test_elements, "ElementRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

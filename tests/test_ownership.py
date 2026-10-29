@@ -8,7 +8,7 @@ through one value can never be seen through the other. The block that owns a
 value releases that buffer when it ends, including on an early `path` out.
 
 The second claim is what is still refused: a value that owns storage may not be
-an *array element* (`E0426`). An element is copied on every read and on every
+an array element; the rule that an element may own storage arrived in N11g.
 write, so an owning element would need those copies to be deep, which is the
 storage work of N11f. The refusal is one code, raised from the single place that
 checks an element type, so `[Bag]` as a binding, as a parameter, as a literal and
@@ -98,7 +98,7 @@ def live_arrays(stderr: str) -> int:
 
 
 class OwningFieldFrontendTests(unittest.TestCase):
-    """What an owning field may be, and what may not hold an owning value."""
+    """What an owning field may be, and where an owning value may be stored."""
 
     def assert_code(self, text: str, code: str, message: str | None = None) -> NavaError:
         with self.assertRaises(NavaError) as caught:
@@ -121,8 +121,8 @@ class OwningFieldFrontendTests(unittest.TestCase):
                   "}\n")
         self.assertTrue(compile_source(source))
 
-    def test_an_owning_value_cannot_be_an_array_element(self):
-        """One rule, four shapes, one code, and the message names the type."""
+    def test_an_owning_value_may_be_an_array_element(self):
+        """One rule, four shapes: an element that owns storage is copied in."""
         cases = {
             "binding": ("fn main() {\n"
                         "    let bags: [Bag] = []\n"
@@ -138,24 +138,35 @@ class OwningFieldFrontendTests(unittest.TestCase):
                         "    let bags = [Bag(items: [1])]\n"
                         "    print(len(bags))\n"
                         "}\n"),
-            "zeros": ("fn main() {\n"
-                      "    let bags: [Bag] = array_zeros(2)\n"
-                      "    print(len(bags))\n"
+            "field": ("struct Holder {\n"
+                      "    bags: [Bag]\n"
+                      "}\n"
+                      "fn take(holder: Holder) {\n"
+                      "    print(len(holder.bags))\n"
+                      "}\n"
+                      "fn main() {\n"
+                      "    print(1)\n"
                       "}\n"),
         }
         for name, body in cases.items():
             with self.subTest(shape=name):
-                error = self.assert_code("edition 2;\n" + BAG + "\n" + body,
-                                         "E0426", "Bag holds an array")
-                self.assertIn("element work of N11g", error.hint)
+                self.assertTrue(compile_source("edition 2;\n" + BAG + "\n" + body).code)
+        # A zeroed slot is not a value of an owning element (`String` has no zero
+        # value), so `array_zeros` is refused for exactly that reason.
+        with self.subTest(shape="zeros"):
+            self.assert_code("edition 2;\n" + BAG + "\n"
+                             "fn main() {\n"
+                             "    let bags: [Bag] = array_zeros(2)\n"
+                             "    print(len(bags))\n"
+                             "}\n", "E0425")
 
-    def test_an_enum_with_an_owning_payload_cannot_be_an_element_either(self):
-        self.assert_code("edition 2;\n" + BAG + "\n"
-                         "enum Slot { Empty, Full(Bag) }\n"
-                         "fn main() {\n"
-                         "    let slots: [Slot] = []\n"
-                         "    print(len(slots))\n"
-                         "}\n", "E0426")
+    def test_an_enum_with_an_owning_payload_is_an_element_too(self):
+        self.assertTrue(compile_source("edition 2;\n" + BAG + "\n"
+                                       "enum Slot { Empty, Full(Bag) }\n"
+                                       "fn main() {\n"
+                                       "    let slots: [Slot] = []\n"
+                                       "    print(len(slots))\n"
+                                       "}\n").code)
 
     def test_an_array_field_is_read_like_any_other_array(self):
         source = ("edition 2;\n" + BAG + "\n"

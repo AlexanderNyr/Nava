@@ -242,11 +242,11 @@ unchanged, never converted, and the rest of the function does not run.
 
 ## Edition 2: arrays of structs and slices
 
-An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** that
-owns nothing itself — anything that is a value with no owner. A struct or enum
-holding an array is refused as an element (`E0426`): an element is copied on every
-read and every write, so an owning element waits for the storage work (N11f). `for point in points` copies each
-element, and `points[i].x` reads a field of an element. `array_zeros(n)` gives
+An array element may be `i64`, `bool`, `str`, `String`, a **struct** or an
+**enum** — anything that is a value, including a value that owns storage of its
+own. An element that owns storage is copied when it enters the array and released
+with the array. `for point in points` copies each element, and `points[i].x` reads
+a field of an element. `array_zeros(n)` gives
 every element its zero value, so it needs an element type whose zero bits are a
 value: `i64`, `bool`, `f64`, a struct of those, or an enum whose first variant is
 payload-free. `let names: [str] = array_zeros(2)` is `E0425`, because an
@@ -290,8 +290,9 @@ copy and write it back with `points[i] = p`.
 ## Edition 2: `Vec(T)`
 
 An array keeps the length it was created with; a `Vec(T)` grows. `T` is
-`i64`, `bool`, `str`, `f64`, or a struct or enum that owns nothing — an owning
-element is `E0427`, as with an array.
+`i64`, `bool`, `str`, `f64`, `String`, or a struct or enum — an element that owns
+storage is copied in on `vec_push` and on `vec_set`, and a read hands back a copy.
+A collection is not an element: `Vec(Vec(i64))` is `E0206`.
 
 `let v: Vec(i64) = vec_new()` creates it, and the block that writes the `let`
 releases it. A vector is never copied but it can be **moved** — into another
@@ -353,10 +354,9 @@ A `str` is immutable and lives for the run; `String` is the owner of bytes a
 program assembles a piece at a time. `let s: String = string_new()` creates it
 and the block releases it. A `String` is never copied but it can be **moved** —
 into another binding, into an assignment, and out of a function as its return
-value (`fn label(n: i64) -> String`) — and **stored** in a field, a payload or a
-type argument, where the holder keeps a deep copy. It cannot be an array or
-vector element (`E0426`/`E0427`). `mut String` lets a function write into the
-caller's builder.
+value (`fn label(n: i64) -> String`) — and **stored** in a field, a payload, a
+type argument or an **element**, where the holder keeps a deep copy. `mut String`
+lets a function write into the caller's builder.
 
 | Call | Type | Meaning |
 |---|---|---|
@@ -450,14 +450,55 @@ The example prints `3` and `n=4`. An owning value returned by a call must be
 bound: `counted(3)` used as a statement is `E0428`, because the buffer would
 have no owner.
 
+## Edition 2: collections of owning elements
+
+An array or a vector may hold elements that own storage. The container owns every
+element: a value is copied in, a read hands back a copy, and the release frees every
+element it still holds. `vec_pop` moves the element out instead of copying it.
+
+```nava
+edition 2;
+
+struct Bag {
+    items: Vec(i64)
+}
+
+fn make(n: i64) -> Bag {
+    let xs: Vec(i64) = vec_new()
+    vec_push(xs, n)
+    return Bag(items: xs)
+}
+
+fn main() {
+    let bags: [Bag] = [make(1), make(2)]
+    let keep: Bag = bags[0]
+    bags[0] = make(3)
+    print(vec_len(keep.items))
+    let words: Vec(String) = vec_new()
+    let s: String = string_new()
+    string_push(s, "x")
+    vec_push(words, s)
+    string_push(s, "!")
+    print(string_text(vec_get(words, 0)))
+    print(string_text(s))
+}
+```
+
+The example prints `1`, `x` and `x!`: `keep` kept its own copy, the vector kept
+the string it was given, and the source went on growing. A read costs a copy —
+`vec_get(words, 0)` allocates — so read once into a `let` when the value is used
+more than once. What is still refused is a collection inside a collection:
+`[[i64]]`, `[Vec(i64)]` and `Vec(Vec(i64))` are `E0206`.
+
 ## Edition 2: storing a value that owns storage
 
 A `Vec(T)` or a `String` may be a field, a payload or a type argument, and the
 holder keeps a **deep copy**: building a struct copies the buffer, so the value it
 was copied from and the copy go their own ways. Reading a field is a borrow, so
 `let out: Vec(i64) = bag.items` is `E0428` and `vec_push(bag.items, 1)` is
-`E0444`; write the whole field instead (`bag.items = other`). An array or vector
-**element** still may not own storage (`E0426`/`E0427`).
+`E0444`; write the whole field instead (`bag.items = other`). An **element** may
+own storage too, and every read of one copies it — see
+[the next section](#edition-2-collections-of-owning-elements).
 
 ```nava
 edition 2;
@@ -664,9 +705,10 @@ Output: `42`, `10`, `12`.
 16. A struct field or enum payload may be a `str`, an array, a `Vec(T)` or a
     `String`, and a value that owns storage is copied wherever it crosses a
     binding — `let`, assignment, field write, `match` binding, `return` — with a
-    deep copy, so the two values never share a buffer. Such a value may not be an array
-    element (`E0426`), and `array_zeros(n)` needs an element type whose zero
-    value is real, so `[str]` and a struct holding a `str` are `E0425`.
+    deep copy, so the two values never share a buffer. Such a value may also be an
+    array or vector **element**: it is copied in, copied out on every read, and
+    released with the container. `array_zeros(n)` needs an element type whose zero
+    value is real, so `[str]`, `[String]` and a struct holding a `str` are `E0425`.
 17. A `Vec(T)` and a `String` are moved, never copied: `let b: Vec(i64) = a`,
     `b = a` and `return a` hand the buffer on, and afterwards `a` is dead
     (`E0445`). A parameter is a borrow, so returning one or assigning over one is

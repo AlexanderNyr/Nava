@@ -14,8 +14,8 @@ array counter are what make the claim about memory rather than about eyes.
 **Storing is not the same as being an element.** An array element and a vector
 element are read *by value* on every access, so an element that owns storage
 would have to be copied on every read and released on every overwrite; that is
-the element work of N11g and the refusals (`E0426` / `E0427`) are unchanged, now
-including a struct that merely *contains* a `Vec` or a `String`.
+the element work of N11g, which is where an element that owns storage — a
+`String`, or a struct that merely *contains* a `Vec` or a `String` — became legal.
 
 What the sort of value a field is by itself is unchanged: reading `bag.items` is
 a borrow, so it cannot be moved out (`E0428`), and a mutating call needs a
@@ -167,19 +167,20 @@ class StorageFrontendTests(unittest.TestCase):
         compile_source(source)
         self.assertIn("nv_copy_nv_struct_Pair_String(", frontend(source))
 
-    def test_a_holder_of_storage_is_not_an_element(self):
-        """The refusal moves up a level: a struct that owns storage is an owning
-        element even when its own fields are not arrays."""
-        self.assert_code("edition 2;\n" + BAG +
-                         "fn main() {\n"
-                         "    let bags: [Bag] = []\n"
-                         "    print(len(bags))\n"
-                         "}\n", "E0426")
-        self.assert_code("edition 2;\n" + BAG +
-                         "fn main() {\n"
-                         "    let bags: Vec(Bag) = vec_new()\n"
-                         "    print(vec_len(bags))\n"
-                         "}\n", "E0427")
+    def test_a_holder_of_storage_may_be_an_element(self):
+        """A struct that holds a `Vec` and a `String` is an element of its own."""
+        for source in ("edition 2;\n" + BAG +
+                       "fn main() {\n"
+                       "    let bags: [Bag] = []\n"
+                       "    print(len(bags))\n"
+                       "}\n",
+                       "edition 2;\n" + BAG +
+                       "fn main() {\n"
+                       "    let bags: Vec(Bag) = vec_new()\n"
+                       "    print(vec_len(bags))\n"
+                       "}\n"):
+            with self.subTest(source=source.splitlines()[-3].strip()):
+                self.assertTrue(compile_source(source).code)
 
     def test_a_field_is_read_but_never_moved_out(self):
         """A field read is a borrow: the field keeps its buffer."""

@@ -147,7 +147,7 @@ class ArrayFrontendTests(unittest.TestCase):
         self.assert_code("E0335", "fn main() { let a = [] }", "needs a type annotation")
         # N10d: a struct became an element type, so the message names it.
         self.assert_code("E0334", "fn f() {}\nfn main() { let a = [f()] }",
-                         "i64, bool, str or a struct")
+                         "i64, bool, str, String, a struct or an enum")
         compile_source("fn main() { let a: [i64] = [] }")
         compile_source("fn main() { let a: [str] = [\"x\", \"y\"] }")
 

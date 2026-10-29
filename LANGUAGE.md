@@ -819,14 +819,14 @@ when it ends. The compiler emits one copy and one release helper per type that
 needs them; the copy happens at every ownership boundary — a `let`, an
 assignment, a field write, a `match` binding and a `return` — and is not elided.
 
-A value that owns an array may not be an **array element** (`E0426`): an element
-is copied on every read and every write, so `[Bag]` would need those copies to be
-deep, which is the storage work of N11f. A struct name is shared by
+A value that owns storage **may** be an array element, and the element rule is in
+[Owning values as elements](#owning-values-as-elements): `[Bag]` copies an element
+in on the way in and releases it on the way out. A struct name is shared by
 every module of the program (`E0380` for a duplicate), and a struct may not
 contain itself directly or through another struct (`E0377`), because a struct is
 stored inline and a recursive type would have no finite size. A variant payload
-follows the same rules: a value, a `str` or an array, and an instance of it may
-not be an array element either.
+follows the same rules: a value, a `str`, an array, a `Vec(T)` or a `String`, and
+an instance of it may be an array element.
 
 ```nava
 edition 2;
@@ -1024,14 +1024,16 @@ type           = ... | "[" type_name "]" ;      # edition 2: a struct element
 slice          = IDENT "[" expression ".." expression "]" ;
 ```
 
-An array element is a **value with no owner**: `i64`, `bool`, `str`, a struct or
-an enum that owns nothing itself. `f64`, `void` and another array are refused
-(`E0206` for the shapes no symbol table could allow, `E0203` for a name that is
-not declared), and a struct or enum that holds an array is refused with `E0426`:
-an element is copied on every read and every write, so an owning element would
-need deep copies in the storage itself, which the storage work of N11f brings. An
-enum is a value like a struct — its payload is stored inline — so `[Shape]` is
-an array of plain values and the array stays the single owner.
+An array element is a **value**: `i64`, `bool`, `str`, a `String`, a struct or an
+enum. `f64`, `void` and another collection are refused (`E0206` for the shapes no
+symbol table could allow — `[f64]`, `[void]`, `[[i64]]`, `[Vec(i64)]` — and
+`E0203` for a name that is not declared). An element may own storage of its own: a
+`String`, or a struct or enum with such a field, is copied when it enters the
+array and released when the array is released, so the array owns its elements as
+well as its buffer. A `str` is an immortal pointer, so `[str]` stays an array of
+plain pointers. An enum is a value like a struct — its payload is stored inline —
+so `[Shape]` is an array of values with one owner each. What an element may not
+be is a *collection*: Nava holds one collection at a time.
 
 `array_zeros(n)` gives every element its **zero value**, which exists only when
 all-zero bits are a value of the element type: `0`, `false`, `0.0`, a struct
@@ -1162,12 +1164,13 @@ their squares summed, the replaced first element, and the popped last one.
 What the type is, and what it is not:
 
 * `Vec(T)` is a **builtin type**, not a generic declaration. The element type is
-  written out — `i64`, `bool`, `str`, `f64`, or a struct or enum type — and a
-  name that declares nothing is `E0203`. An element may not own storage
-  (`E0427`): a vector copies elements on every push and every read, and a
-  shrinking vector would have to release elements it never copied, so an owning
-  element waits for the storage work of N11f, exactly as an owning array
-  element does.
+  written out — `i64`, `bool`, `str`, `f64`, `String`, or a struct or enum type —
+  and a name that declares nothing is `E0203`. An element may own storage:
+  `Vec(String)` and `Vec(Bag)` copy an element in on `vec_push` and `vec_set`, a
+  read hands back a copy of its own, `vec_pop` moves the element out, and the
+  release frees every element the vector still holds. A *collection* is still not
+  an element: `Vec(Vec(i64))` and `Vec([i64])` are `E0206`, because nesting is a
+  shape Nava does not have.
 * the block that writes the `let` owns the vector and releases it when the block
   ends, including on an early `return`. A vector is never **copied** — two
   holders would free one buffer — but it can be **moved**: out of a local into
@@ -1278,9 +1281,9 @@ The rules, and the reasons for them:
   never copied in a binding, but it is **moved**: into another binding, into an
   assignment, and out of a function as its return value. It can be **stored** in
   a field, a payload or a type argument, and the holder keeps a deep copy of its
-  own. An element of an array or a vector still may not be a `String`
-  (`E0426` / `E0427`). A `mut String` parameter is a borrow that may write, and a
-  `String` parameter may not.
+  own. An element of an array or a vector **may** be a `String`, and every read of
+  that element copies the bytes. A `mut String` parameter is a borrow that may
+  write, and a `String` parameter may not.
 * the block that writes `let s: String = string_new()` releases the buffer when
   it ends, including on an early `return`. Growth doubles from 32 bytes; the
   buffer is allocated through the same checked allocator as an array, so the
@@ -1376,9 +1379,9 @@ The rules, and the reasons for them:
 * the value a call returns must be bound. A call to a function returning `Vec(T)`
   or `String` used as a statement is `E0428`: the buffer would be handed to
   nobody and never released.
-* moving is not copying, and the type system still has no deep copy: an owning
-  value cannot be stored in a field, used as a payload, used as a type argument
-  (`E0428`) or used as an element of an array or a vector (`E0426` / `E0427`).
+* moving is not copying, but a copy exists where one is needed: a field, a
+  payload, a type argument and an **element** each hold a deep copy of their own,
+  and a binding of an owning value is still a move (`E0445` after it).
 * the arena has regions, and moves are why the rule is written down rather than
   assumed: text a frame built is released when the frame returns unless it can
   be reached afterwards, and the conservative check for "reachable" is the
@@ -1448,13 +1451,84 @@ The rules, and the reasons for them:
   it had and keeps a deep copy of the new value.
 * **a payload binding is a copy too.** In `Slot::Full(inner) => …` the arm binds
   a copy of the payload field, and the arm releases it when it ends.
-* **storage is still not an element.** An array element and a vector element are
-  read by value on every access, so an element that owns storage would have to be
-  copied on every read and released on every overwrite. `[String]`, `[Bag]`,
-  `Vec(String)`, `Vec(Vec(i64))` and `Vec(Bag)` are `E0426` / `E0427` — the
-  element work of N11g — where `Bag` is any struct that holds one of them.
+* **an element is a copy too.** A read of an element of a container that owns
+  storage hands back a copy that owns its own bytes, and the container keeps what
+  it had — see [Owning values as elements](#owning-values-as-elements).
 * **`str` is unchanged.** A `str` is an immutable pointer that lives for the whole
   run, so a field of type `str` is still a plain copied value.
+
+### Owning values as elements
+
+An **element** of an array or a vector may be a value that owns storage: a
+`String`, or a struct or an enum with such a field. The container owns every
+element it holds, so an element is copied in, copied out and released exactly
+once.
+
+```text
+element_read   = IDENT "[" expression "]" | "vec_get" "(" IDENT "," expression ")" ;
+copy_in        = "a read produces a copy" ;
+copy_out       = "a write releases the slot, then copies the value in" ;
+```
+
+```nava
+edition 2;
+
+struct Bag {
+    items: Vec(i64),
+    text: String
+}
+
+fn make(n: i64) -> Bag {
+    let xs: Vec(i64) = vec_new()
+    vec_push(xs, n)
+    let s: String = string_new()
+    string_push(s, "b")
+    return Bag(items: xs, text: s)
+}
+
+fn main() {
+    let bags: [Bag] = [make(1), make(2)]
+    let keep: Bag = bags[0]
+    bags[0] = make(3)
+    print(vec_len(keep.items))
+    print(vec_len(bags[0].items))
+    let v: Vec(String) = vec_new()
+    let s: String = string_new()
+    string_push(s, "x")
+    vec_push(v, s)
+    string_push(s, "!")
+    print(string_text(vec_get(v, 0)))
+    print(string_text(s))
+}
+```
+
+The example prints `1`, `1`, `x` and `x!`: `keep` kept the copy it was given,
+overwriting the slot left it alone, and the vector kept the string it was handed
+while the source kept growing.
+
+The rules, and the reasons for them:
+
+* **an element is copied in.** `vec_push(v, x)`, `vec_set(v, i, x)`, `xs[i] = x`
+  and `[a, b]` all copy the value into the storage: for a `String` that is
+  `nv_string_copy`, for a struct or enum it is the type's own copy helper, which
+  copies each owning field in turn.
+* **a write releases the slot first.** A slot that already holds a buffer is
+  released before the new value is copied into it, so overwriting never leaks.
+* **a read hands back a copy.** `xs[0]`, `vec_get(v, 0)` and the variable of
+  `for x in v` are copies that own their own bytes. The copy is released when the
+  statement that made it ends, when the block that bound it ends, or at the end of
+  the turn of the loop it belongs to — including the `continue` and `break` paths.
+* **`vec_pop` moves the element out.** The slot leaves the vector, so the popped
+  value is the owner and nothing is copied.
+* **release frees every element.** Releasing an array or a vector releases each
+  element it still holds and then the buffer; growth moves the handles between
+  buffers without copying or releasing them.
+* **`array_zeros` still needs a zero value.** An all-zero `String` is a null
+  buffer, not an empty string, so `array_zeros(n)` of an owning element is
+  `E0425`: build the elements from values instead.
+* **a collection is still not an element.** `[[i64]]`, `[Vec(i64)]`,
+  `Vec(Vec(i64))` and `Vec([i64])` are `E0206`: Nava holds one collection at a
+  time. That is a rule about shape, and it outlives the ownership rule.
 
 ### `defer`, labelled loops and `pub`
 
@@ -1585,9 +1659,9 @@ Restrictions, all edition 2 and all stated rather than implied:
 
 * a type parameter is a type inside its own declaration only — the body may write
   `Pair(T)`, and nothing outside may write `T`;
-* an instance may not be an array element type (`[Pair(i64)]` is `E0206`), and
-  an instance that owns an array is refused as an element like any other
-  (`E0426`);
+* an instance may not be an array element type (`[Pair(i64)]` is `E0206`, the
+  nested-collection rule), but an instance that owns storage is a value like any
+  other and may be an element of an array or a vector;
 * a template that would have to contain itself — `struct Node<T> { next:
   Node(Node(T)) }` instantiated at `Node(i64)` — is `E0377`, because a struct is
   stored inline and there is no indirection to break the cycle;
@@ -1789,8 +1863,6 @@ never changes meaning; a new condition gets a new code.
 | `E0422` | error | a slice is read-only | `tests/fixtures/negative/slice_read_only.nv` |
 | `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
-| `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
-| `E0427` | error | a vector element cannot own storage | `tests/fixtures/negative/vector_of_owning_values.nv` |
 | `E0428` | error | an owning value has exactly one owner | `tests/fixtures/negative/discarded_owned_result.nv` |
 | `E0429` | error | `vec_new` needs an annotated element type | `tests/fixtures/negative/vector_new_without_element_type.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
@@ -1984,9 +2056,9 @@ declarations of your own, function values with the type `fn(i64) -> i64`, growin
 vectors and growing strings, and moves of both. It does not add closures or
 function literals, `match` as an expression, generic arrays, type-parameter
 bounds, struct or enum equality, printing a struct, an enum, a function value, a
-vector or a `String`, or an **element** that owns a `Vec` or a `String` — that is
-the element work of N11g, and nothing here is a promise that it exists today. A
-field, a payload and a type argument may hold one.
+vector or a `String`. A field, a payload, a type argument and an **element** may
+each hold a `Vec(T)` or a `String`; what stays out is a collection inside a
+collection.
 
 An array keeps the length it was created with; `Vec(T)` is the type that grows.
 This version cannot express all ordinary C or C++ tasks. Save generated
