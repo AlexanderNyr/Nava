@@ -56,6 +56,9 @@ TESTED_ELSEWHERE = {
     "io::read_lines": "tests/test_io.py",
     "io::write_lines": "tests/test_io.py",
     "io::append_line": "tests/test_io.py",
+    "fs::exists": "tests/test_fs.py",
+    "fs::size": "tests/test_fs.py",
+    "fs::entries": "tests/test_fs.py",
 }
 
 

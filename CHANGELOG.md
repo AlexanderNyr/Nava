@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+N12f: **`fs`**, and three builtins behind it. Paths are text; the filesystem is
+asked questions, and the questions are gated.
+
+- `fs::basename`, `fs::dirname`, `fs::path_join`, `fs::extension`, `fs::stem`,
+  `fs::is_absolute` are arithmetic on a `str` and documented `pure: yes`.
+  `path_join` never doubles a separator and nothing is normalised:
+  `path_join("a", "..")` is `"a/.."`, because a normaliser that guesses produces
+  a path the kernel will not resolve.
+- `fs::exists`, `fs::size`, `fs::entries` wrap three new builtins —
+  `path_exists(str) -> bool`, `file_size(str) -> i64`,
+  `list_dir(str, mut Vec(str))` — and are `pure: no`: asking twice may see two
+  filesystems.
+- All three are **read-grant** operations. A path outside every grant stops the
+  program (`path_exists denied: … is outside every permitted directory`) rather
+  than answering `false`, so a question is not a way to probe the host. A path
+  that simply is not there is an answer: `false` for `path_exists`, a stopped
+  program for `file_size` and `list_dir`, which have nothing to report.
+- `list_dir` appends the names in **byte order** and skips `.` and `..`; the order
+  is part of the result, so two runs and two hosts agree. `MAX_DIR_ENTRIES` (4096)
+  makes a huge directory a runtime error rather than a short-looking listing, and
+  it is documented and compared with the compiled value like the other limits.
+- Writing the contracts found a documented failure that could not happen:
+  `fs::exists` promised the "no grant configured" message while the example lane
+  runs *with* grants. The contract now names the refusal the grant case produces.
+- `tests/test_fs.py` (19 tests) covers the text edges, the three questions, the
+  ordering, the refusals on the real command line; `TESTED_ELSEWHERE` grows the
+  three file-touching names, and `self_test.nv` runs the six pure ones.
+
 N12e: **`io`**. Lines of text and the files they come from, on the capability
 model N6 established — and the first module whose public surface is tested in two
 places, with the second place named in a list rather than left implicit.

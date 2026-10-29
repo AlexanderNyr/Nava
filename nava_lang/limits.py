@@ -38,6 +38,12 @@ MAX_READ_TOTAL_BYTES = 4 * 1024 * 1024
 #: Most `read_file` calls in one run; a companion bound to the total above.
 MAX_READ_CALLS = 64
 
+#: Most entries `list_dir` will accept in one directory.  A listing is a copy of
+#: names into the arena, so the count is what bounds the memory a call can take;
+#: exceeding it is a runtime error rather than a truncated listing, because a
+#: short listing looks like a short directory.
+MAX_DIR_ENTRIES = 4096
+
 I64_MIN = -(2**63)
 I64_MAX = 2**63 - 1
 

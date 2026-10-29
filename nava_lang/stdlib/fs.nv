@@ -1,0 +1,238 @@
+edition 2;
+
+# Nava standard library: paths and the filesystem.  Version 1.
+#
+# Two halves, and the line between them is the point of the module:
+#
+#   * the **text** half — `basename`, `dirname`, `path_join`, `extension`,
+#     `stem`, `is_absolute` — is arithmetic on a `str`.  No file is touched, the
+#     same arguments always give the same answer, and every one of them is
+#     documented `pure: yes`.
+#   * the **filesystem** half — `exists`, `size`, `entries` — is a thin,
+#     documented wrapper over the builtins `path_exists`, `file_size` and
+#     `list_dir`, which are read-grant operations: they ask about a path inside a
+#     directory granted with `--allow-read`, and a path outside every grant stops
+#     the program.  Asking the filesystem a question is an effect even when the
+#     answer is "no", so these three are `pure: no`: calling one twice may see
+#     two different filesystem states.
+#
+# The separator is `/` and nothing else.  There is no `..` arithmetic, no
+# normalisation and no path type: `path_join` joins, `dirname` cuts, and a
+# program that wants a canonical path asks the filesystem (a relative path
+# resolves against the program's working directory, which is how the grants
+# work too).  This is deliberate — a normaliser that guesses is the classic way
+# to get a path that is not the path the kernel resolves.
+#
+# A program that uses the module:
+#
+#     import fs;
+#
+#     fn main() {
+#         let names: Vec(str) = vec_new()
+#         fs::entries(".", names)                 # needs --allow-read .
+#         print(vec_len(names))
+#         print(fs::basename("a/b.txt"))          # b.txt
+#         print(fs::extension("a/b.txt"))         # txt
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `basename(path)` — the last component of a path.
+///
+/// pre: none
+/// post: everything after the last `/`, or the whole path when there is none;
+/// a path that ends with `/` has an empty last component, and that is what comes
+/// back — this function cuts, it does not tidy
+/// cost: O(bytes_len(path))
+/// pure: yes
+/// example: fs::basename("a/b.txt") == "b.txt"
+/// example: fs::basename("b.txt") == "b.txt"
+/// example: fs::basename("a/b/") == ""
+/// example: fs::basename("") == ""
+pub fn basename(path: str) -> str {
+    let length = bytes_len(path)
+    let cut = 0
+    let i = length
+    while i > 0 {
+        if byte_at(path, i - 1) == 47 {
+            return str_slice(path, i, length)
+        }
+        i = i - 1
+    }
+    return path
+}
+
+/// `dirname(path)` — everything before the last `/`.
+///
+/// pre: none
+/// post: the path without its last component; `.` when the path has no `/`, so
+/// `dirname("a.txt")` is `.` and joining it back with `basename` is the same
+/// path again; `/` when the last component sits at the root; the empty path has
+/// the empty directory
+/// cost: O(bytes_len(path))
+/// pure: yes
+/// example: fs::dirname("a/b.txt") == "a"
+/// example: fs::dirname("a.txt") == "."
+/// example: fs::dirname("/a.txt") == "/"
+/// example: fs::dirname("") == ""
+pub fn dirname(path: str) -> str {
+    let length = bytes_len(path)
+    if length == 0 {
+        return ""
+    }
+    let i = length
+    while i > 0 {
+        if byte_at(path, i - 1) == 47 {
+            if i == 1 {
+                return "/"
+            }
+            return str_slice(path, 0, i - 1)
+        }
+        i = i - 1
+    }
+    return "."
+}
+
+/// `path_join(left, right)` — two paths joined with exactly one `/`.
+///
+/// pre: none
+/// post: `left` and `right` with one `/` between them, and no `/` of its own
+/// when `left` already ends with one or `right` starts with one; an empty `left`
+/// gives `right`, an empty `right` gives `left`, and two empty paths give the
+/// empty path.  Nothing is normalised: `path_join("a", "..")` is `"a/.."`
+/// cost: O(bytes_len(left) + bytes_len(right))
+/// pure: yes
+/// example: fs::path_join("a", "b") == "a/b"
+/// example: fs::path_join("a/", "b") == "a/b"
+/// example: fs::path_join("a", "/b") == "a/b"
+/// example: fs::path_join("", "b") == "b"
+/// example: fs::path_join("a", "") == "a"
+pub fn path_join(left: str, right: str) -> str {
+    if bytes_len(left) == 0 {
+        return right
+    }
+    if bytes_len(right) == 0 {
+        return left
+    }
+    let left_ends = byte_at(left, bytes_len(left) - 1) == 47
+    let right_starts = byte_at(right, 0) == 47
+    if left_ends && right_starts {
+        return str_concat(left, str_slice(right, 1, bytes_len(right)))
+    }
+    if left_ends || right_starts {
+        return str_concat(left, right)
+    }
+    return str_concat(str_concat(left, "/"), right)
+}
+
+/// `extension(path)` — the text after the last `.` of the last component.
+///
+/// pre: none
+/// post: the extension with no dot; empty when the last component has no `.`, or
+/// when its only `.` is its first character (a leading dot names a hidden file,
+/// not an extension), or when the dot is the last character
+/// cost: O(bytes_len(path))
+/// pure: yes
+/// example: fs::extension("a/b.txt") == "txt"
+/// example: fs::extension("a/b.tar.gz") == "gz"
+/// example: fs::extension("a/b") == ""
+/// example: fs::extension(".bashrc") == ""
+/// example: fs::extension("a/b.") == ""
+pub fn extension(path: str) -> str {
+    let name = basename(path)
+    let length = bytes_len(name)
+    let i = length
+    while i > 0 {
+        if byte_at(name, i - 1) == 46 {
+            if i == 1 {
+                return ""
+            }
+            return str_slice(name, i, length)
+        }
+        i = i - 1
+    }
+    return ""
+}
+
+/// `stem(path)` — the last component without its extension.
+///
+/// pre: none
+/// post: the result of `basename` with the `extension` and its dot removed, and
+/// the whole last component when there is no extension; so
+/// `stem("a/b.tar.gz")` is `"b.tar"` and `stem(".bashrc")` is `".bashrc"`
+/// cost: O(bytes_len(path))
+/// pure: yes
+/// example: fs::stem("a/b.txt") == "b"
+/// example: fs::stem("a/b.tar.gz") == "b.tar"
+/// example: fs::stem(".bashrc") == ".bashrc"
+/// example: fs::stem("a/b") == "b"
+pub fn stem(path: str) -> str {
+    let name = basename(path)
+    let suffix = extension(path)
+    if bytes_len(suffix) == 0 {
+        return name
+    }
+    return str_slice(name, 0, bytes_len(name) - bytes_len(suffix) - 1)
+}
+
+/// `is_absolute(path)` — does the path start at the root?
+///
+/// pre: none
+/// post: true exactly when the first byte is `/`; the empty path is not absolute
+/// cost: O(1)
+/// pure: yes
+/// example: fs::is_absolute("/tmp")
+/// example: !fs::is_absolute("tmp")
+/// example: !fs::is_absolute("")
+pub fn is_absolute(path: str) -> bool {
+    if bytes_len(path) == 0 {
+        return false
+    }
+    return byte_at(path, 0) == 47
+}
+
+/// `exists(path)` — is there anything at this path?
+///
+/// pre: `path` is inside a directory granted with `--allow-read`; a path outside
+/// every grant stops the program, whatever the answer would have been
+/// post: true when the path exists, as a file or as a directory; false when it
+/// does not, including when the directory that would hold it does not exist
+/// cost: O(1) system calls
+/// pure: no
+/// example: fs::exists("exists.txt") == false
+/// example: write_file("here.txt", "x"); fs::exists("here.txt")
+/// error: print(fs::exists("../outside.txt")) => path_exists denied: '../outside.txt' is outside every permitted directory
+pub fn exists(path: str) -> bool {
+    return path_exists(path)
+}
+
+/// `size(path)` — the size of a file in bytes.
+///
+/// pre: `path` is inside a directory granted with `--allow-read`
+/// post: the size of the regular file at that path in bytes, exactly what
+/// `read_file` would return the length of
+/// cost: O(1) system calls
+/// pure: no
+/// example: write_file("size_probe.txt", "abc"); fs::size("size_probe.txt") == 3
+/// example: write_file("size_empty.txt", ""); fs::size("size_empty.txt") == 0
+/// error: print(fs::size("missing.txt")) => cannot open 'missing.txt': No such file or directory
+pub fn size(path: str) -> i64 {
+    return file_size(path)
+}
+
+/// `entries(path, out)` — the names in a directory, appended to a vector.
+///
+/// pre: `path` is a directory inside a directory granted with `--allow-read`
+/// post: the names of its entries are appended to `out` in **byte order**, which
+/// is the same order on every run and every host; `.` and `..` are not entries;
+/// a file where a directory was expected stops the program
+/// cost: O(entries × log entries) for the order, O(total name bytes)
+/// pure: no
+/// example: write_file("listed.txt", ""); let names: Vec(str) = vec_new(); fs::entries(".", names); vec_len(names) > 0
+/// example: write_file("listed2.txt", ""); let again: Vec(str) = vec_new(); fs::entries(".", again); fs::exists("listed.txt")
+/// error: let missing: Vec(str) = vec_new(); fs::entries("no_such_dir", missing) => cannot open 'no_such_dir': No such file or directory
+pub fn entries(path: str, out: mut Vec(str)) {
+    list_dir(path, out)
+}

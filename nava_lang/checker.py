@@ -19,6 +19,9 @@ ENTRY_MODULE = ""
 BUILTINS = {
     "print", "read_i64", "read_f64", "len", "array_zeros", "to_f64", "to_i64",
     "bytes_len", "chars_len", "byte_at", "read_file", "write_file",
+    # The filesystem questions: existence, size and a listing. Reserved like the
+    # rest, and all three are read-grant operations rather than write ones.
+    "path_exists", "file_size", "list_dir",
     # The whole vector interface, including the constructor: `vec_new` is
     # resolved like the rest, so a declaration of that name would be dead code.
     "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
@@ -56,6 +59,14 @@ TEXT_SIGNATURES = {
     "string_capacity": (("String",), "i64"),
     "string_clear": (("mut String",), "void"),
     "string_text": (("String",), "str"),
+}
+#: The filesystem builtins and their signatures, in the same shape as the text
+#: ones: an argument written with `mut ` must be a writable target, for the same
+#: reason (`list_dir` appends to the caller's vector).
+FS_SIGNATURES = {
+    "path_exists": (("str",), "bool"),
+    "file_size": (("str",), "i64"),
+    "list_dir": (("str", "mut Vec(str)"), "void"),
 }
 #: Types a value can have (everything except `void`).
 VALUE_TYPES = {"i64", "bool", "str", "f64"}
@@ -1325,7 +1336,18 @@ class Checker:
             if expr.args:
                 raise make("E0326", "string_new takes no arguments", expr.loc)
             return "String"
-        arguments, result = TEXT_SIGNATURES[name]
+        return self.signature_builtin(expr, TEXT_SIGNATURES)
+
+    def signature_builtin(self, expr: Call, table: dict) -> str:
+        """Check one builtin call against a signature table, and answer its type.
+
+        Every argument is compared with its declared type and nothing is
+        converted, and an argument written `mut ...` additionally has to be a
+        writable target — the same rule a mutating vector call follows, for the
+        same reason: it changes storage the caller holds.
+        """
+        name = expr.name
+        arguments, result = table[name]
         if len(expr.args) != len(arguments):
             plural = "" if len(arguments) == 1 else "s"
             raise make("E0326", f"{name} expects {len(arguments)} argument{plural}, "
@@ -2462,6 +2484,8 @@ class Checker:
                 raise make("E0327", f"argument 2 of byte_at expects i64, got {index_type}",
                            expr.args[1].loc)
             return "i64"
+        if expr.module is None and expr.name in FS_SIGNATURES:
+            return self.signature_builtin(expr, FS_SIGNATURES)
         if expr.module is None and expr.name == "read_file":
             if len(expr.args) != 1:
                 raise make("E0326", "read_file expects exactly one argument", expr.loc)

@@ -49,10 +49,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 10 394 lines,
-14 modules and 328 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 10 586 lines,
+14 modules and 329 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12e) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12f) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,38 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12f (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| The questions exist as builtins, with types and refusals | `nava_lang/checker.py` (`FS_SIGNATURES`, `signature_builtin`), `LANGUAGE.md` (Files and capabilities) | `path_exists(str) -> bool`, `file_size(str) -> i64` and `list_dir(str, mut Vec(str))`; wrong arity is `E0326`, a wrong argument type `E0327`, and `list_dir` through a plain parameter is `E0444` with the same message `vec_push` gives — "it must be a writable local or a `mut Vec(str)` parameter" |
+| The capability model is inherited, not widened | `tests/test_fs.py`: `ExistenceTests` (5), `IsolationTests` | a question with no grant is `path_exists denied: no permitted directory was configured for this program`; a question about `../outside.txt` is `path_exists denied: '../outside.txt' is outside every permitted directory`, **through the command line** with `--allow-read inside`, and the program stops before printing the second line. A question is not a way to probe the host |
+| A missing path is an answer; a missing file is an error | `ExistenceTests`, `SizeTests`, `ListingTests` | `fs::exists` answers `false` for a missing name and for a path whose parent directory does not exist; `fs::size` stops with `cannot open '<path>': No such file or directory`, `fs::size` of a directory with `file_size: 'sub' is not a regular file`, and `fs::entries` of a file with `list_dir: 'a.txt' is not a directory` |
+| The listing is ordered, and the order is part of the contract | `ListingTests.test_the_names_come_back_in_byte_order`, `test_two_listings_agree` | four entries come back as `C.txt`, `a.txt`, `b.txt`, `sub` — byte order, which is what `strcmp` and `qsort` give, so two runs and two hosts agree; `.` and `..` are not entries; the names are appended to what the vector already held |
+| The limit exists so a listing cannot be unbounded | `nava_lang/limits.py` (`MAX_DIR_ENTRIES`), `LANGUAGE.md` (limits table), `tests/test_spec.py` | 4096 entries, above which the program stops with a runtime error rather than returning a listing that looks short; the documented number and the compiled one are compared by the spec test, like the other seven |
+| The text half is pure, and says so | `contracts.check_program`, `fs.nv` doc blocks, `tests/fixtures/positive/self_test.nv` | six of the nine functions are `pure: yes` (arithmetic on a `str`, no file touched) and the three questions are `pure: no`, because asking twice may see two filesystems; six self-test bodies assert the edges — a trailing separator, a leading dot, a name made only of a dot — and the run prints 31 `ok` lines and `standard library: ok` (626 bytes, recorded) |
+| `join` and its inverse are worth having together | `PathTextTests.test_a_path_built_by_join_reads_back_the_same` | `path_join(dirname(p), basename(p))` returns `p` for `a/b/c.txt`, which is the property that makes the pair a pair; separately, `path_join("a/", "/b")` is `a/b` and `path_join("a", "..")` is `a/..` — no normalisation is claimed |
+| The module is documented like the rest of the library | `docs/stdlib/fs.md` (324 lines, 7 253 bytes), `tests/test_contracts.py` | the reference is generated from the doc blocks and compared byte for byte; the module's 20 examples run (several of them write a probe file and read it back, with the harness's own grants) and its three documented failures happen |
+| **A documented failure that did not happen was found and replaced** | `ContractGuardTests.test_every_documented_failure_happens` | `fs::exists` first documented `path_exists denied: no permitted directory was configured`, which is the message of a program with *no* grants — while the example lane runs with grants, so the documented failure could not happen. The contract now names the refusal the grant case really produces (`'../outside.txt' is outside every permitted directory`), and the no-grant message is asserted where it belongs, in `ExistenceTests` |
+| The specification, the guide and the records moved with the code | `LANGUAGE.md` (the three builtins, `### fs`, the limits row, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the builtins, the question-versus-answer rule, the byte order and the new limit are normative; the guide names the module, its nine functions and the three builtins, and is re-pinned at 30 510 bytes, 30 430 characters, 871 lines, sha256 `53302225…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 101 363 tokens (`cl100k_base`) and 101 770 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 100 727 / 101 134 tokens |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 10 586 lines, 14 modules, 329 functions under `nava_lang/` (10 394 / 14 / 328 at N12e): the growth is the three builtins in the checker and the runtime that answers them |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, `bash /tmp/ci-sim.sh` | registry `OK: 736 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **806 tests OK** (1 375 subtests); seven packaged modules in the contract list; release checks OK; the guide digest verifies; the CI simulation passes |
+
+Negative controls: five refusals in `ExistenceTests` (no grant, outside the grant,
+missing parent, and the same through the CLI), three in `SizeTests` and
+`ListingTests` (missing file, directory where a file was expected, file where a
+directory was expected), and the type-level refusals in the checker — `E0326`,
+`E0327` and `E0444` — which are asserted in the record above rather than assumed.
+
+Deliberately not done in N12f: `args`, `collections` and `time`, and any
+normalisation of paths. `args` is the next one and needs a decision the language
+has not made yet — how a program receives its arguments, given that the runtime
+entry point takes none and the grants are baked in at build time; `collections`
+is a module over `HashMap`/`HashSet` from N12a; `time` needs a clock, which is
+the one thing in this list that is not deterministic, and a `pure:` claim about it
+would be false by construction.
 
 #### Delivery record N12e (2026-10-29)
 
@@ -964,7 +996,8 @@ self-testing facility.
 | N12c | **Purity and self-testing**: `pure: yes`/`no` as a required contract field, with a guard that reads the body instead of believing the claim; the `test` module — assertions, a runner and a summary — written in Nava; a function value that carries its module (`test::passing`); and a standard library that tests itself and returns its own failure count as the exit status | **Delivered** (record below) |
 | N12d | **`fmt`**: `repeat`, `pad_left`, `pad_right`, `pad_center`, `clip`, `i64_aligned` and `f64_fixed` — a column width in bytes, the side to align to and a number of decimal places, over `i64`, `f64` and `str`, which is the audit's f-string row (519) closed with a module instead of a format language | **Delivered** (record below) |
 | N12e | **`io`**: lines of text — `count_lines`, `first_line`, `join_lines`, `lines_of` — and the files they come from: `read_lines`, `write_lines`, `append_line`, on the capability model N6 established, with the file half tested against grants and the text half in the self-test | **Delivered** (record below) |
-| N12f–N12x | the remaining `fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12f | **`fs`**: six pure path functions (`basename`, `dirname`, `path_join`, `extension`, `stem`, `is_absolute`) and three filesystem questions (`exists`, `size`, `entries`) over three new builtins — `path_exists`, `file_size`, `list_dir` — on the read-grant model, with the listing ordered by bytes | **Delivered** (record below) |
+| N12g–N12x | the remaining `args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here
@@ -1202,7 +1235,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 10 394 Python lines and 328 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 10 586 Python lines and 329 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

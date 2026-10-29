@@ -160,6 +160,8 @@ class SpecDocumentationTests(unittest.TestCase):
              limits.MAX_READ_TOTAL_BYTES, "MAX_READ_TOTAL_BYTES"),
             (r"\| Read call limit \(`MAX_READ_CALLS`\) \| (\d+) \|",
              limits.MAX_READ_CALLS, "MAX_READ_CALLS"),
+            (r"\| Directory entry limit \(`MAX_DIR_ENTRIES`\) \| (\d+) \|",
+             limits.MAX_DIR_ENTRIES, "MAX_DIR_ENTRIES"),
         ):
             match = re.search(pattern, text)
             self.assertIsNotNone(match, f"{name} is not documented in LANGUAGE.md")

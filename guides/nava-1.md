@@ -118,6 +118,9 @@ pub fn double(x: i64) -> i64 {
   point count (an error if the bytes are not valid UTF-8) and one byte.
 - `read_file(path)`, `write_file(path, text)` — only if the caller was granted
   a directory, otherwise a runtime error.
+- `path_exists(path) -> bool`, `file_size(path) -> i64` and
+  `list_dir(path, out: mut Vec(str))` — questions about a path; the same grant
+  rule applies, and `list_dir` appends the names in byte order.
 
 ## Operators
 
@@ -159,6 +162,10 @@ fn main() {
   files they come from. The three file functions need `--allow-read` or
   `--allow-write` at build time and are documented `pure: no`; the text-level
   ones are `pure: yes`.
+- `fs` — `fs::basename`, `fs::dirname`, `fs::path_join`, `fs::extension`,
+  `fs::stem`, `fs::is_absolute` (text, `pure: yes`) and `fs::exists`,
+  `fs::size`, `fs::entries` (filesystem questions, `pure: no`, needing
+  `--allow-read`).
 
 Two aligned columns, without a format language to learn:
 
@@ -184,6 +191,20 @@ fn main() {
     io::read_lines("input.txt", lines)
     print(vec_len(lines))
     print(vec_get(lines, 0))
+}
+```
+
+Paths, without touching the filesystem:
+
+```nava
+edition 2;
+
+import fs;
+
+fn main() {
+    print(fs::basename("a/b.txt"))
+    print(fs::extension("a/b.txt"))
+    print(fs::path_join(fs::dirname("a/b.txt"), fs::stem("a/b.txt")))
 }
 ```
 

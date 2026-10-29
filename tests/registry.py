@@ -108,6 +108,37 @@ REGISTERED_TESTS = {
         "test_a_missing_file_is_reported",
         "test_appending_to_a_missing_file_is_reported",
     },
+    #: N12f: `fs` — the text half of the paths runs in the self-test, the three
+    #: filesystem questions need a grant and run here (`TESTED_ELSEWHERE`).
+    "ExistenceTests": {
+        "test_a_file_is_there_and_a_missing_name_is_not",
+        "test_a_directory_is_there_too",
+        "test_a_path_whose_parent_is_missing_is_simply_not_there",
+        "test_a_question_about_a_path_outside_the_grants_is_refused",
+        "test_a_question_without_a_grant_is_refused",
+    },
+    "SizeTests": {
+        "test_the_size_is_the_number_of_bytes",
+        "test_a_missing_file_stops_the_program",
+        "test_a_directory_is_not_a_file",
+    },
+    "ListingTests": {
+        "test_the_names_come_back_in_byte_order",
+        "test_dot_and_dot_dot_are_not_entries",
+        "test_the_entries_are_appended_to_what_the_vector_held",
+        "test_two_listings_agree",
+        "test_a_file_where_a_directory_was_expected_is_reported",
+        "test_a_missing_directory_is_reported",
+    },
+    "PathTextTests": {
+        "test_the_edges_of_basename_and_dirname",
+        "test_join_never_doubles_a_separator",
+        "test_extension_and_stem_agree_with_each_other",
+        "test_a_path_built_by_join_reads_back_the_same",
+    },
+    "IsolationTests": {
+        "test_asking_about_a_path_outside_the_grant_is_refused_by_the_cli",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1124,6 +1155,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
     import test_io  # noqa: PLC0415
+    import test_fs  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1132,7 +1164,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
-                   test_io,
+                   test_io, test_fs,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1203,7 +1235,13 @@ def check_skip_state() -> list[str]:
     import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
     import test_io  # noqa: PLC0415
-    for module, class_name in ((test_io, "RoundTripTests"),
+    import test_fs  # noqa: PLC0415
+    for module, class_name in ((test_fs, "ExistenceTests"),
+                               (test_fs, "SizeTests"),
+                               (test_fs, "ListingTests"),
+                               (test_fs, "PathTextTests"),
+                               (test_fs, "IsolationTests"),
+                               (test_io, "RoundTripTests"),
                                (test_io, "CapabilityTests"),
                                (test_io, "FailureTests"),
                                (test_self_test, "SelfTestRunTests"),

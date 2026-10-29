@@ -609,6 +609,7 @@ nava_lang/stdlib/text.nv      is_ascii, is_valid_utf8, code_points, ...
 nava_lang/stdlib/test.nv      expect_true, expect_i64, expect_str, run, summary
 nava_lang/stdlib/fmt.nv       repeat, pad_left, pad_right, pad_center, clip, ...
 nava_lang/stdlib/io.nv        count_lines, first_line, join_lines, lines_of, read_lines, ...
+nava_lang/stdlib/fs.nv        basename, dirname, path_join, extension, stem, exists, ...
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -749,6 +750,45 @@ Run with `--allow-read .`, this prints the number of lines and the first one.
 `join_lines` takes an array rather than a vector, so a program that has the
 lines in a vector and wants them back as one text reads the file as a text
 instead: `io::first_line(read_file("input.txt"))`.
+
+### `fs`
+
+Paths, and the three questions a program can ask about them. The separator is
+`/` and nothing else: there is no `..` arithmetic and no normalisation, because a
+normaliser that guesses produces a path that is not the path the kernel resolves.
+
+| Function | Result |
+|---|---|
+| `fs::module_version() -> i64` | the standard library version |
+| `fs::basename(path: str) -> str` | the last component; `""` for a path that ends with `/` |
+| `fs::dirname(path: str) -> str` | the part before it; `.` for a bare name, `/` at the root |
+| `fs::path_join(left: str, right: str) -> str` | two paths with exactly one `/` between them, no normalisation |
+| `fs::extension(path: str) -> str` | the text after the last `.`; `""` for a leading dot or no dot |
+| `fs::stem(path: str) -> str` | the last component without its extension |
+| `fs::is_absolute(path: str) -> bool` | true exactly when the path starts with `/` |
+| `fs::exists(path: str) -> bool` | is there anything there? needs `--allow-read` |
+| `fs::size(path: str) -> i64` | the size of a regular file in bytes; needs `--allow-read` |
+| `fs::entries(path: str, out: mut Vec(str))` | the names in a directory, in byte order; needs `--allow-read` |
+
+The six path functions are arithmetic on a `str` and are documented `pure: yes`;
+the three questions are `pure: no`, because asking the filesystem twice may see
+two different filesystems. They are wrappers over the builtins `path_exists`,
+`file_size` and `list_dir`, so the capability rule is the one stated above: a
+path outside the grants stops the program, a missing path is an answer.
+
+```nava
+edition 2;
+
+import fs;
+
+fn main() {
+    print(fs::basename("a/b.txt"))
+    print(fs::extension("a/b.txt"))
+    print(fs::path_join(fs::dirname("a/b.txt"), fs::stem("a/b.txt")))
+}
+```
+
+This prints `b.txt`, `txt` and `a/b`.
 
 ## Doc blocks and `nava doc`
 
@@ -964,6 +1004,17 @@ nava run   prog.nv --workdir sandbox --allow-read . --allow-write .
   sees only its working directory, so a grant for a directory that is not
   mounted cannot help, and a file outside the working directory cannot be
   reached even when a grant names it.
+- Three builtins ask the filesystem a **question** rather than reading a file,
+  and all three are read-grant operations:
+  `path_exists(path: str) -> bool`, `file_size(path: str) -> i64` and
+  `list_dir(path: str, out: mut Vec(str))`. A path outside every grant stops the
+  program — a question is not a way to probe the host — while a path that simply
+  does not exist is an answer: `path_exists` returns `false`, and `file_size`
+  and `list_dir` stop with `cannot open '<path>': ...` because there is nothing
+  to report. `list_dir` appends the entry names in **byte order**, skips `.` and
+  `..`, refuses a file where a directory was expected and stops above
+  4096 entries; the order is part of the result, so two runs on one directory
+  agree.
 
 ## Checked arithmetic
 
@@ -2357,11 +2408,12 @@ See `tests/fixtures/warnings/unreachable.nv`.
 | File read limit (`MAX_FILE_BYTES`) | 1048576 | runtime error, exit status 1 |
 | Total read limit (`MAX_READ_TOTAL_BYTES`) | 4194304 | runtime error, exit status 1 |
 | Read call limit (`MAX_READ_CALLS`) | 64 | runtime error, exit status 1 |
+| Directory entry limit (`MAX_DIR_ENTRIES`) | 4096 | runtime error, exit status 1 |
 
 The nesting counter is shared by function bodies and blocks, parenthesised
 subexpressions, unary operator chains and the depth of the expression tree
 (which also bounds long left-associative chains such as `1 + 1 + 1 + ...`).
-These four numbers are also compiled into the generated runtime from
+These numbers are also compiled into the generated runtime from
 `nava_lang/limits.py`, so the documented value and the enforced value cannot
 drift apart. The limit exists so that pathological input produces a diagnostic
 instead of a Python traceback; it is not a tuning knob. If the guard is ever bypassed, the
