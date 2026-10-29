@@ -1,9 +1,12 @@
+edition 2;
+
 # The standard library testing itself: one test body per public name, run by
 # `test::run`, with the exit status as the verdict.  `tests/test_self_test.py`
 # checks that this file names every public function of every module — a public
 # name with no test here fails the guard.
 
 import fmt;
+import io;
 import math;
 import sort;
 import test;
@@ -222,6 +225,56 @@ fn f64_fixed_tests() -> i64 {
     return failures
 }
 
+fn count_lines_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(io::count_lines(""), 1,
+                                           "an empty text is one empty line")
+    failures = failures + test::expect_i64(io::count_lines("one"), 1,
+                                           "one line without a newline")
+    failures = failures + test::expect_i64(io::count_lines("one\ntwo"), 2, "two lines")
+    failures = failures + test::expect_i64(io::count_lines("one\ntwo\n"), 3,
+                                           "a final newline counts the empty line after it")
+    return failures
+}
+
+fn first_line_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(io::first_line("one\ntwo"), "one",
+                                           "the text before the first newline")
+    failures = failures + test::expect_str(io::first_line("only"), "only",
+                                           "without a newline the whole text is the first line")
+    failures = failures + test::expect_str(io::first_line(""), "",
+                                           "nothing has no first line")
+    return failures
+}
+
+fn join_lines_tests() -> i64 {
+    let failures = 0
+    let none: [str] = []
+    failures = failures + test::expect_str(io::join_lines(none), "",
+                                           "no lines are no text")
+    let one: [str] = ["a"]
+    failures = failures + test::expect_str(io::join_lines(one), "a",
+                                           "one line is itself")
+    let two: [str] = ["a", "b"]
+    failures = failures + test::expect_str(io::join_lines(two), "a\nb",
+                                           "one newline between two lines")
+    return failures
+}
+
+fn lines_of_tests() -> i64 {
+    let failures = 0
+    let parts: Vec(str) = vec_new()
+    io::lines_of("a\nb", parts)
+    failures = failures + test::expect_i64(vec_len(parts), 2, "two lines")
+    failures = failures + test::expect_str(vec_get(parts, 1), "b", "the second of them")
+    let one: Vec(str) = vec_new()
+    io::lines_of("", one)
+    failures = failures + test::expect_i64(vec_len(one), 1,
+                                           "an empty text is one empty line")
+    return failures
+}
+
 fn main() -> i64 {
     let failed = 0
     failed = failed + test::run("math::abs", abs_tests)
@@ -245,5 +298,9 @@ fn main() -> i64 {
     failed = failed + test::run("fmt::clip", clip_tests)
     failed = failed + test::run("fmt::i64_aligned", i64_aligned_tests)
     failed = failed + test::run("fmt::f64_fixed", f64_fixed_tests)
+    failed = failed + test::run("io::count_lines", count_lines_tests)
+    failed = failed + test::run("io::first_line", first_line_tests)
+    failed = failed + test::run("io::join_lines", join_lines_tests)
+    failed = failed + test::run("io::lines_of", lines_of_tests)
     return test::summary("standard library", failed)
 }

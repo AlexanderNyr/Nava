@@ -154,6 +154,11 @@ fn main() {
   the side to align to and the number of decimal places, which is what printing a
   table needs. Every one of them answers with a `str`, so they compose with
   `str_concat`.
+- `io` — `io::count_lines`, `io::first_line`, `io::join_lines`, `io::lines_of`,
+  `io::read_lines`, `io::write_lines`, `io::append_line`: lines of text and the
+  files they come from. The three file functions need `--allow-read` or
+  `--allow-write` at build time and are documented `pure: no`; the text-level
+  ones are `pure: yes`.
 
 Two aligned columns, without a format language to learn:
 
@@ -164,6 +169,21 @@ fn main() {
     print(str_concat(fmt::pad_right("apples", 8), fmt::i64_aligned(1234, 6, true)))
     print(str_concat(fmt::pad_right("ratio", 8),
                      fmt::pad_left(fmt::f64_fixed(1.0 / 3.0, 3), 6)))
+}
+```
+
+Reading a file, when the program was built with `--allow-read .`:
+
+```nava
+edition 2;
+
+import io;
+
+fn main() {
+    let lines: Vec(str) = vec_new()
+    io::read_lines("input.txt", lines)
+    print(vec_len(lines))
+    print(vec_get(lines, 0))
 }
 ```
 

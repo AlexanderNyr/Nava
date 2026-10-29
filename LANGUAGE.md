@@ -608,6 +608,7 @@ nava_lang/stdlib/sort.nv      is_sorted, insertion_sort, binary_search
 nava_lang/stdlib/text.nv      is_ascii, is_valid_utf8, code_points, ...
 nava_lang/stdlib/test.nv      expect_true, expect_i64, expect_str, run, summary
 nava_lang/stdlib/fmt.nv       repeat, pad_left, pad_right, pad_center, clip, ...
+nava_lang/stdlib/io.nv        count_lines, first_line, join_lines, lines_of, read_lines, ...
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -701,6 +702,53 @@ fn main() {
 ```
 
 This prints `apples    1234` and `ratio    0.333`.
+
+### `io`
+
+Lines, and the files they come from. A **line** is the bytes between two `\n`
+bytes, which is exactly what `str_split` produces.
+
+| Function | Result |
+|---|---|
+| `io::module_version() -> i64` | the standard library version |
+| `io::count_lines(text: str) -> i64` | `1 + the number of '\n'`; the empty text is one empty line |
+| `io::first_line(text: str) -> str` | the text before the first `\n`, or the whole text |
+| `io::join_lines(values: [str]) -> str` | the lines with one `\n` between each pair and none at the ends |
+| `io::lines_of(text: str, out: mut Vec(str))` | appends the lines of a text to a vector |
+| `io::read_lines(path: str, out: mut Vec(str))` | appends the lines of a file; needs `--allow-read` |
+| `io::write_lines(path: str, values: [str])` | writes one line per element, each followed by `\n`; needs `--allow-write` |
+| `io::append_line(path: str, text: str)` | adds one line to an existing file; needs both grants |
+
+`write_lines` and `read_lines` are a pair: `write_lines` terminates every line,
+`read_lines` drops the one empty field that a final `\n` produces, so a list of
+lines comes back the way it went in — while a file that genuinely ends with an
+empty line keeps it, and an **empty** file reads back as one empty line, because
+that is what an empty text is.
+
+Every function that touches a file is documented `pure: no`, and the ones that
+only rearrange text are `pure: yes`: `count_lines`, `first_line` and `join_lines`
+answer with the same result for the same arguments, which is what makes it safe to
+call them twice. File access is the capability model above: grants are baked into
+the program at build time, a call outside them stops the program, and the module
+adds nothing to that model — it is a caller of it.
+
+```nava
+edition 2;
+
+import io;
+
+fn main() {
+    let lines: Vec(str) = vec_new()
+    io::read_lines("input.txt", lines)
+    print(vec_len(lines))
+    print(vec_get(lines, 0))
+}
+```
+
+Run with `--allow-read .`, this prints the number of lines and the first one.
+`join_lines` takes an array rather than a vector, so a program that has the
+lines in a vector and wants them back as one text reads the file as a text
+instead: `io::first_line(read_file("input.txt"))`.
 
 ## Doc blocks and `nava doc`
 

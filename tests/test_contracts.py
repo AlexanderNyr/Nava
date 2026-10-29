@@ -46,6 +46,11 @@ REFERENCE = ROOT / "docs" / "stdlib"
 NAVA = ROOT / "nava"
 #: The packaged standard modules, in the order `nava doc` reads them.
 MODULES = tuple(sorted(path.stem for path in STDLIB.glob("*.nv")))
+#: The grants an example runs with: its own temporary directory and nothing
+#: else. `io`'s examples write a file and read it back, so without a grant they
+#: would stop at the capability check instead of testing what they claim — but a
+#: grant to `.` is a grant to the harness's directory, not to the host's.
+EXAMPLE_GRANTS = {"read": ["."], "write": ["."]}
 
 
 def module_source(module: str) -> str:
@@ -53,15 +58,19 @@ def module_source(module: str) -> str:
 
 
 def build_and_run(source: str, root: Path, entry_name: str = "main.nv",
-                  opt: str = "-O1") -> subprocess.CompletedProcess:
+                  opt: str = "-O1",
+                  capabilities: dict | None = None) -> subprocess.CompletedProcess:
     """Compile a program whose project root is `root`, then run it.
 
     `opt` is passed to the C compiler, because "the same answer at every
-    optimisation level" is one of the claims this file tests.
+    optimisation level" is one of the claims this file tests. `capabilities`
+    are the file grants baked into the program at build time; when they are
+    given the program runs *in* `root`, so a relative grant means the same
+    directory the file it writes lands in.
     """
     entry = root / entry_name
     entry.write_text(source, encoding="utf-8")
-    compilation = compile_source(source, path=entry)
+    compilation = compile_source(source, path=entry, capabilities=capabilities)
     c_file = root / "program.c"
     binary = root / "program"
     c_file.write_text(compilation.code, encoding="utf-8")
@@ -69,7 +78,8 @@ def build_and_run(source: str, root: Path, entry_name: str = "main.nv",
                            capture_output=True, text=True, timeout=300)
     if build.returncode != 0:
         raise AssertionError(f"the generated C did not compile:\n{build.stderr}")
-    return subprocess.run([str(binary)], capture_output=True, text=True, timeout=120)
+    return subprocess.run([str(binary)], capture_output=True, text=True, timeout=120,
+                          cwd=str(root) if capabilities else None)
 
 
 def examples_program(module: str, examples: list[str]) -> str:
@@ -112,7 +122,8 @@ def contract_module(source: str, name: str, root: Path):
 
 
 def example_problems(module: str, examples: list[str],
-                     root: Path | None = None) -> list[str]:
+                     root: Path | None = None,
+                     capabilities: dict | None = None) -> list[str]:
     """Every example of one module that is false or does not compile.
 
     An example is written the way a caller writes it, so a function that lives
@@ -126,7 +137,7 @@ def example_problems(module: str, examples: list[str],
         root = Path(directory) if root is None else root
         program = examples_program(module, examples)
         try:
-            result = build_and_run(program, root)
+            result = build_and_run(program, root, capabilities=capabilities)
         except NavaError as error:
             # The batch did not compile, so the culprit is one example. Compile
             # them one at a time to name it instead of blaming the module.
@@ -134,7 +145,8 @@ def example_problems(module: str, examples: list[str],
             for index, example in enumerate(examples, start=1):
                 single = examples_program(module, [example])
                 try:
-                    build_and_run(single, root, f"main{index}.nv")
+                    build_and_run(single, root, f"main{index}.nv",
+                                  capabilities=capabilities)
                 except NavaError as single_error:
                     problems.append(
                         f"{module}: example {index} does not compile: "
@@ -154,13 +166,14 @@ def example_problems(module: str, examples: list[str],
 
 
 def error_case_problems(module: str, statements: str, message: str,
-                        root: Path | None = None) -> list[str]:
+                        root: Path | None = None,
+                        capabilities: dict | None = None) -> list[str]:
     """Does one documented failure really stop the program, saying this?"""
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory) if root is None else root
         program = error_program(module, statements)
         try:
-            result = build_and_run(program, root)
+            result = build_and_run(program, root, capabilities=capabilities)
         except NavaError as error:
             return [f"{module}: the documented failure does not compile: "
                     f"{error.code} {error.message}"]
@@ -264,7 +277,9 @@ class ContractGuardTests(unittest.TestCase):
                             if contracts.is_public(program, function)
                             for example in contracts.parse(function.doc).examples]
                 self.assertTrue(examples, f"{module} documents no example")
-                self.assertEqual(example_problems(module, examples), [])
+                self.assertEqual(
+                    example_problems(module, examples, capabilities=EXAMPLE_GRANTS),
+                    [])
 
     @unittest.skipUnless(CC is not None, "a C compiler is required")
     def test_every_documented_failure_happens(self):
@@ -278,7 +293,8 @@ class ContractGuardTests(unittest.TestCase):
                     documented += 1
                     with self.subTest(module=module, function=function.name):
                         self.assertEqual(
-                            error_case_problems(module, statements, message), [])
+                            error_case_problems(module, statements, message,
+                                                capabilities=EXAMPLE_GRANTS), [])
         self.assertGreaterEqual(documented, 3,
                                 "the standard library documents no failure at all")
 

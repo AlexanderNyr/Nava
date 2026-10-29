@@ -45,6 +45,18 @@ NAVA = ROOT / "nava"
 #: The modules the program is expected to cover: every one that ships.
 MODULES = tuple(sorted(path.stem for path in STDLIB.glob("*.nv")
                        if path.stem != "test"))
+#: Public names whose test cannot live in a self-test, and where it lives
+#: instead. `io`'s file functions need a directory the program is *granted*, and
+#: a grant is the caller's decision rather than the library's: a self-test that
+#: demanded one would be asking for a capability to test a capability rule. The
+#: list is explicit so that a new file-touching name cannot quietly join it, and
+#: two meta-tests keep it honest — every key has to be a real public name, and
+#: every key has to be mentioned by the file it points at.
+TESTED_ELSEWHERE = {
+    "io::read_lines": "tests/test_io.py",
+    "io::write_lines": "tests/test_io.py",
+    "io::append_line": "tests/test_io.py",
+}
 
 
 def public_names() -> list[str]:
@@ -86,9 +98,25 @@ class SelfTestCoverageTests(unittest.TestCase):
 
     def test_the_program_names_every_public_function(self):
         source = PROGRAM.read_text(encoding="utf-8")
-        missing = [name for name in public_names() if name not in source]
+        missing = [name for name in public_names()
+                   if name not in source and name not in TESTED_ELSEWHERE]
         self.assertEqual(missing, [],
                          f"these public names have no test in {PROGRAM.name}: {missing}")
+
+    def test_every_name_tested_elsewhere_is_a_real_public_name(self):
+        """The exception list cannot outlive the names it excuses."""
+        real = set(public_names())
+        self.assertEqual(sorted(set(TESTED_ELSEWHERE) - real), [],
+                         "these names are excused from the self-test but do not exist")
+
+    def test_a_name_tested_elsewhere_is_mentioned_where_it_says(self):
+        """An exception is a pointer to a test, not a promise that one exists."""
+        for name, where in TESTED_ELSEWHERE.items():
+            with self.subTest(name=name):
+                path = ROOT / where
+                self.assertTrue(path.is_file(), f"{where} does not exist")
+                self.assertIn(name.split("::")[1], path.read_text(encoding="utf-8"),
+                              f"{where} never mentions {name}")
 
     def test_the_program_tests_every_module(self):
         source = PROGRAM.read_text(encoding="utf-8")
@@ -149,9 +177,11 @@ class SelfTestNegativeControlTests(unittest.TestCase):
         self.assertIn("  expected 8, got 7: abs of -7", result.stdout)
         self.assertIn("FAIL math::abs: 1 failed", result.stdout)
         self.assertIn("standard library: 1 failed", result.stdout)
-        # Every other test still passes: one failure does not stop the suite.
+        # Every other test still passes: one failure does not stop the suite,
+        # and the ones whose test lives elsewhere were never in this run.
         self.assertEqual(sum(1 for line in result.stdout.splitlines()
-                             if line.startswith("ok   ")), len(public_names()) - 1)
+                             if line.startswith("ok   ")),
+                         len(public_names()) - len(TESTED_ELSEWHERE) - 1)
 
     def test_a_failing_expectation_is_the_exit_status(self):
         entry = self.mutated(('test::expect_true(text::is_ascii("hello"), "ASCII is ASCII")',

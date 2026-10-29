@@ -52,7 +52,7 @@ moment the language has to express a compiler.
 The requirement list below is not a wish list: it is an audit of the 10 394 lines,
 14 modules and 328 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12d) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12e) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,37 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12e (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A line is defined once, and both halves agree | `nava_lang/stdlib/io.nv`, its examples, `tests/fixtures/positive/self_test.nv` | a line is the bytes between two `\n` bytes, so `count_lines(text)` is `1 + the number of '\n'`: the empty text is one empty line, `"one"` is one, `"one\ntwo\n"` is three. `lines_of` fills a vector with exactly that many lines, and the self-test asserts both sides of the same statement |
+| The pair round-trips, and the exception is named | `tests/test_io.py: RoundTripTests` | `write_lines` puts `\n` after every line and `read_lines` drops the empty field a final `\n` produces, so `["alpha", "beta", "gamma"]` comes back as written. A file that genuinely ends with an empty line (`"a\n\n"`) keeps it — only **one** field is dropped — and an empty file reads back as **one** empty line |
+| Every function says whether it has effects | `contracts.check_program`, `LANGUAGE.md` (`### io`), `docs/stdlib/io.md` (215 lines, 5 698 bytes) | three of the seven are `pure: yes` (`count_lines`, `first_line`, `join_lines`: same result for the same arguments, so a caller may call them twice) and four are `pure: no` with the reason in the text: `lines_of` writes its `mut` parameter, and the three file functions read or write a file |
+| The capability model is inherited, not widened | `CapabilityTests` (3 tests) | reading without a grant stops with `read_file denied: no permitted directory was configured`; a read grant does not allow `write_lines` (`write_file denied`); a write grant does not allow `read_lines`. The module is a caller of the model, and these three are the controls that would fail if it had become a way around it |
+| A missing file is a stopped program | `FailureTests` (2 tests), the module's documented `error:` line | `read_lines("no_such_file.txt", …)` stops with `cannot open 'no_such_file.txt': No such file or directory`, which is the text the contract promises and the guard executes; `append_line` inherits it, because it reads before it writes |
+| The example lane can now exercise a file | `tests/test_contracts.py`: `EXAMPLE_GRANTS`, `build_and_run(..., capabilities=…)` | examples and documented failures run with `{"read": ["."], "write": ["."]}` and with the harness's own temporary directory as the working directory, so `io`'s examples write a file and read it back instead of stopping at the capability check. That is a grant to the harness directory, not to the host |
+| **A test that belongs elsewhere is listed, not skipped** | `tests/test_self_test.py`: `TESTED_ELSEWHERE`, two meta-tests | `io::read_lines`, `io::write_lines` and `io::append_line` need a grant, and a grant is the caller's decision, so their tests live in `tests/test_io.py`. The list is explicit; one test fails if a name on it is not a real public name, and another fails if the file it points at never mentions it |
+| The library still tests itself | `tests/fixtures/positive/self_test.nv` | 25 bodies, four of them new (`io::count_lines`, `io::first_line`, `io::join_lines`, `io::lines_of`); the run prints 25 `ok` lines and `standard library: ok`, 518 bytes, recorded as the positive case, identical at `-O0`, `-O2` and `-O3` and on a second run |
+| **A defect the lanes caught, kept in the record** | `test_an_empty_array_writes_an_empty_file` | the first `read_lines` dropped the last empty field unconditionally, so an empty file read back as *zero* lines while `count_lines("")` said one — two functions of one module disagreeing about one sentence. The rule now tests the last **byte** (`\n`), not the last field, and both contracts state the invariant |
+| The lane that would have caught a missing export did | `ContractGuardTests: test_a_module_with_no_public_function_is_not_a_pass` | `io.nv` was written with plain `fn` first and the guard reported `io: exports no function` before a single example ran — the N12d lane doing the job it was added for |
+| The guide, the specification and the records moved with the code | `LANGUAGE.md` (`### io`, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the eight-function table, the line rule, the round trip and the capability note are normative; the guide lists the module and shows a program that reads a file, and is re-pinned at 29 836 bytes, 29 760 characters, 850 lines, sha256 `fda237fb…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 99 075 tokens (`cl100k_base`) and 99 482 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 98 439 / 98 846 tokens |
+| The audit is unchanged, and that is stated | `python3 tools/audit_compiler_needs.py` | 10 394 lines, 14 modules, 328 functions under `nava_lang/` — the same as N12d, because this increment added a standard-library module and test files, and the audit counts the compiler |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, `bash /tmp/ci-sim.sh` | registry `OK: 717 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **787 tests OK** (1 348 subtests); six packaged modules in the contract list; release checks OK; the guide digest verifies; the CI simulation passes |
+
+Negative controls: the three capability refusals, the two missing-file refusals,
+and `TESTED_ELSEWHERE` with its two meta-tests — the pattern the diagnostic codes
+already use, so that "tested somewhere else" is a pointer a guard can follow
+rather than a hole in a coverage check.
+
+Deliberately not done in N12e: `fs`, `args`, `collections`, `time`. `fs` is the
+next one and it is a different module rather than more of this one: `io` is about
+lines and the files they live in, `fs` about directories, sizes and existence —
+and the language has no `path_exists`, no `list_dir` and no `file_size` builtin
+yet, so `fs` starts with a decision about which of those the language should have
+rather than with a module that cannot ask the question.
 
 #### Delivery record N12d (2026-10-29)
 
@@ -932,7 +963,8 @@ self-testing facility.
 | N12b | **Contracts**: a doc block (`///`) as syntax, `nava_lang/contracts.py`, `nava doc` and the reference under `docs/stdlib/`; the guard that fails on an undocumented public name, an example that is false or does not compile, and a documented failure that does not happen | **Delivered** (record below) |
 | N12c | **Purity and self-testing**: `pure: yes`/`no` as a required contract field, with a guard that reads the body instead of believing the claim; the `test` module — assertions, a runner and a summary — written in Nava; a function value that carries its module (`test::passing`); and a standard library that tests itself and returns its own failure count as the exit status | **Delivered** (record below) |
 | N12d | **`fmt`**: `repeat`, `pad_left`, `pad_right`, `pad_center`, `clip`, `i64_aligned` and `f64_fixed` — a column width in bytes, the side to align to and a number of decimal places, over `i64`, `f64` and `str`, which is the audit's f-string row (519) closed with a module instead of a format language | **Delivered** (record below) |
-| N12e–N12x | the remaining `io`/`fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12e | **`io`**: lines of text — `count_lines`, `first_line`, `join_lines`, `lines_of` — and the files they come from: `read_lines`, `write_lines`, `append_line`, on the capability model N6 established, with the file half tested against grants and the text half in the self-test | **Delivered** (record below) |
+| N12f–N12x | the remaining `fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here

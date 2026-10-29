@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+N12e: **`io`**. Lines of text and the files they come from, on the capability
+model N6 established — and the first module whose public surface is tested in two
+places, with the second place named in a list rather than left implicit.
+
+- `io::count_lines`, `io::first_line`, `io::join_lines` are `pure: yes`;
+  `io::lines_of` (writes its `mut` parameter) and `io::read_lines`,
+  `io::write_lines`, `io::append_line` (touch a file) are `pure: no` with the
+  reason written down.
+- A line is the bytes between two `\n` bytes, so `count_lines("")` is 1 and
+  `count_lines("a\nb\n")` is 3. `write_lines` and `read_lines` round-trip: the
+  terminator a final `\n` leaves is dropped, a file that really ends with an
+  empty line keeps it, and an empty file reads back as one empty line.
+- The capability model is inherited, not widened: no grant is `read_file denied`,
+  a read grant cannot write, a write grant cannot read, and a missing file stops
+  the program with `cannot open '<path>': No such file or directory`.
+- The contract guard now runs examples with grants (`--allow-read .`,
+  `--allow-write .`) inside its own temporary directory, so a file example is
+  executed instead of merely compiled.
+- `tests/test_io.py` carries the twelve file-and-capability tests;
+  `tests/test_self_test.py` grows a `TESTED_ELSEWHERE` list with two meta-tests,
+  so a public name tested outside the self-test is a pointer a guard can follow.
+- One defect the lanes caught: `read_lines` dropped its last empty field
+  unconditionally, so an empty file read back as zero lines while
+  `count_lines("")` said one. The rule now looks at the last byte.
+
 N12d: **`fmt`**. Printing a table needs a column width, a side to align to and a
 number of decimal places; the audit's f-string row (519) is closed with a module
 instead of a format language.

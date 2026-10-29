@@ -1,0 +1,194 @@
+edition 2;
+
+# Nava standard library: lines of text, and the files they come from.
+# Version 1.
+#
+# The unit is a **line**: the bytes between two `\n` bytes.  That is what
+# `str_split` already produces, so `count_lines(t) == vec_len(lines_of(t))` and
+# the two agree about the awkward cases: an empty text is one empty line, and a
+# text that ends with `\n` has an empty last line.
+#
+# `write_lines` and `read_lines` are a pair, and their round trip is the point:
+# `write_lines` puts a `\n` after every line, `read_lines` drops the one empty
+# line that a final `\n` leaves behind, so
+#
+#     write_lines("t.txt", ["a", "b"])
+#     read_lines("t.txt", lines)          # lines is ["a", "b"]
+#
+# comes back the way it went in.  A line that contains a `\n` is not a line, and
+# neither function hides that: the text is what it is.
+#
+# Every function that touches a file is documented `pure: no`, and it is printed
+# in the contract rather than implied: a program that reads input or a file has
+# an effect, and the ordinary reason to check `pure:` is to know which functions
+# a caller may reorder, cache or run twice.
+#
+# File access is the capability model of `LANGUAGE.md`: the grants are decided
+# when the program is built (`--allow-read DIR`, `--allow-write DIR`) and a call
+# outside them stops the program.  A program that uses this module:
+#
+#     import io;
+#
+#     fn main() {
+#         let lines: Vec(str) = vec_new()
+#         io::read_lines("input.txt", lines)
+#         print(io::count_lines(io::join_lines(values)))   # ...
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `count_lines(text)` — how many lines the text has.
+///
+/// pre: none
+/// post: the result is `1 + the number of '\n' bytes`, which is the number of
+/// fields `str_split` would produce; the empty text is one empty line, and a text
+/// that ends with `\n` counts the empty line after it
+/// cost: O(bytes_len(text))
+/// pure: yes
+/// example: io::count_lines("") == 1
+/// example: io::count_lines("one") == 1
+/// example: io::count_lines("one\ntwo") == 2
+/// example: io::count_lines("one\ntwo\n") == 3
+pub fn count_lines(text: str) -> i64 {
+    let count = 1
+    let i = 0
+    while i < bytes_len(text) {
+        if byte_at(text, i) == 10 {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+/// `first_line(text)` — the text before the first `\n`.
+///
+/// pre: none
+/// post: the result is the prefix of `text` up to the first `\n`, or the whole
+/// text when there is none; `first_line("")` is `""`
+/// cost: O(bytes_len(first line))
+/// pure: yes
+/// example: io::first_line("one\ntwo") == "one"
+/// example: io::first_line("only") == "only"
+/// example: io::first_line("") == ""
+pub fn first_line(text: str) -> str {
+    let i = 0
+    while i < bytes_len(text) {
+        if byte_at(text, i) == 10 {
+            return str_slice(text, 0, i)
+        }
+        i = i + 1
+    }
+    return text
+}
+
+/// `join_lines(values)` — the lines written back into one text.
+///
+/// pre: none
+/// post: the elements of `values` with one `\n` between each pair and no `\n` at
+/// either end, so `join_lines(["a", "b"])` is `"a\nb"` and an empty array is `""`
+/// cost: O(total bytes)
+/// pure: yes
+/// example: io::join_lines([]) == ""
+/// example: io::join_lines(["a"]) == "a"
+/// example: io::join_lines(["a", "b"]) == "a\nb"
+pub fn join_lines(values: [str]) -> str {
+    let result = ""
+    let i = 0
+    while i < len(values) {
+        if i > 0 {
+            result = str_concat(result, "\n")
+        }
+        result = str_concat(result, values[i])
+        i = i + 1
+    }
+    return result
+}
+
+/// `lines_of(text, out)` — the lines of a text, appended to a vector.
+///
+/// pre: none
+/// post: every line of `text` is appended to `out` in order, and the number
+/// appended is `count_lines(text)`; what the vector already held is kept
+/// cost: O(bytes_len(text))
+/// pure: no
+/// example: let parts: Vec(str) = vec_new(); io::lines_of("a\nb", parts); vec_len(parts) == 2
+/// example: let one: Vec(str) = vec_new(); io::lines_of("", one); vec_len(one) == 1
+pub fn lines_of(text: str, out: mut Vec(str)) {
+    str_split(text, "\n", out)
+}
+
+/// `read_lines(path, out)` — the lines of a file, appended to a vector.
+///
+/// pre: `path` is inside a directory granted with `--allow-read`, and the file
+/// exists; either failure stops the program with the message below
+/// post: the lines of the file are appended to `out`, and the empty field a
+/// final `\n` produces is dropped — so a file written by `write_lines` reads back
+/// as the lines it was written from, and an empty file reads back as **one**
+/// empty line, exactly as `count_lines("")` says; the whole file is one text of
+/// at most 1048576 bytes, the limit `read_file` states
+/// cost: O(bytes_len(file))
+/// pure: no
+/// example: io::write_lines("round_trip.txt", ["a", "b"]); let lines: Vec(str) = vec_new(); io::read_lines("round_trip.txt", lines); vec_len(lines) == 2
+/// error: let lines: Vec(str) = vec_new(); io::read_lines("no_such_file.txt", lines) => cannot open 'no_such_file.txt': No such file or directory
+pub fn read_lines(path: str, out: mut Vec(str)) {
+    let text = read_file(path)
+    let parts: Vec(str) = vec_new()
+    str_split(text, "\n", parts)
+    let count = vec_len(parts)
+    let keep = count
+    # A final `\n` produces one empty field that is the terminator, not a line;
+    # an empty file produces one empty field that *is* its single empty line, so
+    # the test is the last byte, not the last field.
+    let last_byte = 0
+    if bytes_len(text) > 0 {
+        last_byte = byte_at(text, bytes_len(text) - 1)
+    }
+    if count > 0 && last_byte == 10 {
+        keep = count - 1
+    }
+    let i = 0
+    while i < keep {
+        vec_push(out, vec_get(parts, i))
+        i = i + 1
+    }
+}
+
+/// `write_lines(path, values)` — a file, one line per element.
+///
+/// pre: `path` is inside a directory granted with `--allow-write`; the whole text
+/// must stay under 1048576 bytes, the limit `write_file` states
+/// post: the file holds the lines in order, each followed by `\n`, so the file
+/// ends with a newline; an empty array writes an empty file, and the file is
+/// replaced rather than appended to
+/// cost: O(total bytes)
+/// pure: no
+/// example: io::write_lines("written.txt", ["a", "b"]); bytes_len(read_file("written.txt")) == 4
+/// example: io::write_lines("empty.txt", []); bytes_len(read_file("empty.txt")) == 0
+/// example: let kept: Vec(str) = vec_new(); io::write_lines("blank.txt", []); io::read_lines("blank.txt", kept); vec_len(kept) == 1
+pub fn write_lines(path: str, values: [str]) {
+    let text = join_lines(values)
+    if len(values) > 0 {
+        text = str_concat(text, "\n")
+    }
+    write_file(path, text)
+}
+
+/// `append_line(path, text)` — one more line at the end of an existing file.
+///
+/// pre: `path` is inside granted directories, the file exists and is readable
+/// **and** writable, and the result stays under 1048576 bytes
+/// post: the file holds what it held, then `text`, then `\n`; nothing is
+/// rewritten except the file itself, and the previous content is read back
+/// exactly as it was stored
+/// cost: O(size of the file) — the whole file is read and written again, because
+/// the language has no append mode
+/// pure: no
+/// example: io::write_lines("appended.txt", ["a"]); io::append_line("appended.txt", "b"); bytes_len(read_file("appended.txt")) == 4
+/// example: io::write_lines("tail.txt", []); io::append_line("tail.txt", "x"); read_file("tail.txt") == "x\n"
+pub fn append_line(path: str, text: str) {
+    let existing = read_file(path)
+    write_file(path, str_concat(str_concat(existing, text), "\n"))
+}

@@ -86,10 +86,34 @@ REGISTERED_TESTS = {
         "test_a_documented_failure_that_does_not_happen_is_reported",
         "test_a_documented_failure_with_the_wrong_message_is_reported",
     },
+    #: N12e: `io` is the first module whose public surface is tested in two
+    #: places — the resource-free half runs in the self-test, the file half needs
+    #: a grant and runs in `tests/test_io.py`, and `TESTED_ELSEWHERE` there is an
+    #: explicit list of names rather than a silent gap.
+    "RoundTripTests": {
+        "test_lines_come_back_as_they_went_in",
+        "test_the_file_ends_with_a_newline",
+        "test_an_empty_array_writes_an_empty_file",
+        "test_only_one_trailing_empty_line_is_dropped",
+        "test_lines_are_appended_to_what_the_vector_held",
+        "test_append_line_adds_one_line_at_the_end",
+        "test_append_line_starts_from_an_empty_file",
+    },
+    "CapabilityTests": {
+        "test_reading_without_a_grant_is_denied",
+        "test_a_read_grant_does_not_allow_writing",
+        "test_a_write_grant_does_not_allow_reading",
+    },
+    "FailureTests": {
+        "test_a_missing_file_is_reported",
+        "test_appending_to_a_missing_file_is_reported",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
         "test_the_library_has_public_names_to_test",
+        "test_every_name_tested_elsewhere_is_a_real_public_name",
+        "test_a_name_tested_elsewhere_is_mentioned_where_it_says",
     },
     "SelfTestRunTests": {
         "test_it_exits_zero_with_the_recorded_output",
@@ -1099,6 +1123,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_storage  # noqa: PLC0415
     import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
+    import test_io  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1107,6 +1132,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
+                   test_io,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1176,7 +1202,11 @@ def check_skip_state() -> list[str]:
     import test_storage  # noqa: PLC0415
     import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
-    for module, class_name in ((test_self_test, "SelfTestRunTests"),
+    import test_io  # noqa: PLC0415
+    for module, class_name in ((test_io, "RoundTripTests"),
+                               (test_io, "CapabilityTests"),
+                               (test_io, "FailureTests"),
+                               (test_self_test, "SelfTestRunTests"),
                                (test_self_test, "SelfTestNegativeControlTests"),
                                (test_contracts, "ContractGuardTests"),
                                (test_contracts, "ContractNegativeControlTests"),
