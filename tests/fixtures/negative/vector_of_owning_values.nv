@@ -1,0 +1,10 @@
+edition 2;
+
+struct Bag {
+    items: [i64],
+}
+
+fn main() {
+    let bags: Vec(Bag) = vec_new();
+    print(vec_len(bags))
+}

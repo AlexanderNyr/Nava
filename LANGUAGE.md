@@ -821,7 +821,7 @@ assignment, a field write, a `match` binding and a `return` — and is not elide
 
 A value that owns an array may not be an **array element** (`E0426`): an element
 is copied on every read and every write, so `[Bag]` would need those copies to be
-deep, which is the arena work of the next increment. A struct name is shared by
+deep, which is the arena work of N11d. A struct name is shared by
 every module of the program (`E0380` for a duplicate), and a struct may not
 contain itself directly or through another struct (`E0377`), because a struct is
 stored inline and a recursive type would have no finite size. A variant payload
@@ -1029,7 +1029,7 @@ an enum that owns nothing itself. `f64`, `void` and another array are refused
 (`E0206` for the shapes no symbol table could allow, `E0203` for a name that is
 not declared), and a struct or enum that holds an array is refused with `E0426`:
 an element is copied on every read and every write, so an owning element would
-need deep copies in the storage itself, which the arena work of N11c brings. An
+need deep copies in the storage itself, which the arena work of N11d brings. An
 enum is a value like a struct — its payload is stored inline — so `[Shape]` is
 an array of plain values and the array stays the single owner.
 
@@ -1099,6 +1099,111 @@ starting at `i`. A slice is not a copy and owns nothing.
 
 Bounds are evaluated left to right, like every other expression in Nava, so a
 program that prints inside the bounds sees the start printed before the end.
+
+### Vectors: `Vec(T)`
+
+An array has the length it was created with for the life of its block. A vector
+is the type for the other case: it starts empty, grows as the program pushes, and
+reports the length it has now.
+
+```text
+vector_type    = "Vec" "(" type_name ")" ;      # edition 2
+vector_call    = ( "vec_new" | "vec_len" | "vec_capacity" | "vec_push"
+                 | "vec_pop" | "vec_get" | "vec_set" ) "(" ... ")" ;
+```
+
+```nava
+edition 2;
+
+fn fill(xs: mut Vec(i64), n: i64) {
+    let i = 0
+    while i < n {
+        vec_push(xs, i * i)
+        i = i + 1
+    }
+}
+
+fn total(xs: Vec(i64)) -> i64 {
+    let sum = 0
+    for x in xs { sum = sum + x }
+    return sum
+}
+
+fn main() {
+    let xs: Vec(i64) = vec_new()
+    fill(xs, 5)
+    print(vec_len(xs))
+    print(vec_capacity(xs))
+    print(total(xs))
+    vec_set(xs, 0, 100)
+    print(vec_get(xs, 0))
+    match vec_pop(xs) {
+        Option(i64)::Some(last) => { print(last) }
+        Option(i64)::None => { print(-1) }
+    }
+}
+```
+
+The seven builtins are the whole interface:
+
+| Call | Type | Meaning |
+|---|---|---|
+| `vec_new()` | `Vec(T)` | creates an empty vector; `T` comes from the annotation |
+| `vec_len(v)` | `i64` | how many elements it holds now |
+| `vec_capacity(v)` | `i64` | how many it can hold before the next growth |
+| `vec_push(v, x)` | `void` | appends one element, growing if needed |
+| `vec_pop(v)` | `Option(T)` | removes and returns the last element, or `None` |
+| `vec_get(v, i)` | `T` | reads element `i`, checked |
+| `vec_set(v, i, x)` | `void` | writes element `i`, checked |
+
+The example prints `5`, `8`, `30`, `100`, `16`: five elements, room for eight,
+their squares summed, the replaced first element, and the popped last one.
+
+What the type is, and what it is not:
+
+* `Vec(T)` is a **builtin type**, not a generic declaration. The element type is
+  written out — `i64`, `bool`, `str`, `f64`, or a struct or enum type — and a
+  name that declares nothing is `E0203`. An element may not own storage
+  (`E0427`): a vector copies elements on every push and every read, and a
+  shrinking vector would have to release elements it never copied, so an owning
+  element waits for the arena work of N11d, exactly as an owning array element
+  does.
+* the block that writes the `let` owns the vector and releases it when the block
+  ends, including on an early `return`. A vector cannot be **copied** (`E0428`:
+  two holders would free one buffer), **reassigned** (`E0428`), **returned**
+  (`E0428`) or stored in a field or a payload (`E0428`).
+* `vec_new()` needs the annotation (`E0429`): an empty vector says nothing about
+  what it holds, and there is no second guess.
+* one handle, shared by borrowing: a `Vec(T)` parameter reads the vector, a
+  `mut Vec(T)` parameter may grow it, and the caller sees the new length —
+  growth replaces the **buffer inside the handle**, never the handle itself.
+  Every mutating builtin therefore needs a writable target: a local or a
+  `mut Vec(T)` parameter (`E0444`). A `mut Vec(T)` **argument** follows the array
+  rule: it must be a vector created in the calling function, not a borrow
+  (`E0333`), and one vector cannot be passed to two mutable parameters of the
+  same call (`E0342`).
+* growth doubles. Capacity starts at four and each reservation takes the
+  smallest power of two that fits, so `N` pushes copy fewer than `2N` elements in
+  total — amortised constant time per push — and `vec_capacity` reports the
+  slack the program is paying for.
+* indices are checked against the **current** length, and an out-of-range
+  `vec_get` or `vec_set` ends the program like an array index does. `vec_pop` on
+  an empty vector is not an error: it returns `Option(T)::None`, which is why its
+  type is `Option(T)` and not `T`.
+* `for x in v` reads the length once, before the first turn, like every other
+  iterable, and binds the **element** type; the loop variable is read-only
+  (`E0351`). A vector grown inside the loop body therefore does not extend the
+  loop it is growing in.
+* there is no `vec_insert`, no `vec_remove` and no shrink: a vector grows at the
+  end and pops from the end, and its capacity is released only when the vector
+  is. Sorting or filtering is a loop over two vectors.
+* a vector is not an array for the purposes of the index operator: `v[i]` is
+  `E0329` and `v[0..1]` is `E0421`. A vector index is a call — `vec_get` or
+  `vec_set` — so the check is part of the language rather than of an operator.
+* `print` does not take a vector (`E0323`); print `vec_len(v)` or the elements.
+* the seven names are **reserved** (`E0301`): `fn vec_new()` or `let vec_len = 1`
+  is refused, because the builtin is resolved before any declaration and a
+  program that shadowed it would be writing dead code.
 
 ### `defer`, labelled loops and `pub`
 
@@ -1434,6 +1539,9 @@ never changes meaning; a new condition gets a new code.
 | `E0423` | error | a slice cannot be a `mut` argument | `tests/fixtures/negative/slice_mut_argument.nv` |
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
 | `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
+| `E0427` | error | a vector element cannot own storage | `tests/fixtures/negative/vector_of_owning_values.nv` |
+| `E0428` | error | a vector cannot be copied, returned or stored | `tests/fixtures/negative/vector_copied.nv` |
+| `E0429` | error | `vec_new` needs an annotated element type | `tests/fixtures/negative/vector_new_without_element_type.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
 | `E0432` | error | a label must name the loop it is written on | `tests/fixtures/negative/label_not_a_loop.nv` |
@@ -1447,6 +1555,7 @@ never changes meaning; a new condition gets a new code.
 | `E0441` | error | a call cannot go through a field | `tests/fixtures/negative/call_through_field.nv` |
 | `E0442` | error | function values cannot be compared | `tests/fixtures/negative/compare_function_values.nv` |
 | `E0443` | error | a function type has no mutable parameter | `tests/fixtures/negative/mutable_in_function_type.nv` |
+| `E0444` | error | a mutating vector call needs a writable target | `tests/fixtures/negative/vector_mutated_through_a_borrow.nv` |
 
 **Types and semantics**
 

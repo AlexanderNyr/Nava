@@ -10,7 +10,7 @@ from .model import (
     Index, IndexAssign, Let, Match, Member, MemberAssign, Number, Param, Program,
     Range, Return, Slice, String, Struct, StructLiteral, Symbol, Try, Unary,
     Variable, Variant, VariantValue, While, function_signature, function_type_parts,
-    is_function_type,
+    is_function_type, is_vec, vec_element,
 )
 
 #: Name of the entry module: its functions need no qualification.
@@ -18,9 +18,15 @@ ENTRY_MODULE = ""
 BUILTINS = {
     "print", "read_i64", "read_f64", "len", "array_zeros", "to_f64", "to_i64",
     "bytes_len", "chars_len", "byte_at", "read_file", "write_file",
+    # The whole vector interface, including the constructor: `vec_new` is
+    # resolved like the rest, so a declaration of that name would be dead code.
+    "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
 }
 #: Types a value can have (everything except `void`).
 VALUE_TYPES = {"i64", "bool", "str", "f64"}
+#: Built-in vector operations. They are resolved before user functions, like
+#: `print` and `len`: a program cannot redefine them.
+VEC_BUILTINS = {"vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set"}
 #: Types `print` accepts: every value type.
 PRINTABLE_TYPES = VALUE_TYPES
 #: Types that support the checked-or-IEEE arithmetic operators.
@@ -223,6 +229,15 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
+            if is_vec(function.returns):
+                raise make(
+                    "E0428",
+                    f"function {function.name!r} cannot return a vector",
+                    function.loc,
+                    function.loc.advance("fn " + function.name),
+                    "a vector has exactly one owner; take `mut Vec(T)` and fill it, "
+                    "the same way an array is written through `mut [T]`",
+                )
             for param in function.params:
                 if self.is_template(param.typ):
                     raise make(
@@ -234,22 +249,29 @@ class Checker:
                 if is_function_type(param.typ):
                     self.check_function_type(param.typ, param.loc)
                 if param.typ not in VALUE_TYPES and not is_array(param.typ) \
+                        and not is_vec(param.typ) \
                         and not self.is_struct(param.typ) and not self.is_enum(param.typ) \
                         and not is_function_type(param.typ):
                     raise make("E0305", "function parameters cannot have type void", param.loc,
                                param.loc.advance(param.name))
-                if param.mutable and not is_array(param.typ):
+                if param.mutable and not is_array(param.typ) and not is_vec(param.typ):
                     raise make(
                         "E0341",
-                        f"'mut' is only allowed on an array parameter, not on {param.typ}",
+                        f"'mut' is only allowed on an array or vector parameter, "
+                        f"not on {param.typ}",
                         param.loc, param.loc.advance("mut " + param.name),
                         "scalar parameters are already mutable locals inside the function",
                     )
+                if is_vec(param.typ):
+                    self.validate_vec(param.typ, param.loc)
                 param.symbol = self.declare(param.name, param.typ, param.loc)
                 if is_array(param.typ):
                     self.check_element_type(param.typ, param.loc)
+                if is_array(param.typ) or is_vec(param.typ):
                     # A parameter is a borrow: it owns no storage and its
-                    # lifetime is the call, which no Nava program can extend.
+                    # lifetime is the call, which no Nava program can extend. A
+                    # vector parameter is a pointer, so a `mut` one can grow the
+                    # caller's vector; a plain one cannot write to it.
                     param.symbol.owned = False
                     param.symbol.mutable = bool(param.mutable)
             self.check_statements(function.body, new_scope=False)
@@ -290,6 +312,14 @@ class Checker:
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
+            if is_vec(item.typ):
+                raise make(
+                    "E0428",
+                    f"a field of {struct.name} cannot be a vector yet",
+                    item.loc, item.loc.advance(item.name),
+                    "a field is copied with its value, and a vector has exactly one "
+                    "owner; a vector field arrives with the move work of N11d",
+                )
             if is_array(item.typ):
                 self.check_element_type(item.typ, item.loc)
                 continue
@@ -448,6 +478,14 @@ class Checker:
         """
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
+            if is_vec(item):
+                raise make(
+                    "E0428",
+                    f"a payload of {enum_name}::{variant.name} cannot be a vector yet",
+                    *span,
+                    hint="a payload is copied with its value, and a vector has exactly "
+                         "one owner; a vector payload arrives with the move work of N11d",
+                )
             if is_array(item):
                 self.check_element_type(item, variant.loc)
                 continue
@@ -922,6 +960,101 @@ class Checker:
                        for choice in decl.variants for item in choice.types)
         return False
 
+    def validate_vec(self, typ: str, loc) -> str:
+        """The element type of `Vec(T)`, and the reason a vector owns storage.
+
+        A vector may hold the same values an array may hold, and for the same
+        reason: an element is copied on every read and every write, so an element
+        that owned storage of its own would need those copies to be deep.
+        """
+        element = vec_element(typ)
+        if is_vec(element) or self.owns_storage(element):
+            raise make(
+                "E0427",
+                f"a vector element cannot own storage, but {element} holds an array",
+                loc,
+                hint="an element is copied on every push and every read; a vector of "
+                     "owning values waits for the arena work (N11d)",
+            )
+        if element in VALUE_TYPES or self.is_struct(element) or self.is_enum(element):
+            return element
+        raise make(
+            "E0203",
+            f"unknown type {element!r}; use i64, bool, str, f64, a declared struct "
+            f"or enum",
+            loc,
+        )
+
+    def vec_target(self, expr: Call, name: str, mutating: bool) -> str:
+        """Check argument 1 of a vector builtin and return the element type."""
+        argument = expr.args[0]
+        typ = self.expression(argument)
+        if not is_vec(typ):
+            raise make("E0327", f"argument 1 of {name} expects a Vec, got {typ}",
+                       argument.loc)
+        element = self.validate_vec(typ, argument.loc)
+        if mutating and (not isinstance(argument, Variable)
+                         or not (argument.symbol.owned or argument.symbol.mutable)):
+            raise make(
+                "E0444",
+                f"argument 1 of {name} changes the vector, so it must be a writable "
+                f"local or a `mut Vec(T)` parameter",
+                argument.loc,
+                hint="take the vector as `mut Vec(i64)` to change it, and pass a "
+                     "vector declared in this function",
+            )
+        return element
+
+    def vec_builtin(self, expr: Call, expected: str | None) -> str | None:
+        """`vec_new`, `vec_len`, `vec_capacity`, `vec_push`, `vec_pop`,
+        `vec_get`, `vec_set`: the whole growing-array interface.
+
+        A vector is created empty and typed by its annotation — `let v: Vec(i64) =
+        vec_new()` — because there is no other place to write the element type.
+        Growth is amortised: `vec_capacity` reports the buffer the vector has, and
+        a test can watch it double.
+        """
+        name = expr.name
+        arity = {"vec_len": 1, "vec_capacity": 1, "vec_pop": 1, "vec_push": 2,
+                 "vec_get": 2, "vec_set": 3}
+        if name == "vec_new":
+            if expr.args:
+                raise make("E0326", "vec_new takes no arguments", expr.loc)
+            if not is_vec(expected):
+                raise make(
+                    "E0429",
+                    "vec_new needs to know the element type",
+                    expr.loc, expr.loc.advance(name),
+                    hint="write the annotation, as in `let v: Vec(i64) = vec_new()`",
+                )
+            self.validate_vec(expected, expr.loc)
+            return expected
+        if len(expr.args) != arity[name]:
+            plural = "s" if arity[name] != 1 else ""
+            raise make("E0326", f"{name} expects {arity[name]} argument{plural}, "
+                                f"got {len(expr.args)}", expr.loc)
+        element = self.vec_target(expr, name, mutating=name in ("vec_push", "vec_pop",
+                                                               "vec_set"))
+        if name in ("vec_len", "vec_capacity"):
+            return "i64"
+        if name == "vec_pop":
+            typ = f"Option({element})"
+            self.instantiate(typ)
+            return typ
+        if name in ("vec_get", "vec_set"):
+            index_type = self.expression(expr.args[1])
+            if index_type != "i64":
+                raise make("E0328", f"a vector index must be i64, got {index_type}",
+                           expr.args[1].loc,
+                           hint="integers are not converted; use i64 arithmetic")
+        if name == "vec_get":
+            return element
+        value_type = self.expression(expr.args[-1])
+        if value_type != element:
+            raise make("E0327", f"argument {len(expr.args)} of {name} expects "
+                                f"{element}, got {value_type}", expr.args[-1].loc)
+        return "void"
+
     def check_element_type(self, typ: str, loc, end=None) -> None:
         """An array element is a value with no owner: a scalar, a struct or an enum.
 
@@ -938,7 +1071,7 @@ class Checker:
                 f"an array element cannot own storage, but {element} holds an array",
                 *((loc,) if end is None else (loc, end)),
                 hint="an element is copied on every read and every write; making those "
-                     "copies deep is the arena work (N11c), so an array of owning "
+                     "copies deep is the arena work of N11d, so an array of owning "
                      "values is refused rather than shared",
             )
         if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
@@ -1389,7 +1522,9 @@ class Checker:
                 # annotation is checked against that type and never drives it.
                 typ = self.propagate(statement)
             else:
-                expected = statement.annotation if is_array(statement.annotation) else None
+                annotation = statement.annotation
+                expected = (annotation if is_array(annotation) or is_vec(annotation)
+                            else None)
                 typ = self.expression(statement.value, expected=expected)
             if typ == "void":
                 raise make("E0309", "a variable cannot contain a void value", name_loc,
@@ -1410,6 +1545,20 @@ class Checker:
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
             self.check_element_type(typ, name_loc, name_loc.advance(statement.name))
+            if is_vec(typ):
+                self.validate_vec(typ, name_loc)
+                create = (isinstance(statement.value, Call)
+                          and statement.value.module is None
+                          and statement.value.name == "vec_new")
+                if not create:
+                    raise make(
+                        "E0428",
+                        f"a vector cannot be copied: {statement.name!r} would share "
+                        f"one buffer with another vector",
+                        name_loc, name_loc.advance(statement.name),
+                        hint="create it with `let v: Vec(i64) = vec_new()` and fill it "
+                             "with vec_push",
+                    )
             borrowed = isinstance(statement.value, Slice)
             if is_array(typ) and not owns_new_array(statement.value) and not borrowed:
                 raise make(
@@ -1482,6 +1631,15 @@ class Checker:
                     statement.loc, statement.loc.advance(statement.name),
                     "an array owns its storage for the life of its block; "
                     "write elements with a[i] = value",
+                )
+            if is_vec(statement.symbol.typ):
+                raise make(
+                    "E0428",
+                    f"a vector cannot be reassigned ({statement.name!r} is "
+                    f"{statement.symbol.typ})",
+                    statement.loc, statement.loc.advance(statement.name),
+                    "a vector owns its buffer for the life of its block; change it "
+                    "with vec_push, vec_pop and vec_set",
                 )
             typ = self.expression(statement.value)
             if typ != statement.symbol.typ:
@@ -1630,6 +1788,22 @@ class Checker:
             element = "i64"
         else:
             iterable_type = self.expression(iterable)
+            if is_vec(iterable_type):
+                if not isinstance(iterable, Variable):
+                    raise make("E0350", "a for loop iterates over a vector by name",
+                               iterable.loc,
+                               hint="bind it first, as in `let v = ...`, or iterate "
+                                    "an array the same way")
+                element = self.validate_vec(iterable_type, iterable.loc)
+                name_loc = statement.name_loc or statement.loc
+                self.scopes.append({})
+                try:
+                    statement.symbol = self.declare(statement.name, element, name_loc)
+                    statement.symbol.readonly = True
+                    self.check_statements(statement.body, new_scope=False)
+                finally:
+                    self.scopes.pop()
+                return
             if not is_array(iterable_type):
                 raise make(
                     "E0350",
@@ -1933,6 +2107,8 @@ class Checker:
                 raise make("E0327", f"argument 2 of write_file expects str, got {text_type}",
                            expr.args[1].loc)
             return "void"
+        if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_BUILTINS):
+            return self.vec_builtin(expr, expected)
         function = self.resolve(expr)
         if len(expr.args) != len(function.params):
             plural = "" if len(function.params) == 1 else "s"
@@ -2037,11 +2213,12 @@ class Checker:
                 raise make("E0327",
                            f"argument {index} of {expr.name} expects {param.typ}, got {real}",
                            arg.loc)
-            if not is_array(param.typ) or not param.mutable:
+            if not param.mutable or not (is_array(param.typ) or is_vec(param.typ)):
                 continue
+            vector = is_vec(param.typ)
             # A mutable borrow must be exclusive and must come from an owner:
             # a borrow of a borrow could alias another live mutable view.
-            if isinstance(arg, Variable) and arg.symbol.borrowed:
+            if not vector and isinstance(arg, Variable) and arg.symbol.borrowed:
                 raise make(
                     "E0423",
                     f"argument {index} of {expr.name} is `mut {param.typ}`, but {arg.name!r} "
@@ -2050,6 +2227,15 @@ class Checker:
                     hint="pass the array that owns the storage",
                 )
             if not isinstance(arg, Variable) or not arg.symbol.owned:
+                if vector:
+                    raise make(
+                        "E0333",
+                        f"argument {index} of {expr.name} is `mut {param.typ}`, so it must "
+                        f"be a vector created in this function, not a borrow",
+                        arg.loc,
+                        hint="growth is only allowed on a vector created in this "
+                             "function",
+                    )
                 raise make(
                     "E0333",
                     f"argument {index} of {expr.name} is `mut {param.typ}`, so it must be an "
@@ -2063,7 +2249,9 @@ class Checker:
                     f"{arg.name!r} is passed to two mutable parameters of {expr.name} "
                     f"(arguments {borrowed[arg.name]} and {index})",
                     arg.loc,
-                    hint="a mutable borrow must be exclusive: copy into a second array first",
+                    hint="a mutable borrow must be exclusive: copy into a second array first"
+                    if not vector else
+                    "a mutable borrow must be exclusive: use a second vector first",
                 )
             borrowed[arg.name] = index
 

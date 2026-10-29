@@ -8,6 +8,7 @@ from .model import (
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
     MemberAssign, Number, Program, Range, Return, Slice, String, StructLiteral, Try,
     Unary, Variable, VariantValue, While, function_type_parts, is_function_type,
+    is_vec, vec_element,
 )
 
 # The runtime uses checked signed 64-bit arithmetic. GCC/Clang builtins make
@@ -639,9 +640,16 @@ def array_tag(typ: str) -> str:
 #: C type of the compound literal that carries an array literal's items.
 ARRAY_LITERAL = {"[i64]": "const int64_t", "[bool]": "const bool",
                  "[str]": "const char *const"}
+#: Built-in vector operations; the checker resolves them before user functions.
+VEC_CALLS = {"vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set"}
 #: Element type an array literal is copied from; a struct array reuses the struct
 #: C type, because `memcpy` of a value type is exactly a copy.
 ARITHMETIC = {"+": "nv_add", "-": "nv_sub", "*": "nv_mul", "/": "nv_div", "%": "nv_rem"}
+
+
+def vec_tag(typ: str) -> str:
+    """`Vec(Point)` -> `Point`: the suffix of the generated vector helpers."""
+    return array_tag(f"[{vec_element(typ)}]")
 
 
 def is_array(typ: object) -> bool:
@@ -752,6 +760,10 @@ class CGenerator:
         """The C type of a Nava type: a scalar, an array handle or a struct."""
         if typ in C_TYPES:
             return C_TYPES[typ]
+        if is_vec(typ):
+            # A vector value is a pointer to its handle: growth may replace the
+            # buffer, so every holder must see the same handle, not a copy of it.
+            return f"nv_vec_{vec_tag(typ)} *"
         if typ.startswith("[") and typ.endswith("]"):
             return f"nv_arr_{array_tag(typ)}"
         pointer = self.fnptr.get(typ)
@@ -789,6 +801,10 @@ class CGenerator:
         declaration that contains itself (`E0376`).
         """
         if typ is None:
+            return False
+        if is_vec(typ):
+            # A vector is never copied into another value: it is created in a
+            # block, borrowed by a parameter, and released by its owner.
             return False
         if is_array(typ):
             return True
@@ -840,6 +856,8 @@ class CGenerator:
 
     def release_statement(self, typ: str, place: str) -> str:
         """The C statement that frees the storage a value at `place` owns."""
+        if is_vec(typ):
+            return f"nv_vec_{vec_tag(typ)}_free(&{place});"
         if is_array(typ):
             return f"nv_arr_{array_tag(typ)}_free(&{place});"
         if self.owns_storage(typ):
@@ -974,6 +992,117 @@ class CGenerator:
         self.line("} _payload;")
         self.indent -= 1
         self.line(f"}} {decl.cname};")
+
+    def vector_types(self) -> list[str]:
+        """Every `Vec(T)` the checked program mentions, in discovery order."""
+        found: list[str] = []
+
+        def note(value, depth=0) -> None:
+            if is_vec(value):
+                if value not in found:
+                    found.append(value)
+                return
+            if depth > 40 or isinstance(value, str):
+                return
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    note(item, depth + 1)
+                return
+            fields = getattr(value, "__dict__", None)
+            if fields is None:
+                return
+            for item in list(fields.values()):
+                note(item, depth + 1)
+
+        note(self.program.functions)
+        note(list(self.program.structs) + list(self.program.enums))
+        return found
+
+    def emit_vectors(self) -> None:
+        """One handle type and one set of operations per element type.
+
+        A vector owns a buffer and a capacity, and growth replaces the buffer:
+        `push` doubles the capacity, copying the elements across, so a run of
+        pushes costs amortised constant time per element. `pop` returns the
+        element it removed as `Option(T)`, which is the prelude enum the checker
+        instantiated for that very call.
+        """
+        types = self.vector_types()
+        if not types:
+            return
+        self.line("/* --- growing vectors ------------------------------------------------- */")
+        for typ in types:
+            tag = vec_tag(typ)
+            element = self.ctype(vec_element(typ))
+            name = f"nv_vec_{tag}"
+            self.line(f"typedef struct {name} {{ {element} *data; int64_t len; "
+                      f"int64_t cap; }} {name};")
+            self.line()
+            self.line(f"static {name} *{name}_new(void) {{")
+            self.indent += 1
+            self.line(f"{name} *vector = ({name} *)calloc(1, sizeof({name}));")
+            self.line('if (vector == NULL) nv_fail("out of memory");')
+            self.line("return vector;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static void {name}_free({name} **slot) {{")
+            self.indent += 1
+            self.line(f"{name} *vector = *slot;")
+            self.line("if (vector == NULL) return;")
+            self.line("if (vector->data != NULL) { free(vector->data); "
+                      "nv_note_array_free(); }")
+            self.line("free(vector);")
+            self.line("*slot = NULL;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static void {name}_reserve({name} *vector, int64_t needed) {{")
+            self.indent += 1
+            self.line("if (needed <= vector->cap) return;")
+            self.line("int64_t capacity = vector->cap > 0 ? vector->cap : INT64_C(4);")
+            self.line("while (capacity < needed) capacity = nv_mul(capacity, INT64_C(2));")
+            self.line(f"{element} *data = ({element} *)nv_array_alloc(capacity, "
+                      f"sizeof({element}));")
+            self.line("if (vector->len > 0) memcpy(data, vector->data, "
+                      "(size_t)vector->len * sizeof(" + element + "));")
+            self.line("if (vector->data != NULL) { free(vector->data); "
+                      "nv_note_array_free(); }")
+            self.line("vector->data = data;")
+            self.line("vector->cap = capacity;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static void {name}_push({name} *vector, {element} value) {{")
+            self.indent += 1
+            self.line(f"{name}_reserve(vector, nv_add(vector->len, INT64_C(1)));")
+            self.line("vector->data[vector->len] = value;")
+            self.line("vector->len = nv_add(vector->len, INT64_C(1));")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static {element} {name}_get({name} *vector, int64_t index) {{")
+            self.indent += 1
+            self.line("return vector->data[nv_check_index(index, vector->len)];")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static void {name}_set({name} *vector, int64_t index, "
+                      f"{element} value) {{")
+            self.indent += 1
+            self.line("vector->data[nv_check_index(index, vector->len)] = value;")
+            self.indent -= 1
+            self.line("}")
+            option = self.program.instances.get(f"Option({vec_element(typ)})")
+            if option is not None:
+                some, none = option.variants[0], option.variants[1]
+                option_c = self.ctype(f"Option({vec_element(typ)})")
+                self.line(f"static {option_c} {name}_pop({name} *vector) {{")
+                self.indent += 1
+                self.line(f"if (vector->len == 0) return ({option_c}){{ ._tag = "
+                          f"{none.tag} }};")
+                self.line("vector->len = nv_sub(vector->len, INT64_C(1));")
+                self.line(f"return ({option_c}){{ ._tag = {some.tag}, ._payload = {{ "
+                          f"._v_{some.name} = {{ ._f0 = "
+                          f"vector->data[vector->len] }} }} }};")
+                self.indent -= 1
+                self.line("}")
+            self.line()
 
     def array_types(self) -> list[str]:
         """Every array type the checked program mentions, in discovery order.
@@ -1182,6 +1311,7 @@ class CGenerator:
         self.emit_structs()
         self.emit_arrays()
         self.emit_value_helpers()
+        self.emit_vectors()
         # A template function has no C type until a call fixes its parameters, so
         # only the instantiations the checker built are emitted.
         concrete = [function for function in self.program.functions if not function.type_params]
@@ -1356,6 +1486,7 @@ class CGenerator:
                 typ = statement.symbol.typ
                 borrowed = statement.symbol.borrowed
                 owns_array = is_array(typ) and not borrowed
+                owns_vec = is_vec(typ)
                 # A struct or an enum that holds an array owns that array too, so
                 # the binding is an owner and gets its own copy.
                 owns_value = self.owns_storage(typ) and not is_array(typ) and not borrowed
@@ -1366,7 +1497,7 @@ class CGenerator:
                 else:
                     value = self.expression(statement.value)
                 self.line(f"{self.ctype(typ)} {statement.symbol.cname} = {value};")
-                if owns_array or owns_value:
+                if owns_array or owns_value or owns_vec:
                     self.owned[-1].append((statement.symbol.cname, typ))
             elif isinstance(statement, IndexAssign):
                 # The index is checked before the value is evaluated, so a failed
@@ -1524,6 +1655,21 @@ class CGenerator:
                     self.line("}")
                 else:
                     self.labelled_range_loop(statement, symbol, high_name)
+            elif is_vec(iterable.typ):
+                # A vector is already a handle, so the loop reads it directly and
+                # sees every element that existed when the loop began.
+                source = self.expression(iterable)
+                tag = vec_tag(iterable.typ)
+                end_name = self.temp("i64", f"({source})->len")
+                index_name = self.temp("i64", "INT64_C(0)")
+                self.line(f"for (; {index_name} < {end_name}; "
+                          f"{index_name} = nv_add({index_name}, INT64_C(1))) {{")
+                self.indent += 1
+                self.line(f"{self.ctype(symbol.typ)} {symbol.cname} = "
+                          f"nv_vec_{tag}_get({source}, {index_name});")
+                self.loop_body(statement.body)
+                self.indent -= 1
+                self.line("}")
             else:
                 # The iterable is materialised once: a slice in the header must
                 # not be rebuilt (and its bounds re-evaluated) on every turn.
@@ -1588,6 +1734,41 @@ class CGenerator:
         self.indent -= 1
         self.line("}")
         self.line(f"{record['break']}: ;")
+
+    def vector_call(self, expr: Call) -> str | None:
+        """The built-in vector operations, one C helper each.
+
+        Every index is checked before the buffer is touched, and the arguments
+        are evaluated left to right — the vector first, then the index, then the
+        value — which is the order the checker documented.
+        """
+        name = expr.name
+        if name == "vec_new":
+            return f"nv_vec_{vec_tag(expr.typ)}_new()"
+        vector = self.expression(expr.args[0])
+        tag = vec_tag(expr.args[0].typ)
+        if name == "vec_len":
+            return self.temp("i64", f"({vector})->len")
+        if name == "vec_capacity":
+            return self.temp("i64", f"({vector})->cap")
+        if name == "vec_get":
+            index = self.expression(expr.args[1])
+            return self.temp(expr.typ, f"nv_vec_{tag}_get({vector}, {index})")
+        if name == "vec_set":
+            # The index is checked before the value is evaluated, so a failed
+            # write has no observable side effect — the rule an array write
+            # follows. The helper checks again, which costs a comparison.
+            index = self.expression(expr.args[1])
+            checked = self.temp("i64", f"nv_check_index({index}, ({vector})->len)")
+            value = self.expression(expr.args[2])
+            self.line(f"nv_vec_{tag}_set({vector}, {checked}, {value});")
+            return None
+        if name == "vec_push":
+            value = self.expression(expr.args[1])
+            self.line(f"nv_vec_{tag}_push({vector}, {value});")
+            return None
+        assert name == "vec_pop", f"unknown vector builtin {name!r}"
+        return self.temp(expr.typ, f"nv_vec_{tag}_pop({vector})")
 
     def propagate_let(self, statement: Let) -> None:
         """`let x = call()?`: test the failure tag, return it, bind the payload.
@@ -1793,6 +1974,8 @@ class CGenerator:
                 name = self.temp("[i64]", f"nv_arr_i64_new({args[0]})")
                 self.temporaries.append((name, "[i64]"))
                 return name
+            if expr.module is None and (expr.name == "vec_new" or expr.name in VEC_CALLS):
+                return self.vector_call(expr)
             # A call through a variable dispatches on the pointer it holds.
             callee = expr.callee.cname if expr.callee is not None else expr.target.cname
             call = f"{callee}({', '.join(args)})"

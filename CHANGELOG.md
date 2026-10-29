@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+N11c: `Vec(T)`, the growing vector.
+
+- `Vec(T)` is a builtin type, not a generic declaration: `let xs: Vec(i64) =
+  vec_new()` creates an empty vector and the block that writes the `let` releases
+  it, including on an early `return`. `T` is `i64`, `bool`, `str`, `f64`, or a
+  struct or enum that owns nothing; an owning element is `E0427`, for the reason
+  an owning array element is `E0426`.
+- The whole interface is seven builtins: `vec_new`, `vec_len`, `vec_capacity`,
+  `vec_push`, `vec_pop` (which returns `Option(T)::None` on an empty vector),
+  `vec_get` and `vec_set`, the last two with checked indices that stop the
+  program like an array index does.
+- Capacity doubles from four, so `N` pushes copy fewer than `2N` elements in
+  total and `vec_capacity` reports the slack; a vector cannot be copied,
+  reassigned, returned or stored in a field or a payload (`E0428`), and
+  `vec_new()` without an annotation is `E0429`.
+- Growth replaces the buffer inside the handle, never the handle itself, so a
+  `mut Vec(T)` parameter grows the caller's vector and the caller sees the new
+  length. Every mutating call therefore needs a writable target — a local or a
+  `mut Vec(T)` parameter (`E0444`).
+- `for x in v` reads the length once, before the first turn, and binds the
+  element type; the loop variable is read-only like every other loop variable.
+- `tests/test_vec.py` covers the interface, the growth arithmetic, the drain, the
+  element kinds, the four refusals and the out-of-range stop, with the
+  live-array counter at zero on every run and one program clean under
+  AddressSanitizer and UndefinedBehaviorSanitizer.
+
 N11b: fields and payloads that own array storage.
 
 - A struct field and a variant payload may now be an array. The value owns that
@@ -15,7 +41,7 @@ N11b: fields and payloads that own array storage.
   `b.items = [...]` all work: an array field is an array in every position.
 - A value that owns an array may not be an **array element** (`E0426`). An
   element is copied on every read and every write, so an owning element needs
-  deep copies inside the storage itself — the arena work of N11c. The retired
+  deep copies inside the storage itself — the arena work of N11d. The retired
   `E0378` and `E0399` go with the walls they carried.
 - `tests/test_ownership.py` checks the copy rule through observable values and
   the release rule through the runtime's live-array counter: seven runtime

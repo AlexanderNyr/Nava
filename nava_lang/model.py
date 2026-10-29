@@ -186,6 +186,17 @@ class Range(Expr):
 
 
 FUNCTION_TYPE = "fn("
+VECTOR_TYPE = "Vec("
+
+
+def is_vec(typ: object) -> bool:
+    """`Vec(i64)` is a growing array that owns one buffer and a capacity."""
+    return isinstance(typ, str) and typ.startswith(VECTOR_TYPE) and typ.endswith(")")
+
+
+def vec_element(typ: str) -> str:
+    """`Vec(Point)` -> `Point`."""
+    return typ[len(VECTOR_TYPE):-1]
 
 
 def is_function_type(typ: object) -> bool:

@@ -583,7 +583,7 @@
       "line": 1,
       "column": 9,
       "end_column": 14,
-      "message": "'mut' is only allowed on an array parameter, not on i64",
+      "message": "'mut' is only allowed on an array or vector parameter, not on i64",
       "hint": "scalar parameters are already mutable locals inside the function"
     },
     {
@@ -1169,7 +1169,7 @@
       "column": 9,
       "end_column": 13,
       "message": "an array element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every read and every write; making those copies deep is the arena work (N11c), so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the arena work of N11d, so an array of owning values is refused rather than shared"
     },
     {
       "file": "array_zeros_str.nv",
@@ -1179,6 +1179,42 @@
       "end_column": null,
       "message": "array_zeros cannot create [str]: an all-zero str is a null pointer, not an empty string",
       "hint": "write a literal, or use an element type whose zero value is a value: i64, bool, f64, or a struct or enum of those"
+    },
+    {
+      "file": "vector_copied.nv",
+      "code": "E0428",
+      "line": 5,
+      "column": 9,
+      "end_column": 11,
+      "message": "a vector cannot be copied: 'ys' would share one buffer with another vector",
+      "hint": "create it with `let v: Vec(i64) = vec_new()` and fill it with vec_push"
+    },
+    {
+      "file": "vector_mutated_through_a_borrow.nv",
+      "code": "E0444",
+      "line": 4,
+      "column": 14,
+      "end_column": null,
+      "message": "argument 1 of vec_push changes the vector, so it must be a writable local or a `mut Vec(T)` parameter",
+      "hint": "take the vector as `mut Vec(i64)` to change it, and pass a vector declared in this function"
+    },
+    {
+      "file": "vector_new_without_element_type.nv",
+      "code": "E0429",
+      "line": 4,
+      "column": 14,
+      "end_column": 21,
+      "message": "vec_new needs to know the element type",
+      "hint": "write the annotation, as in `let v: Vec(i64) = vec_new()`"
+    },
+    {
+      "file": "vector_of_owning_values.nv",
+      "code": "E0427",
+      "line": 8,
+      "column": 26,
+      "end_column": null,
+      "message": "a vector element cannot own storage, but Bag holds an array",
+      "hint": "an element is copied on every push and every read; a vector of owning values waits for the arena work (N11d)"
     }
   ]
 }

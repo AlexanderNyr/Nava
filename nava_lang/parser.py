@@ -161,6 +161,8 @@ class Parser:
         if str(token.value) in self.type_params_in_scope:
             return str(token.value)
         if self.at("(") and self.edition >= STRUCT_EDITION:
+            if token.value == "Vec":
+                return self.vector_type(token)
             return self.generic_type(token)
         if self.edition >= STRUCT_EDITION and (token.value in self.struct_names
                                                or token.value in self.enum_names):
@@ -173,6 +175,18 @@ class Parser:
             raise make("E0203", f"unknown type {token.value!r}; use i64, bool, str, or void",
                        token.loc, token.loc.advance(str(token.value)))
         return str(token.value)
+
+    def vector_type(self, name: Token) -> str:
+        """`Vec(i64)`: one element type, resolved and checked by the checker.
+
+        `Vec` is not a prelude *enum*, so it does not go through the `Option`/
+        `Result` lookahead: there is no `Vec(T)::Some` to build, and the value is
+        created by `vec_new()` with the element type taken from the annotation.
+        """
+        self.expect("(", "'(' after Vec")
+        element = self.parse_type()
+        self.expect(")", "')' after the element type")
+        return f"Vec({element})"
 
     def function_type(self) -> str:
         """`fn(i64) -> i64`, `fn() -> void`: the signature of a function value."""

@@ -245,7 +245,7 @@ unchanged, never converted, and the rest of the function does not run.
 An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** that
 owns nothing itself — anything that is a value with no owner. A struct or enum
 holding an array is refused as an element (`E0426`): an element is copied on every
-read and every write, so an owning element waits for the arena (N11c). `for point in points` copies each
+read and every write, so an owning element waits for the arena (N11d). `for point in points` copies each
 element, and `points[i].x` reads a field of an element. `array_zeros(n)` gives
 every element its zero value, so it needs an element type whose zero bits are a
 value: `i64`, `bool`, `f64`, a struct of those, or an enum whose first variant is
@@ -286,6 +286,63 @@ fn main() {
 An element is a value: `let p = points[0]` copies it, and `points[i] = p`
 replaces the whole element. To change one field, copy the element, change the
 copy and write it back with `points[i] = p`.
+
+## Edition 2: `Vec(T)`
+
+An array keeps the length it was created with; a `Vec(T)` grows. `T` is
+`i64`, `bool`, `str`, `f64`, or a struct or enum that owns nothing — an owning
+element is `E0427`, as with an array.
+
+`let v: Vec(i64) = vec_new()` creates it, and the block that writes the `let`
+releases it. A vector cannot be copied, reassigned, returned or stored in a
+field (`E0428`), and `vec_new()` without the annotation is `E0429`.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `vec_len(v)` | `i64` | elements it holds now |
+| `vec_capacity(v)` | `i64` | elements before the next growth |
+| `vec_push(v, x)` | `void` | append, growing if needed |
+| `vec_pop(v)` | `Option(T)` | remove and return the last, or `None` |
+| `vec_get(v, i)` | `T` | read element `i`, checked |
+| `vec_set(v, i, x)` | `void` | write element `i`, checked |
+
+A `Vec(T)` parameter reads the vector, a `mut Vec(T)` parameter may grow it and
+the caller sees the new length. `vec_push`, `vec_pop` and `vec_set` change the
+vector, so their first argument must be a local or a `mut Vec(T)` parameter
+(`E0444`); a `mut Vec(T)` argument must be a vector created in the calling
+function, not a borrow (`E0333`). Growth doubles the capacity from four, so pushes are amortised
+constant time; an out-of-range `vec_get`/`vec_set` ends the program, and
+`vec_pop` on an empty vector is `None`, not an error. `v[i]`, `v[0..1]` and
+`print(v)` are refused (`E0329`, `E0421`, `E0323`): index with `vec_get`, slice
+nothing, print the elements. `for x in v` reads the
+length once, before the first turn, and binds the element type; the loop
+variable is read-only. There is no insert, no remove and no shrink.
+
+```nava
+edition 2;
+
+fn fill(xs: mut Vec(i64), n: i64) {
+    let i = 0
+    while i < n {
+        vec_push(xs, i * i)
+        i = i + 1
+    }
+}
+
+fn main() {
+    let xs: Vec(i64) = vec_new()
+    fill(xs, 5)
+    print(vec_len(xs))
+    print(vec_capacity(xs))
+    let sum = 0
+    for x in xs { sum = sum + x }
+    print(sum)
+    match vec_pop(xs) {
+        Option(i64)::Some(last) => { print(last) }
+        Option(i64)::None => { print(-1) }
+    }
+}
+```
 
 ## Edition 2: `defer`, labelled loops and `pub`
 

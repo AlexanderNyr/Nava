@@ -501,6 +501,44 @@ REGISTERED_TESTS = {
         "test_an_array_of_enums_slices_and_is_passed",
     },
     # --- N11b: fields and payloads that own array storage --------------------
+    "VectorFrontendTests": {
+        "test_a_mut_vector_argument_must_be_created_here",
+        "test_a_mut_vector_parameter_may_grow_the_caller_s_vector",
+        "test_a_vector_cannot_be_copied",
+        "test_a_vector_cannot_be_printed_or_assigned_to",
+        "test_a_vector_cannot_be_reassigned",
+        "test_a_vector_cannot_be_returned",
+        "test_a_vector_cannot_be_a_field_or_a_payload",
+        "test_a_vector_is_created_in_a_block_and_grown_by_builtins",
+        "test_a_vector_of_structs_and_a_vector_of_enums_compile",
+        "test_a_vector_of_vectors_is_refused",
+        "test_an_element_cannot_own_storage",
+        "test_a_mutating_builtin_needs_a_writable_target",
+        "test_the_argument_types_are_checked",
+        "test_the_vector_names_are_reserved",
+        "test_the_generated_c_holds_a_handle_and_doubles",
+        "test_vec_new_needs_an_annotated_element_type",
+    },
+    "VectorRuntimeTests": {
+        "test_a_hundred_pushes_stay_within_twice_the_length",
+        "test_a_string_vector_keeps_its_strings",
+        "test_a_struct_vector_reads_and_writes_fields",
+        "test_an_empty_vector_allocates_nothing",
+        "test_an_enum_vector_matches_its_payload",
+        "test_an_out_of_bounds_index_stops_the_program",
+        "test_a_vector_of_a_generic_instance_and_of_an_option",
+        "test_growth_aliasing_and_drain_under_the_sanitizers",
+        "test_growth_inside_a_parameter_is_seen_by_the_caller",
+        "test_pop_drains_the_vector_and_then_reports_none",
+        "test_pop_set_and_push_change_the_caller_s_vector",
+        "test_pushes_grow_by_doubling_from_four",
+        "test_a_defer_reads_the_vector_before_it_is_released",
+        "test_a_float_vector_and_a_bool_vector_round_trip",
+        "test_a_vector_declared_in_a_loop_body_is_released_each_turn",
+        "test_a_vector_is_released_on_an_early_return",
+        "test_set_replaces_one_element_only",
+        "test_two_vectors_in_nested_blocks_free_both",
+    },
     "OwningFieldFrontendTests": {
         "test_a_nested_owning_field_is_a_value_too",
         "test_an_array_field_and_an_array_payload_are_values",
@@ -775,7 +813,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 131,
+    "tests/fixtures/negative": 135,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -858,6 +896,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_stdlib  # noqa: PLC0415
     import test_study  # noqa: PLC0415
     import test_values  # noqa: PLC0415
+    import test_vec  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
@@ -865,7 +904,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_modules, test_nava, test_ownership, test_plan, test_registry,
                    test_release, test_results, test_sandbox, test_slices, test_spec,
-                   test_structs, test_stdlib, test_study, test_values):
+                   test_structs, test_stdlib, test_study, test_values, test_vec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -923,6 +962,7 @@ def check_skip_state() -> list[str]:
     import test_ownership  # noqa: PLC0415
     import test_stdlib  # noqa: PLC0415
     import test_values  # noqa: PLC0415
+    import test_vec  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -934,6 +974,7 @@ def check_skip_state() -> list[str]:
                                (test_functions, "FunctionValueRuntimeTests"),
                                (test_values, "ValueRuntimeTests"),
                                (test_ownership, "OwningFieldRuntimeTests"),
+                               (test_vec, "VectorRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

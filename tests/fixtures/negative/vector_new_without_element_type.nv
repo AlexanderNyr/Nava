@@ -1,0 +1,6 @@
+edition 2;
+
+fn main() {
+    let xs = vec_new();
+    print(vec_len(xs))
+}

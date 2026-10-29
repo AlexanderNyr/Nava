@@ -8,9 +8,9 @@ no C compiler, no libc.
 `match`), N10c (`Option`/`Result` and `?`), N10d (arrays of structs and slices),
 N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
 (function values and pointers) are done. N11 is in progress: N11a (strings and
-enums as values, arrays of every value) and N11b (owning fields, with the copy
-and release rules they need) are delivered, N11c–N11d are specified, and N12–N18
-are not started.** The
+enums as values, arrays of every value), N11b (owning fields, with the copy and
+release rules they need) and N11c (`Vec(T)`, the growing vector) are delivered,
+N11d is specified, and N12–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -46,23 +46,23 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 7 692 lines,
-13 modules and 255 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 8 092 lines,
+13 modules and 266 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11b) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11c) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
 | Python construct in the compiler | Count | What Nava needs | Phase |
 |---|---|---|---|
 | `class` (AST nodes, diagnostics, module records, type descriptors) | 56 | `struct` with named fields; `enum` with data-carrying variants; exhaustive `match` | N10 |
-| `raise` / `try` | 265 / 54 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
-| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 70 / 61 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
-| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 122 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
-| set literal, `.add`, `.discard`, `.update` | 13 / 14 | `HashSet<T>` | N11 |
-| f-strings and `str.format` | 440 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
-| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 99 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
-| slice syntax `a[i:j]` | 22 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
+| `raise` / `try` | 281 / 55 | `Result(T, E)` with `?`, and `panic` reserved for broken invariants | N10 |
+| dict literal, `.get`, `.items`, `.values`, `.setdefault`, `.keys` | 72 / 63 | `HashMap(K, V)` with iteration and a total `get` returning `Option<V>` | N11 |
+| `.append`, `.extend`, `.pop`, `.sort`, `.insert`, `.remove` | 125 | `Vec<T>` with amortised growth, `pop -> Option<T>`, `sort` with a comparator | N11 |
+| set literal, `.add`, `.discard`, `.update` | 15 / 14 | `HashSet<T>` | N11 |
+| f-strings and `str.format` | 487 | `fmt` with width/alignment/precision specifiers over `i64`, `f64`, `str` | N12 |
+| `split`, `join`, `strip`, `startswith`, `endswith`, `replace`, `encode`, `decode` | 101 | `String` (growing UTF-8) and string methods on it and on `str` slices | N11, N12 |
+| slice syntax `a[i:j]` | 23 | slice values `[T]` with bounds checks | N10 (closed by N10d) |
 | `sorted(...)`, of which `key=` | 5 / 1 | `sort` over a comparator; `sort_by_key` in the library, not in the language | N12 |
 | generator expressions, list/set comprehensions | 57 / 40 / 6 | explicit `for` loops; laziness is **not** required | N10 (loops) |
 | `lambda` | 2 | a function used as a value: `fn(i64) -> i64` and a call through a variable (N10g; there is still no closure, and the audit row is closed because a call-back needs no `lambda`) | N10 |
@@ -295,8 +295,50 @@ the checker, the code generator, the specification and the guide.
 |---|---|---|
 | N11a | `str` as a struct field and a variant payload; arrays of enums; `array_zeros` restricted to element types with a zero value | **Delivered** (record below) |
 | N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | **Delivered** (record below) |
-| N11c | `Vec<T>` with amortised growth, `pop -> Option<T>`, iteration; the arena allocator and its accounting | Open (next) |
-| N11d | `String` (growing UTF-8) with the audit's methods, `HashMap<K, V>` and `HashSet<T>` with a deterministic hash | Open |
+| N11c | `Vec(T)` with amortised growth, `pop -> Option<T>`, iteration, and the owner/release accounting it needs | **Delivered** (record below) |
+| N11d | `String` (growing UTF-8) with the audit's methods, `HashMap<K, V>` and `HashSet<T>` with a deterministic hash, and the **arena allocator with its accounting**, deferred from N11c for the reason the record gives | Open (next) |
+
+#### Delivery record N11c (2026-10-28)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A vector is a type a program can declare and grow | `tests/test_vec.py`: `test_a_vector_is_created_in_a_block_and_grown_by_builtins` | `let xs: Vec(i64) = vec_new()` then `vec_push`, `vec_set`, `vec_get`, `vec_len`, `vec_capacity`; `Vec(Point)`, `Vec(str)`, `Vec(Shape)` and `Vec(f64)` all compile, and the program prints its first element, its length and its capacity |
+| The interface is exactly seven builtins | `LANGUAGE.md` `### Vectors: `Vec(T)``, `VectorFrontendTests.test_the_argument_types_are_checked` | `vec_len`, `vec_capacity`, `vec_push`, `vec_pop`, `vec_get`, `vec_set` plus `vec_new`; a wrong argument is `E0327`, a non-`i64` index `E0328`, a wrong arity `E0326`, `print(v)` `E0323` |
+| Growth is amortised, and says so | `test_pushes_grow_by_doubling_from_four`, `test_a_hundred_pushes_stay_within_twice_the_length` | capacity `0 -> 4 -> 8 … -> 128` for 100 pushes; the run prints `5 8 8`, then `100 128 99 50`, so no growth ever leaves capacity above `2 * len` |
+| Growth is visible through a `mut Vec(T)` parameter | `test_growth_inside_a_parameter_is_seen_by_the_caller`, `test_a_mut_vector_parameter_may_grow_the_caller_s_vector` | `grow(xs, 40)` then `grow(xs, 90)` from `main` gives the caller `130` elements and `vec_get(xs, 129) == 89` — the handle, not a copy of it, is what the parameter holds |
+| `pop` is `Option(T)` and iteration binds the element type | `test_pop_drains_the_vector_and_then_reports_none`, `test_an_enum_vector_matches_its_payload`, `test_a_string_vector_keeps_its_strings` | draining prints `8 1 7 -1` and leaves the capacity at `4`; `for shape in shapes` matches each payload (`0`, `5`); a `Vec(str)` prints `ada`, `grace`, `alan` |
+| The owner releases the buffer, once | `test_two_vectors_in_nested_blocks_free_both`, `test_growth_aliasing_and_drain_under_the_sanitizers` | every runtime test builds with `-DNAVA_TRACK_ALLOCS` and reports `nava: live arrays at exit: 0`; the sanitizer test (`grow`, alias, drain, iterate, 5 → 130 pushes) is clean under AddressSanitizer and UndefinedBehaviorSanitizer |
+| An empty vector allocates nothing | `test_an_empty_vector_allocates_nothing` | `vec_len`, `vec_capacity` and a `for` over it print `0 0 0`, and stderr is empty — no buffer is allocated until the first push |
+| What is refused is refused once, from one place | `test_a_vector_cannot_be_copied`, `test_a_vector_cannot_be_reassigned`, `test_a_vector_cannot_be_returned`, `test_a_vector_cannot_be_a_field_or_a_payload`, `test_an_element_cannot_own_storage`, `test_vec_new_needs_an_annotated_element_type`, `test_a_mutating_builtin_needs_a_writable_target` | copy, reassign, return, field and payload are `E0428`; an owning element is `E0427`; `let xs = vec_new()` is `E0429`; `vec_push` through a plain `Vec(T)` parameter or a non-vector is `E0444` / `E0327` |
+| A checked index stops the program, it does not read past the end | `test_an_out_of_bounds_index_stops_the_program` | `vec_get(xs, 4)` on a one-element vector prints `nava runtime error: array index 4 is out of bounds for length 1` and exits non-zero |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### Vectors: `Vec(T)``, the code table), `guides/nava-1.md` (`## Edition 2: `Vec(T)``) | The type, the seven builtins, the owner rule, the doubling, the check semantics and the non-goals are normative; `E0427`, `E0428`, `E0429` and `E0444` have rows and fixtures; the guide's digest is re-pinned (`ec1c1c3e…`, 18 545 bytes) and its example prints `5 8 30 16` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base` and `--encoding o200k_base` | prompt 62 016 tokens (`cl100k_base`) and 62 247 (`o200k_base`) for the `gcd` task, of which the guide is 61 380 / 61 611 tokens at 18 545 bytes; both `eval/measurements/overhead-*.json` records updated |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 8 092 lines, 13 modules, 266 functions under `nava_lang/` after this increment (7 692 / 13 / 255 at N11b) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 559 registered tests, 11 tasks with 76 cases, 177 spec fixtures, 143 diagnostic codes`; suite **629 tests OK** (1 159 subtests) |
+
+Negative controls: four new fixtures — `vector_of_owning_values.nv` (`E0427`),
+`vector_copied.nv` (`E0428`), `vector_new_without_element_type.nv` (`E0429`) and
+`vector_mutated_through_a_borrow.nv` (`E0444`) — each asserting its own code,
+location and message. The control that carries the memory claim is the leak
+counter: a vector whose buffer is never freed leaves a count above zero, and a
+vector released twice aborts under the sanitizers. `vector_mutated_through_a_borrow.nv`
+is the one that carries the language claim: growth replaces the buffer, so a
+vector that could be grown through a read-only borrow would resize storage its
+caller still believes it owns — the rule that refuses it is what makes `Vec(T)`
+safe without a garbage collector.
+
+Deliberately not done in N11c: an **arena allocator** with its own accounting.
+The increment's vectors are allocated with the array helpers, freed by their
+owner, and reported by the same leak counter, so the arena is an optimisation of
+what already works rather than a prerequisite for it — and a region allocator
+needs a rule for storage that outlives its region, which N11b created: an owning
+field, payload or `return` value leaves the frame that allocated it, so a
+per-frame mark can only be restored once the compiler tracks **moves** rather
+than copies. The arena is therefore scheduled with that move work in N11d, and
+nothing here claims it;
+`vec_insert`/`vec_remove`/shrink, sorting and filtering as builtins (a loop over
+two vectors does it); a vector of owning elements (`E0427`, N11d); `String`,
+`HashMap` and `HashSet` (N11d).
 
 #### Delivery record N11b (2026-10-28)
 
@@ -321,8 +363,8 @@ the source afterwards) and `test_a_copied_value_keeps_its_own_storage` (replace
 one binding's array and read the other). The leak counter is the third: a shallow
 copy released twice aborts, and a copy released never leaves a count above zero.
 
-Deliberately not done in N11b: an array of owning values (`E0426`, the arena is
-N11c), freeing on assignment elision — every boundary copy is made, none is
+Deliberately not done in N11b: an array of owning values (`E0426`, the arena work
+of N11d), freeing on assignment elision — every boundary copy is made, none is
 elided — a struct field or payload assignment from a slice (the checker's array
 rules are unchanged), and `String`/`Vec`/hash collections (N11c, N11d).
 
@@ -801,7 +843,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 7 692 Python lines and 255 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 8 092 Python lines and 266 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |
