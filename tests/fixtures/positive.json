@@ -183,6 +183,12 @@
       "stdin": "",
       "stdout": "4\ntrue\n6\ntrue\nfalse\n3\n0\n",
       "exit_code": 0
+    },
+    {
+      "file": "self_test.nv",
+      "stdin": "",
+      "stdout": "ok   math::abs\nok   math::min\nok   math::max\nok   math::sign\nok   math::gcd\nok   math::sum\nok   sort::is_sorted\nok   sort::insertion_sort\nok   sort::binary_search\nok   text::is_continuation\nok   text::sequence_width\nok   text::is_valid_utf8\nok   text::code_points\nok   text::is_ascii\nstandard library: ok\n",
+      "exit_code": 0
     }
   ]
 }

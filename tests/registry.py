@@ -58,9 +58,19 @@ REGISTERED_TESTS = {
         "test_every_public_name_has_a_contract",
         "test_every_documented_example_is_true",
         "test_every_documented_failure_happens",
+        "test_a_pure_function_is_pure_by_its_body",
+        "test_the_purity_claim_is_not_vacuous",
+        "test_a_pure_function_answers_the_same_at_every_optimisation_level",
         "test_the_generated_reference_matches_the_tree",
         "test_the_command_writes_what_the_guard_expects",
         "test_an_unknown_module_is_reported",
+    },
+    "PurityNegativeControlTests": {
+        "test_a_pure_function_that_prints_is_reported",
+        "test_a_pure_function_that_calls_an_impure_one_is_reported",
+        "test_a_pure_function_that_takes_a_mut_borrow_is_reported",
+        "test_a_pure_function_that_writes_through_a_parameter_is_reported",
+        "test_a_value_other_than_yes_or_no_is_reported",
     },
     "ContractNegativeControlTests": {
         "test_a_public_function_without_a_contract_is_reported",
@@ -68,6 +78,23 @@ REGISTERED_TESTS = {
         "test_an_example_that_is_false_is_reported",
         "test_a_documented_failure_that_does_not_happen_is_reported",
         "test_a_documented_failure_with_the_wrong_message_is_reported",
+    },
+    "SelfTestCoverageTests": {
+        "test_the_program_names_every_public_function",
+        "test_the_program_tests_every_module",
+        "test_the_library_has_public_names_to_test",
+    },
+    "SelfTestRunTests": {
+        "test_it_exits_zero_with_the_recorded_output",
+        "test_every_line_of_the_report_is_a_passing_test",
+        "test_the_verdict_does_not_depend_on_how_it_was_built",
+        "test_the_verdict_does_not_depend_on_how_often_it_runs",
+    },
+    "SelfTestNegativeControlTests": {
+        "test_one_wrong_expectation_fails_the_run_and_names_the_test",
+        "test_a_failing_expectation_is_the_exit_status",
+        "test_the_module_reports_its_own_expectations",
+        "test_a_passing_body_reports_nothing",
     },
     "FrontendTests": {
         "test_requires_main",
@@ -971,7 +998,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
     "tests/fixtures/negative": 146,
-    "tests/fixtures/positive": 30,
+    "tests/fixtures/positive": 31,
     "tests/fixtures/warnings": 3,
 }
 
@@ -1048,6 +1075,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_ownership  # noqa: PLC0415
     import test_plan  # noqa: PLC0415
     import test_registry  # noqa: PLC0415
+    import test_self_test  # noqa: PLC0415
     import test_release  # noqa: PLC0415
     import test_results  # noqa: PLC0415
     import test_slices  # noqa: PLC0415
@@ -1062,6 +1090,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_moves  # noqa: PLC0415
     import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
+    import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
@@ -1071,7 +1100,8 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
-                   test_registry, test_release, test_results, test_sandbox, test_slices,
+                   test_registry, test_release, test_results, test_self_test, test_sandbox,
+                   test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
                    test_tables, test_text, test_values, test_vec):
         for name, value in vars(module).items():
@@ -1137,8 +1167,11 @@ def check_skip_state() -> list[str]:
     import test_moves  # noqa: PLC0415
     import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
+    import test_self_test  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
-    for module, class_name in ((test_contracts, "ContractGuardTests"),
+    for module, class_name in ((test_self_test, "SelfTestRunTests"),
+                               (test_self_test, "SelfTestNegativeControlTests"),
+                               (test_contracts, "ContractGuardTests"),
                                (test_contracts, "ContractNegativeControlTests"),
                                (test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),

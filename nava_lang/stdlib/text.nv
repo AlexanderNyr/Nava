@@ -13,6 +13,7 @@ fn module_version() -> i64 {
 /// pre: `byte` is a byte value, 0..255 in practice
 /// post: the result is `true` exactly for the range 128..191
 /// cost: O(1)
+/// pure: yes
 /// example: text::is_continuation(128) && text::is_continuation(191)
 /// example: !text::is_continuation(127) && !text::is_continuation(192)
 fn is_continuation(byte: i64) -> bool {
@@ -28,6 +29,7 @@ fn is_continuation(byte: i64) -> bool {
 /// malformed one — overlong forms, surrogates and anything above U+10FFFF are
 /// malformed
 /// cost: O(1)
+/// pure: yes
 /// example: text::sequence_width("a", 0) == 1 && text::sequence_width("\u00e9", 0) == 2
 /// example: text::sequence_width("\u20ac", 0) == 3
 /// error: text::sequence_width("abc", 7) => byte index 7 is out of bounds for a string of 3 bytes
@@ -92,6 +94,7 @@ fn sequence_width(value: str, index: i64) -> i64 {
 /// post: the result is `true` exactly when every sequence in the string is
 /// well-formed, so the builtin `chars_len` would accept it
 /// cost: O(n) for n bytes
+/// pure: yes
 /// example: text::is_valid_utf8("hello") && text::is_valid_utf8("")
 /// example: text::is_valid_utf8("\u00e9\u20ac")
 fn is_valid_utf8(value: str) -> bool {
@@ -113,6 +116,7 @@ fn is_valid_utf8(value: str) -> bool {
 /// post: the result is the number of well-formed sequences, or -1 when the string
 /// is not valid UTF-8; the builtin `chars_len` stops the program instead
 /// cost: O(n) for n bytes
+/// pure: yes
 /// example: text::code_points("hello") == 5 && text::code_points("") == 0
 /// example: text::code_points("\u00e9\u20ac") == 2
 fn code_points(value: str) -> i64 {
@@ -135,6 +139,7 @@ fn code_points(value: str) -> i64 {
 /// pre: none
 /// post: the result is `true` exactly when no byte of the string is 128 or above
 /// cost: O(n) for n bytes
+/// pure: yes
 /// example: text::is_ascii("hello") && text::is_ascii("")
 /// example: !text::is_ascii("\u00e9")
 fn is_ascii(value: str) -> bool {

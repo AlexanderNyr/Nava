@@ -1,0 +1,151 @@
+edition 2;
+
+# Nava standard library: assertions and a runner, so a Nava program can test
+# itself.  Version 1.
+#
+# The shape is deliberately small.  An *expectation* prints one line when it
+# fails and answers with the number of failures it found — 0 or 1 — so a test
+# body adds up its own failures and answers with the total.  `run` runs one body
+# and prints one line for it.  `summary` prints the total of a suite and answers
+# with it, so `main` can `return` it and the exit status becomes the verdict.
+#
+# A program that uses the module:
+#
+#     import test;
+#
+#     fn abs_tests() -> i64 {
+#         let failures = 0
+#         failures = failures + test::expect_i64(math::abs(-7), 7, "abs(-7)")
+#         return failures
+#     }
+#
+#     fn main() -> i64 {
+#         let failed = test::run("abs", abs_tests)
+#         return test::summary("math", failed)
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `passing()` — a test body that reports nothing and passes.
+///
+/// pre: none
+/// post: the result is 0, which is the number of failed expectations
+/// cost: O(1)
+/// pure: yes
+/// example: test::passing() == 0
+pub fn passing() -> i64 {
+    return 0
+}
+
+/// `expect_true(condition, message)` — one expectation that must hold.
+///
+/// pre: none
+/// post: the result is 0 when `condition` is true; otherwise it is 1, after
+/// one line `  not true: <message>` was printed
+/// cost: O(1) plus the length of `message`
+/// pure: no
+/// example: test::expect_true(2 > 1, "two is greater than one") == 0
+pub fn expect_true(condition: bool, message: str) -> i64 {
+    if condition {
+        return 0
+    }
+    print(str_concat("  not true: ", message))
+    return 1
+}
+
+/// `expect_i64(actual, expected, message)` — one integer expectation.
+///
+/// pre: none
+/// post: the result is 0 when `actual == expected`; otherwise it is 1, after
+/// one line `  expected <expected>, got <actual>: <message>` was printed
+/// cost: O(1) plus the length of the printed line
+/// pure: no
+/// example: test::expect_i64(2 + 2, 4, "two and two") == 0
+pub fn expect_i64(actual: i64, expected: i64, message: str) -> i64 {
+    if actual == expected {
+        return 0
+    }
+    let line: String = string_new()
+    string_push(line, "  expected ")
+    string_push(line, str_from_i64(expected))
+    string_push(line, ", got ")
+    string_push(line, str_from_i64(actual))
+    string_push(line, ": ")
+    string_push(line, message)
+    print(string_text(line))
+    return 1
+}
+
+/// `expect_str(actual, expected, message)` — one text expectation.
+///
+/// pre: none
+/// post: the result is 0 when the two strings are equal byte for byte;
+/// otherwise it is 1, after one line
+/// `  expected "<expected>", got "<actual>": <message>` was printed
+/// cost: O(n) in the lengths of the two strings
+/// pure: no
+/// example: test::expect_str("a", "a", "the same text") == 0
+pub fn expect_str(actual: str, expected: str, message: str) -> i64 {
+    if actual == expected {
+        return 0
+    }
+    let line: String = string_new()
+    string_push(line, "  expected \"")
+    string_push(line, expected)
+    string_push(line, "\", got \"")
+    string_push(line, actual)
+    string_push(line, "\": ")
+    string_push(line, message)
+    print(string_text(line))
+    return 1
+}
+
+/// `run(name, body)` — run one test body and report it.
+///
+/// pre: `body` is a test body: it takes no arguments and answers with the
+/// number of expectations it failed
+/// post: the result is that number, after one line — `ok   <name>` when it is
+/// 0, and `FAIL <name>: <n> failed` otherwise
+/// cost: O(1) plus the cost of `body`
+/// pure: no
+/// example: test::run("an empty suite", test::passing) == 0
+pub fn run(name: str, body: fn() -> i64) -> i64 {
+    let failures = body()
+    if failures == 0 {
+        print(str_concat("ok   ", name))
+        return 0
+    }
+    let line: String = string_new()
+    string_push(line, "FAIL ")
+    string_push(line, name)
+    string_push(line, ": ")
+    string_push(line, str_from_i64(failures))
+    string_push(line, " failed")
+    print(string_text(line))
+    return failures
+}
+
+/// `summary(suite, failures)` — the last line of a run, and the verdict.
+///
+/// pre: `failures` is the number `run` answered for each test of the suite,
+/// added up
+/// post: the result is `failures`, after one line — `<suite>: ok` when it is 0,
+/// and `<suite>: <n> failed` otherwise
+/// cost: O(1) plus the length of the printed line
+/// pure: no
+/// example: test::summary("smoke", 0) == 0
+pub fn summary(suite: str, failures: i64) -> i64 {
+    if failures == 0 {
+        print(str_concat(suite, ": ok"))
+        return 0
+    }
+    let line: String = string_new()
+    string_push(line, suite)
+    string_push(line, ": ")
+    string_push(line, str_from_i64(failures))
+    string_push(line, " failed")
+    print(string_text(line))
+    return failures
+}

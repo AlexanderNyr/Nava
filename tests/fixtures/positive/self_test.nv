@@ -1,0 +1,171 @@
+# The standard library testing itself: one test body per public name, run by
+# `test::run`, with the exit status as the verdict.  `tests/test_self_test.py`
+# checks that this file names every public function of every module — a public
+# name with no test here fails the guard.
+
+import math;
+import sort;
+import test;
+import text;
+
+fn abs_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::abs(-7), 7, "abs of -7")
+    failures = failures + test::expect_i64(math::abs(0), 0, "abs of 0")
+    failures = failures + test::expect_i64(math::abs(7), 7, "abs of 7")
+    return failures
+}
+
+fn min_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::min(3, 5), 3, "min(3, 5)")
+    failures = failures + test::expect_i64(math::min(-1, -2), -2, "min(-1, -2)")
+    failures = failures + test::expect_i64(math::min(4, 4), 4, "min(4, 4)")
+    return failures
+}
+
+fn max_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::max(3, 5), 5, "max(3, 5)")
+    failures = failures + test::expect_i64(math::max(-1, -2), -1, "max(-1, -2)")
+    failures = failures + test::expect_i64(math::max(4, 4), 4, "max(4, 4)")
+    return failures
+}
+
+fn sign_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::sign(-9), -1, "sign of -9")
+    failures = failures + test::expect_i64(math::sign(0), 0, "sign of 0")
+    failures = failures + test::expect_i64(math::sign(4), 1, "sign of 4")
+    return failures
+}
+
+fn gcd_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::gcd(48, 18), 6, "gcd(48, 18)")
+    failures = failures + test::expect_i64(math::gcd(0, 0), 0, "gcd(0, 0)")
+    failures = failures + test::expect_i64(math::gcd(-12, 8), 4, "gcd(-12, 8)")
+    return failures
+}
+
+fn sum_tests() -> i64 {
+    let failures = 0
+    let values: [i64] = [1, 2, 3]
+    failures = failures + test::expect_i64(math::sum(values), 6, "sum of 1, 2, 3")
+    let empty: [i64] = []
+    failures = failures + test::expect_i64(math::sum(empty), 0, "sum of nothing")
+    return failures
+}
+
+fn is_sorted_tests() -> i64 {
+    let failures = 0
+    let sorted: [i64] = [1, 2, 2, 3]
+    failures = failures + test::expect_true(sort::is_sorted(sorted), "1, 2, 2, 3 is sorted")
+    let backwards: [i64] = [2, 1]
+    failures = failures + test::expect_true(!sort::is_sorted(backwards),
+                                            "2, 1 is not sorted")
+    let empty: [i64] = []
+    failures = failures + test::expect_true(sort::is_sorted(empty), "nothing is sorted")
+    return failures
+}
+
+fn insertion_sort_tests() -> i64 {
+    let failures = 0
+    let values: [i64] = [3, 1, 2]
+    sort::insertion_sort(values)
+    failures = failures + test::expect_true(sort::is_sorted(values),
+                                            "the array is sorted afterwards")
+    failures = failures + test::expect_i64(values[0], 1, "the smallest value comes first")
+    failures = failures + test::expect_i64(values[2], 3, "the largest value comes last")
+    let empty: [i64] = []
+    sort::insertion_sort(empty)
+    failures = failures + test::expect_i64(len(empty), 0, "sorting nothing is nothing")
+    return failures
+}
+
+fn binary_search_tests() -> i64 {
+    let failures = 0
+    let values: [i64] = [1, 2, 3]
+    failures = failures + test::expect_i64(sort::binary_search(values, 2), 1,
+                                           "2 is at index 1")
+    failures = failures + test::expect_i64(sort::binary_search(values, 9), -1,
+                                           "9 is not in the array")
+    let empty: [i64] = []
+    failures = failures + test::expect_i64(sort::binary_search(empty, 1), -1,
+                                           "nothing is in an empty array")
+    return failures
+}
+
+fn is_continuation_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_true(text::is_continuation(128),
+                                            "128 is a continuation byte")
+    failures = failures + test::expect_true(text::is_continuation(191),
+                                            "191 is a continuation byte")
+    failures = failures + test::expect_true(!text::is_continuation(127),
+                                            "127 is not a continuation byte")
+    failures = failures + test::expect_true(!text::is_continuation(192),
+                                            "192 is not a continuation byte")
+    return failures
+}
+
+fn sequence_width_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(text::sequence_width("a", 0), 1,
+                                           "an ASCII letter is one byte")
+    failures = failures + test::expect_i64(text::sequence_width("\u00e9", 0), 2,
+                                           "e with an acute accent is two bytes")
+    failures = failures + test::expect_i64(text::sequence_width("\u20ac", 0), 3,
+                                           "the euro sign is three bytes")
+    return failures
+}
+
+fn is_valid_utf8_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_true(text::is_valid_utf8("hello"),
+                                            "ASCII is valid UTF-8")
+    failures = failures + test::expect_true(text::is_valid_utf8(""),
+                                            "the empty string is valid UTF-8")
+    failures = failures + test::expect_true(text::is_valid_utf8("\u00e9\u20ac"),
+                                            "two multi-byte characters are valid UTF-8")
+    return failures
+}
+
+fn code_points_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(text::code_points("hello"), 5,
+                                           "five letters are five code points")
+    failures = failures + test::expect_i64(text::code_points(""), 0,
+                                           "the empty string has none")
+    failures = failures + test::expect_i64(text::code_points("\u00e9\u20ac"), 2,
+                                           "two characters are two code points")
+    return failures
+}
+
+fn is_ascii_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_true(text::is_ascii("hello"), "ASCII is ASCII")
+    failures = failures + test::expect_true(text::is_ascii(""), "nothing is ASCII")
+    failures = failures + test::expect_true(!text::is_ascii("\u00e9"),
+                                            "e with an acute accent is not ASCII")
+    return failures
+}
+
+fn main() -> i64 {
+    let failed = 0
+    failed = failed + test::run("math::abs", abs_tests)
+    failed = failed + test::run("math::min", min_tests)
+    failed = failed + test::run("math::max", max_tests)
+    failed = failed + test::run("math::sign", sign_tests)
+    failed = failed + test::run("math::gcd", gcd_tests)
+    failed = failed + test::run("math::sum", sum_tests)
+    failed = failed + test::run("sort::is_sorted", is_sorted_tests)
+    failed = failed + test::run("sort::insertion_sort", insertion_sort_tests)
+    failed = failed + test::run("sort::binary_search", binary_search_tests)
+    failed = failed + test::run("text::is_continuation", is_continuation_tests)
+    failed = failed + test::run("text::sequence_width", sequence_width_tests)
+    failed = failed + test::run("text::is_valid_utf8", is_valid_utf8_tests)
+    failed = failed + test::run("text::code_points", code_points_tests)
+    failed = failed + test::run("text::is_ascii", is_ascii_tests)
+    return test::summary("standard library", failed)
+}

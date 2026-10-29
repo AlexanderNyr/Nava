@@ -2217,15 +2217,19 @@ class Checker:
         elif isinstance(expr, Boolean):
             typ = "bool"
         elif isinstance(expr, Variable):
-            symbol = self.find_symbol(expr.name)
+            symbol = None if expr.module is not None else self.find_symbol(expr.name)
             if symbol is not None:
                 self.check_not_moved(symbol, expr.name, expr.loc)
                 expr.symbol = symbol
                 typ = symbol.typ
             else:
                 # Not a variable: a declared function used as a value (edition 2)
-                # is the only other thing a bare name can be.
-                function = self.function_named(expr.name)
+                # is the only other thing a bare name can be — of this module, or
+                # of an imported one when the name is qualified. `resolve` is the
+                # same resolution a qualified call goes through, so the
+                # diagnostics (`E0359`, `E0325`, `E0433`) are the same.
+                function = self.resolve(expr) if expr.module is not None \
+                    else self.function_named(expr.name)
                 if function is None:
                     raise make("E0308", f"unknown variable {expr.name!r}", expr.loc,
                                expr.loc.advance(expr.name),

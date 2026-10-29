@@ -146,8 +146,31 @@ fn main() {
 - `sort` — `sort::is_sorted`, `sort::insertion_sort`, `sort::binary_search`.
 - `text` — `text::is_ascii`, `text::is_valid_utf8`, `text::code_points`,
   `text::is_continuation`, `text::sequence_width`.
+- `test` — `test::expect_true`, `test::expect_i64`, `test::expect_str`,
+  `test::run`, `test::summary`, `test::passing`: assertions and a runner, so a
+  program can test itself and return the failure count as its exit status.
 
 For a single-file answer, do not write imports; use the built-ins above.
+
+A function of an imported module is a value with its module written on it, so a
+test body defined here can be handed to `test::run`:
+
+```nava
+edition 2;
+
+import math;
+import test;
+
+fn abs_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::abs(-7), 7, "abs of -7")
+    return failures
+}
+
+fn main() -> i64 {
+    return test::summary("math", test::run("abs", abs_tests))
+}
+```
 
 ## Edition 2: structs
 

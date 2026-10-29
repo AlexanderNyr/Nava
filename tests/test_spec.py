@@ -112,7 +112,14 @@ class SpecDocumentationTests(unittest.TestCase):
             with self.subTest(block=index):
                 try:
                     if not module:
-                        compile_source(block)
+                        # Compile the block as a file, so an example may import
+                        # a module: `import test` resolves against the packaged
+                        # standard library only when there is a path to resolve
+                        # from.
+                        with tempfile.TemporaryDirectory() as temp:
+                            entry = Path(temp) / "example.nv"
+                            entry.write_text(block, encoding="utf-8")
+                            compile_source(block, path=entry)
                         continue
                     with tempfile.TemporaryDirectory() as temp:
                         root = Path(temp)

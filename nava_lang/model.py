@@ -160,6 +160,10 @@ class Slice(Expr):
 @record()
 class Variable(Expr):
     name: str
+    #: The module named before `::` when the name is a *value* rather than a
+    #: call: `test::noop` is the function `noop` of module `test`, as a function
+    #: value. None for a name resolved in the calling module.
+    module: str | None = None
     symbol: Symbol | None = field(default=None, init=False)
     #: The declared function behind the name when it is used as a value in
     #: edition 2. A variable of the same name wins; see `Checker.find_symbol`.

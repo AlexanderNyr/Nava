@@ -31,10 +31,15 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .model import Function, Number, Program, Return
+from .model import (Assign, Call, Function, IndexAssign, MemberAssign, Number,
+                    Program, Return)
 
 #: Fields written once per function.
-SINGLE_FIELDS = ("pre", "post", "cost")
+SINGLE_FIELDS = ("pre", "post", "cost", "pure")
+#: The two values `pure:` accepts. A pure function has no effect beyond its
+#: result: it prints nothing, reads no input, and writes no storage the caller
+#: holds, so two runs with equal arguments answer the same thing.
+PURE_VALUES = ("yes", "no")
 #: Fields written as often as needed.
 REPEATED_FIELDS = ("example", "error")
 #: Functions a standard module must declare but does not offer to a program: the
@@ -55,6 +60,7 @@ class Contract:
     pre: str = ""
     post: str = ""
     cost: str = ""
+    pure: str = ""
     examples: tuple[str, ...] = ()
     errors: tuple[tuple[str, str], ...] = ()
     #: Field lines seen more than once, so a copy-paste is reported rather than
@@ -90,15 +96,31 @@ def parse(lines: list[str] | tuple[str, ...]) -> Contract:
     examples: list[str] = []
     errors: list[tuple[str, str]] = []
     duplicates: list[str] = []
+    #: The field a prose line continues. A contract wraps because it is prose:
+    #: a line that is not a `key:` line continues the field above it, and a line
+    #: above every field is the summary.
+    last: str | None = None
     for raw in lines:
         line = strip_marker(raw)
         match = FIELD_RE.match(line)
         if match is None:
             text = line.strip()
-            if text:
+            if not text:
+                continue
+            if last is None:
+                prose.append(text)
+            elif last in SINGLE_FIELDS:
+                single[last] = f"{single[last]} {text}".strip()
+            elif last == "example":
+                examples[-1] = f"{examples[-1]} {text}".strip()
+            elif last == "error":
+                statements, message = errors[-1]
+                errors[-1] = (statements, f"{message} {text}".strip())
+            else:
                 prose.append(text)
             continue
         key, value = match.group("key"), match.group("value").strip()
+        last = key
         if key in SINGLE_FIELDS:
             if key in single:
                 duplicates.append(key)
@@ -109,6 +131,8 @@ def parse(lines: list[str] | tuple[str, ...]) -> Contract:
             left, arrow, right = value.partition(ERROR_ARROW)
             errors.append((left.strip(), right.strip()) if arrow else (value, ""))
         else:
+            # An unknown `key:` is prose: a typo shows up as a missing field.
+            last = None
             text = line.strip()
             if text:
                 prose.append(text)
@@ -117,6 +141,7 @@ def parse(lines: list[str] | tuple[str, ...]) -> Contract:
         pre=single.get("pre", ""),
         post=single.get("post", ""),
         cost=single.get("cost", ""),
+        pure=single.get("pure", "").lower(),
         examples=tuple(examples),
         errors=tuple(errors),
         duplicates=tuple(duplicates),
@@ -136,6 +161,106 @@ def problems(contract: Contract, name: str) -> list[str]:
     for index, example in enumerate(contract.examples, start=1):
         if not statements_of(example):
             problems.append(f"{name}: example {index} is empty")
+    if contract.pure and contract.pure not in PURE_VALUES:
+        problems.append(f"{name}: `pure:` is `yes` or `no`, not {contract.pure!r}")
+    return problems
+
+
+#: Builtins a pure function may call: they read their arguments (and the storage
+#: a borrow points at) and answer with a value. Everything else — printing,
+#: reading stdin or a file, growing a collection — is an effect.
+PURE_BUILTINS = frozenset({
+    "len", "array_zeros", "to_i64", "to_f64", "bytes_len", "chars_len", "byte_at",
+    "str_concat", "str_from_i64", "str_from_f64", "str_slice", "str_index_of",
+    "str_starts_with", "str_ends_with", "str_trim", "str_replace", "str_join",
+    "vec_len", "vec_capacity", "vec_get",
+    "map_len", "map_contains", "map_get",
+    "set_len", "set_contains",
+    "string_len", "string_capacity", "string_text",
+})
+
+
+def _nodes(value):
+    """Every node inside a value, however deeply the records nest."""
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _nodes(item)
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            yield from _nodes(item)
+        return
+    # The AST nodes are `@record()` classes, not dataclasses: `__field_names__`
+    # is the list this project's own record helper exposes.
+    names = getattr(value, "__field_names__", None)
+    if names is not None:
+        yield value
+        for name in names:
+            yield from _nodes(getattr(value, name))
+
+
+def _written_names(statement) -> list[str]:
+    """The names a statement writes to, so purity can refuse a write."""
+    if isinstance(statement, Assign):
+        return [statement.name]
+    if isinstance(statement, IndexAssign):
+        return [statement.name]
+    if isinstance(statement, MemberAssign):
+        target = statement.target
+        return [target.name] if hasattr(target, "name") else []
+    return []
+
+
+def purity_problems(program: Program, module: str) -> list[str]:
+    """Check what a `pure: yes` claim says against what the body does.
+
+    The claim is checked, not believed: a pure function may not take a `mut`
+    parameter (it would be able to write the caller's storage), may not call a
+    builtin that prints, reads input or grows a collection, may not call a
+    function of its own module that is not itself documented pure, and may not
+    write through a parameter. A call into *another* module cannot be judged
+    from one parsed module, so it is reported instead of assumed.
+    """
+    claims: dict[str, str] = {}
+    for function in program.functions:
+        if function.name in EXEMPT:
+            continue
+        claims[function.name] = parse(function.doc).pure
+    problems: list[str] = []
+    for function in program.functions:
+        if function.name in EXEMPT or claims.get(function.name) != "yes":
+            continue
+        label = f"{module}::{function.name}" if module else function.name
+        parameters = {param.name for param in function.params}
+        for param in function.params:
+            if getattr(param, "mutable", False):
+                problems.append(
+                    f"{label}: claims `pure: yes` but takes `mut {param.typ}`, "
+                    f"so it can write the caller's storage")
+        for node in _nodes(function.body):
+            if isinstance(node, Call):
+                name, called = node.name, node.module
+                if called not in (None, "", module):
+                    problems.append(
+                        f"{label}: claims `pure: yes` but calls `{called}::{name}`; "
+                        f"purity across modules is not checked, so this cannot be "
+                        f"verified — mark the function `pure: no` or call it from "
+                        f"the same module")
+                elif called is None and name in claims:
+                    if claims[name] != "yes":
+                        problems.append(
+                            f"{label}: claims `pure: yes` but calls `{name}`, "
+                            f"which is documented `pure: no`")
+                elif name not in PURE_BUILTINS:
+                    problems.append(
+                        f"{label}: claims `pure: yes` but calls `{name}`, "
+                        f"which has an effect")
+            elif isinstance(node, (Assign, IndexAssign, MemberAssign)):
+                for written in _written_names(node):
+                    if written in parameters:
+                        problems.append(
+                            f"{label}: claims `pure: yes` but writes through "
+                            f"the parameter `{written}`")
     return problems
 
 
@@ -203,6 +328,7 @@ def check_program(program: Program, module: str) -> list[str]:
             continue
         name = f"{module}::{function.name}" if module else function.name
         problems.extend(problems_of(parse(function.doc), name))
+    problems.extend(purity_problems(program, module))
     return problems
 
 
@@ -250,6 +376,7 @@ def render_module(module: str, source: Path, program: Program, version: int) -> 
         lines.append(f"| Precondition | {contract.pre or '_missing_'} |")
         lines.append(f"| Postcondition | {contract.post or '_missing_'} |")
         lines.append(f"| Cost | {contract.cost or '_missing_'} |")
+        lines.append(f"| Pure | {contract.pure or '_missing_'} |")
         lines.append("")
         for example in contract.examples:
             lines.append("**Example**, which must be true:")

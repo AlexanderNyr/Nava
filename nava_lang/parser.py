@@ -1045,13 +1045,13 @@ class Parser:
                     return VariantValue(token.loc, name, str(target.value), args,
                                         token.loc, target.loc)
                 # `module::function(...)`: a qualified call into another module.
+                # Without the argument list it is that function used as a value —
+                # `test::run("smoke", test::noop)` needs one. The checker decides
+                # whether the module exports the name; a module still exposes
+                # functions only, so `math::x` is still not a variable.
                 if not self.take("("):
-                    raise make(
-                        "E0201",
-                        "expected '(' after a qualified function name",
-                        self.current.loc,
-                        hint="a module exposes functions only: write math::abs(x)",
-                    )
+                    self.require_edition(self.current.loc, "a function value")
+                    return Variable(token.loc, str(target.value), module=name)
                 args = []
                 while not self.at(")"):
                     args.append(self.expression())

@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+N12c: **purity and self-testing**. A contract now says whether the function has
+effects, the guard checks that claim against the body, and the standard library
+tests itself in Nava and returns its own failure count.
+
+- `pure: yes` / `pure: no` is a required field of every doc block. A function that
+  claims `yes` is checked against what it does: printing, calling a builtin with an
+  effect, calling a function documented `pure: no`, taking a `mut` parameter,
+  writing through a parameter and calling into another module are each reported —
+  the last because purity across files is not decidable from one, not because it is
+  assumed. Ten of the fourteen packaged functions are documented pure, and each of
+  their examples is built at `-O0`, `-O1`, `-O2` and `-O3`, twice, with identical
+  output. A second backend does not exist until N14, so "across backends" is not
+  claimed.
+- A function is a value with its module on it: `test::passing` names a
+  `fn() -> i64` across an `import`, kept in the tree as `Variable.module`. The
+  failures are the ones a call has — module not imported, no such function, not
+  `pub` — plus `E0372` in edition 1, which has no function type.
+- The `test` module: `expect_true`, `expect_i64` and `expect_str` return the number
+  of failures, `run(name, body)` prints `ok   <name>` or `  expected 8, got 7: …`
+  and `FAIL <name>: 1 failed`, and `summary(suite, failures)` prints the verdict and
+  returns the count. The process exit status is that count, so a program tests
+  itself and says how badly it failed.
+- `tests/fixtures/positive/self_test.nv` runs one body per public name of `math`,
+  `sort` and `text` — fourteen `ok` lines and `standard library: ok`, 305 bytes,
+  recorded as a positive case — and the same report comes out at three
+  optimisation levels and on a second run. `tests/test_self_test.py` also makes
+  sure the harness can fail: one wrong expectation exits `1` and names the test,
+  an inverted condition fails, a body with two bad checks exits `2`, a clean body
+  stays quiet.
+- `nava doc` documents `test` like the rest of the library; `docs/stdlib/test.md`
+  is generated and compared byte for byte.
+
 N12b: **contracts**. A `///` block above a `fn` is that function's contract, and
 the standard library writes one for every public name; `nava doc` renders the
 reference from them, and the test suite compiles and runs every example and every

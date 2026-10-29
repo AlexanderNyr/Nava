@@ -52,15 +52,20 @@ def module_source(module: str) -> str:
     return (STDLIB / f"{module}.nv").read_text(encoding="utf-8")
 
 
-def build_and_run(source: str, root: Path, entry_name: str = "main.nv") -> subprocess.CompletedProcess:
-    """Compile a program whose project root is `root`, then run it."""
+def build_and_run(source: str, root: Path, entry_name: str = "main.nv",
+                  opt: str = "-O1") -> subprocess.CompletedProcess:
+    """Compile a program whose project root is `root`, then run it.
+
+    `opt` is passed to the C compiler, because "the same answer at every
+    optimisation level" is one of the claims this file tests.
+    """
     entry = root / entry_name
     entry.write_text(source, encoding="utf-8")
     compilation = compile_source(source, path=entry)
     c_file = root / "program.c"
     binary = root / "program"
     c_file.write_text(compilation.code, encoding="utf-8")
-    build = subprocess.run([CC, "-std=c11", "-O1", str(c_file), "-o", str(binary)],
+    build = subprocess.run([CC, "-std=c11", opt, str(c_file), "-o", str(binary)],
                            capture_output=True, text=True, timeout=300)
     if build.returncode != 0:
         raise AssertionError(f"the generated C did not compile:\n{build.stderr}")
@@ -69,7 +74,9 @@ def build_and_run(source: str, root: Path, entry_name: str = "main.nv") -> subpr
 
 def examples_program(module: str, examples: list[str]) -> str:
     """One program that runs every example of a module and reports each line."""
-    lines = [f"import {module};", "", "fn main() {"]
+    # Edition 2, because an example is allowed to use the whole language: the
+    # test module's own examples pass a *function value* to `run`.
+    lines = ["edition 2;", "", f"import {module};", "", "fn main() {"]
     for index, example in enumerate(examples, start=1):
         statements = contracts.statements_of(example)
         if not statements:
@@ -89,7 +96,7 @@ def examples_program(module: str, examples: list[str]) -> str:
 
 def error_program(module: str, statements: str) -> str:
     """One program per documented failure: it must stop before the last print."""
-    lines = [f"import {module};", "", "fn main() {"]
+    lines = ["edition 2;", "", f"import {module};", "", "fn main() {"]
     for statement in contracts.statements_of(statements):
         lines.append(f"    {statement}")
     lines.append('    print("no error")')
@@ -275,6 +282,57 @@ class ContractGuardTests(unittest.TestCase):
         self.assertGreaterEqual(documented, 3,
                                 "the standard library documents no failure at all")
 
+    def test_a_pure_function_is_pure_by_its_body(self):
+        """The `pure: yes` claim is checked against what the body does."""
+        for module in MODULES:
+            with self.subTest(module=module):
+                self.assertEqual(contracts.purity_problems(
+                    parse(module_source(module)), module), [])
+
+    def test_the_purity_claim_is_not_vacuous(self):
+        """A lane with nothing in it proves nothing, so the count is asserted."""
+        pure = 0
+        for module in MODULES:
+            program = parse(module_source(module))
+            for function in program.functions:
+                if contracts.is_public(program, function) and \
+                        contracts.parse(function.doc).pure == "yes":
+                    pure += 1
+        self.assertGreaterEqual(pure, 10,
+                                f"only {pure} public function(s) claim to be pure")
+
+    @unittest.skipUnless(CC is not None, "a C compiler is required")
+    def test_a_pure_function_answers_the_same_at_every_optimisation_level(self):
+        """The claim a reader actually relies on: the answer does not drift.
+
+        The example program of a module is built at four optimisation levels and
+        run twice at each, and every run must print exactly the same thing. The
+        second backend this project specifies (N14) is not here yet, so the axis
+        that exists today is the C compiler's own: `-O0`, `-O1`, `-O2`, `-O3`.
+        """
+        for module in MODULES:
+            program = parse(module_source(module))
+            examples = [example for function in program.functions
+                        if contracts.is_public(program, function)
+                        and contracts.parse(function.doc).pure == "yes"
+                        for example in contracts.parse(function.doc).examples]
+            if not examples:
+                continue
+            with self.subTest(module=module):
+                program_text = examples_program(module, examples)
+                outputs = []
+                for opt in ("-O0", "-O1", "-O2", "-O3"):
+                    for _ in range(2):
+                        with tempfile.TemporaryDirectory() as directory:
+                            result = build_and_run(program_text, Path(directory), opt=opt)
+                        outputs.append((opt, result.returncode, result.stdout))
+                first = outputs[0]
+                for opt, code, out in outputs[1:]:
+                    self.assertEqual((code, out), (first[1], first[2]),
+                                     f"{module}: {opt} printed something else")
+                self.assertNotIn("fail", first[2].replace("FAIL", ""),
+                                 f"{module}: a documented example is false")
+
     def test_the_generated_reference_matches_the_tree(self):
         for module in MODULES:
             path = STDLIB / f"{module}.nv"
@@ -305,6 +363,62 @@ class ContractGuardTests(unittest.TestCase):
                                 capture_output=True, text=True, timeout=300)
         self.assertEqual(result.returncode, 2)
         self.assertIn("no module named", result.stderr)
+
+
+class PurityNegativeControlTests(unittest.TestCase):
+    """A claim of purity that the body contradicts has to be reported."""
+
+    def problems(self, source: str, module: str = "sample") -> list[str]:
+        return contracts.check_program(parse(source), module)
+
+    def test_a_pure_function_that_prints_is_reported(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `noisy(x)` — prints.\n/// pre: none\n"
+            "/// post: the result is `x`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: noisy(1) == 1\n"
+            "pub fn noisy(x: i64) -> i64 {\n    print(x)\n    return x\n}\n")
+        self.assertTrue(any("calls `print`, which has an effect" in item
+                            for item in reported), reported)
+
+    def test_a_pure_function_that_calls_an_impure_one_is_reported(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `noisy(x)` — prints.\n/// pre: none\n"
+            "/// post: the result is `x`\n/// cost: O(1)\n/// pure: no\n"
+            "/// example: noisy(1) == 1\n"
+            "pub fn noisy(x: i64) -> i64 {\n    print(x)\n    return x\n}\n\n"
+            "/// `wrapper(x)` — claims purity.\n/// pre: none\n"
+            "/// post: the result is `x`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: wrapper(1) == 1\n"
+            "pub fn wrapper(x: i64) -> i64 {\n    return noisy(x)\n}\n")
+        self.assertTrue(any("calls `noisy`, which is documented `pure: no`" in item
+                            for item in reported), reported)
+
+    def test_a_pure_function_that_takes_a_mut_borrow_is_reported(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `touch(xs)` — writes.\n/// pre: none\n"
+            "/// post: the result is `0`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: touch(1) == 0\n"
+            "pub fn touch(x: i64) -> i64 {\n"
+            "    let xs: Vec(i64) = vec_new()\n    vec_push(xs, x)\n    return 0\n}\n")
+        self.assertTrue(any("calls `vec_push`, which has an effect" in item
+                            for item in reported), reported)
+
+    def test_a_pure_function_that_writes_through_a_parameter_is_reported(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `bump(xs)` — writes.\n/// pre: none\n"
+            "/// post: the result is `len(xs)`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: bump(1) == 1\n"
+            "pub fn bump(xs: mut [i64]) -> i64 {\n    xs[0] = 1\n    return len(xs)\n}\n")
+        self.assertTrue(any("takes `mut [i64]`" in item for item in reported), reported)
+
+    def test_a_value_other_than_yes_or_no_is_reported(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `f(x)` — prose.\n/// pre: none\n"
+            "/// post: the result is `x`\n/// cost: O(1)\n/// pure: maybe\n"
+            "/// example: f(1) == 1\n"
+            "pub fn f(x: i64) -> i64 {\n    return x\n}\n")
+        self.assertTrue(any("`pure:` is `yes` or `no`" in item for item in reported),
+                        reported)
 
 
 class ContractNegativeControlTests(unittest.TestCase):

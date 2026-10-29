@@ -14,6 +14,7 @@ fn module_version() -> i64 {
 /// pre: `x` is any `i64`
 /// post: the result is `x` when `x >= 0`, and `-x` otherwise
 /// cost: O(1)
+/// pure: yes
 /// example: math::abs(-7) == 7 && math::abs(4) == 4 && math::abs(0) == 0
 /// error: math::abs(-9223372036854775808) => i64 overflow in unary -
 fn abs(x: i64) -> i64 {
@@ -28,6 +29,7 @@ fn abs(x: i64) -> i64 {
 /// pre: none
 /// post: the result is `a` or `b`, and never greater than either
 /// cost: O(1)
+/// pure: yes
 /// example: math::min(3, 5) == 3 && math::min(-1, -2) == -2 && math::min(4, 4) == 4
 fn min(a: i64, b: i64) -> i64 {
     if a < b {
@@ -41,6 +43,7 @@ fn min(a: i64, b: i64) -> i64 {
 /// pre: none
 /// post: the result is `a` or `b`, and never smaller than either
 /// cost: O(1)
+/// pure: yes
 /// example: math::max(3, 5) == 5 && math::max(-1, -2) == -1 && math::max(4, 4) == 4
 fn max(a: i64, b: i64) -> i64 {
     if a > b {
@@ -54,6 +57,7 @@ fn max(a: i64, b: i64) -> i64 {
 /// pre: none
 /// post: the result is -1 when `x < 0`, 0 when `x == 0` and 1 when `x > 0`
 /// cost: O(1)
+/// pure: yes
 /// example: math::sign(-9) == -1 && math::sign(0) == 0 && math::sign(4) == 1
 fn sign(x: i64) -> i64 {
     if x < 0 {
@@ -70,6 +74,7 @@ fn sign(x: i64) -> i64 {
 /// pre: none
 /// post: the result divides both arguments, is non-negative, and `gcd(0, 0)` is 0
 /// cost: O(log(max(|a|, |b|)))
+/// pure: yes
 /// example: math::gcd(48, 18) == 6 && math::gcd(0, 0) == 0 && math::gcd(-12, 8) == 4
 /// error: math::gcd(-9223372036854775808, 0) => i64 overflow in unary -
 fn gcd(a: i64, b: i64) -> i64 {
@@ -88,6 +93,7 @@ fn gcd(a: i64, b: i64) -> i64 {
 /// pre: none
 /// post: the result is the arithmetic sum of the elements, and 0 for an empty array
 /// cost: O(n) for n elements
+/// pure: yes
 /// example: let values: [i64] = [1, 2, 3]; math::sum(values) == 6
 /// example: let empty: [i64] = []; math::sum(empty) == 0
 /// error: let big: [i64] = [9223372036854775807, 1]; math::sum(big) => i64 overflow in +

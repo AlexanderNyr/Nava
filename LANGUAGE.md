@@ -606,6 +606,7 @@ examples/modules/stats.nv     a local module; it imports math itself
 nava_lang/stdlib/math.nv      abs, min, max, sign, gcd, sum
 nava_lang/stdlib/sort.nv      is_sorted, insertion_sort, binary_search
 nava_lang/stdlib/text.nv      is_ascii, is_valid_utf8, code_points, ...
+nava_lang/stdlib/test.nv      expect_true, expect_i64, expect_str, run, summary
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -668,9 +669,10 @@ validation that never allocates.
 ## Doc blocks and `nava doc`
 
 A `///` block above a function is the function's contract, written in the
-language and checked by the test suite. The block is prose plus repeated
-fields; a line that starts with a known `key:` is a field, and every other
-line is prose (the first prose line is the summary).
+language and checked by the test suite. The block is prose plus fields: a line
+that starts with a known `key:` is a field, a line above every field is the
+summary, and a line *after* a field continues it — which is how a long
+postcondition is wrapped without becoming a second summary.
 
 ```nava
 /// `clamp(x, low, high)` — `x` limited to the closed range.
@@ -701,6 +703,7 @@ fn main() {
 | `pre:` | one | the precondition: what the caller must guarantee |
 | `post:` | one | the postcondition: what the function guarantees |
 | `cost:` | one | the complexity, in terms of the arguments |
+| `pure:` | one | `yes` when the function has no effect beyond its result, else `no` |
 | `example:` | one or more | statements whose last one must be `true` |
 | `error:` | zero or more | statements, `=>`, and the text the program prints before it stops |
 
@@ -733,6 +736,78 @@ Those three rules are what separate a contract from a comment, and the file
 also carries the negative controls that show the guard fails: a public function
 with no contract, an example that does not compile, an example that is false,
 and a documented failure that does not happen.
+
+### What `pure: yes` promises
+
+A pure function has no effect beyond its result: it prints nothing, reads no
+input, and writes no storage its caller holds. So two runs with equal arguments
+answer the same thing, and the answer does not depend on how the program was
+built. The claim is **checked against the body**, not believed:
+
+* a `pure: yes` function may not take a `mut` parameter — that is storage it
+  could write;
+* it may not call a builtin with an effect (`print`, `read_i64`, `read_f64`,
+  `read_file`, `write_file`, and the calls that grow a `String`, a `Vec`, a
+  `HashMap` or a `HashSet`);
+* it may not call a function of its own module that is documented `pure: no`;
+* a call into *another* module cannot be judged from one module, so it is
+  reported rather than assumed.
+
+The suite also runs the examples of every pure function at `-O0`, `-O1`, `-O2`
+and `-O3`, twice each, and requires the same output every time. That is the
+axis the toolchain has today: the second backend (N14) is not written yet, and
+until it is, "across backends" means "across builds".
+
+## The `test` module
+
+`test` is a standard module like the others, with the same contract rules, and
+it exists so a Nava program can test **itself**: no Python, no harness, and the
+exit status is the verdict.
+
+```nava
+edition 2;
+
+import math;
+import test;
+
+fn abs_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_i64(math::abs(-7), 7, "abs of -7")
+    failures = failures + test::expect_true(math::abs(0) == 0, "abs of 0")
+    return failures
+}
+
+fn main() -> i64 {
+    return test::summary("math", test::run("abs", abs_tests))
+}
+```
+
+That program prints `ok   abs` and `math: ok`, and exits `0`. A wrong
+expectation prints `  expected 8, got 7: abs of -7`, then
+`FAIL abs: 1 failed` and `math: 1 failed`, and exits `1`.
+
+| Call | Type | Meaning |
+|---|---|---|
+| `expect_true(condition, message)` | `i64` | 0 when it holds, else 1 after one failure line |
+| `expect_i64(actual, expected, message)` | `i64` | 0 when they are equal, else 1 and one line |
+| `expect_str(actual, expected, message)` | `i64` | the same for text, byte for byte |
+| `run(name, body)` | `i64` | run one test body, print `ok   <name>` or `FAIL <name>: <n> failed`, answer its failures |
+| `summary(suite, failures)` | `i64` | the last line of a run, and the value `main` returns |
+| `passing()` | `i64` | a body that passes, so a runner can be shown with nothing to run |
+
+An expectation answers with **the number of failures it found**, so a test body
+adds them up and answers with the total; that is the number `run` prints and
+`main` returns, which is why the exit status is the verdict. Nothing is
+globbed and nothing is registered: a test body is an ordinary function of type
+`fn() -> i64`, and the list of tests is the list of calls in `main` — the
+language has no reflection, and a test runner that pretended otherwise would be
+lying about what it ran.
+
+`tests/fixtures/positive/self_test.nv` is the standard library testing itself
+this way, one body per public name, and `tests/test_self_test.py` is the guard:
+it fails when a public name of a packaged module has no test there, it runs the
+program and compares the output with the recorded one, and it mutates an
+expectation to prove the runner reports a failure and exits nonzero.
 
 ## Text, bytes and UTF-8
 
@@ -1854,7 +1929,7 @@ so a function type is a plain type with a fixed signature.
 
 ```text
 function_type  = "fn" "(" [ type { "," type } ] ")" [ "->" type ] ;
-function_value = IDENT ;                                   (* double *)
+function_value = IDENT | IDENT "::" IDENT ;                (* double, test::passing *)
 indirect_call  = IDENT "(" [ arguments ] ")" ;             (* f(2), f() *)
 ```
 
@@ -1889,6 +1964,13 @@ number of arguments (`E0326`), each argument type (`E0327`) and the result are
 all known, and a variable that does not hold a function type cannot be called at
 all (`E0439`). Assigning a function value of another signature is `E0311`, like
 any other type mismatch.
+
+A function of an **imported module** is a value the same way, written with its
+module: `test::passing` is the function `passing` of module `test`, with the type
+of its signature. That is what lets a runner in one module be handed a body
+defined in another — `test::run("abs", abs_tests)` — and it is the only form of
+qualified name that is a value: a module exposes functions only, so
+`math::x` is not a variable (`E0325`).
 
 A function type may appear wherever a type may: a `let` annotation, a parameter,
 a result, a struct field, a variant payload, a prelude instantiation such as

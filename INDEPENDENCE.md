@@ -49,10 +49,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 10 242 lines,
-14 modules and 325 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 10 377 lines,
+14 modules and 328 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12b) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12c) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -130,7 +130,7 @@ the guard, and the two implementations must agree on every entry.
 |---|---|---|---|---|
 | N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
-| N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Specified** |
+| N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Specified** |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
@@ -311,6 +311,39 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12c (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| Purity is a field of the contract, not a wish | `contracts.SINGLE_FIELDS`/`PURE_VALUES`, `tests/test_contracts.py: DocBlockTests`, `ContractGuardTests.test_every_public_name_has_a_contract` | `pure:` joins `pre:`, `post:` and `cost:` as a single-valued field and is **required**; the only accepted values are `yes` and `no`, and anything else is reported as `pure: must be \"yes\" or \"no\"`, so a function cannot be silently undocumented about effects |
+| The claim is checked against the body | `contracts.purity_problems`, `ContractGuardTests.test_a_pure_function_is_pure_by_its_body` | a function documented `pure: yes` is reported when it prints, calls a builtin with an effect, calls a function documented `pure: no`, takes a `mut` parameter, writes through a parameter, or calls a function in another module — the last is reported *because* purity across modules is not decidable from one file, not because it is assumed |
+| The claim is not vacuous, and it holds at every optimisation level | `ContractGuardTests.test_the_purity_claim_is_not_vacuous`, `test_a_pure_function_answers_the_same_at_every_optimisation_level` | at least 10 of the 14 public functions are documented pure, so the guard has something to check; every example of a pure function is built and run at `-O0`, `-O1`, `-O2` and `-O3`, twice each, and all eight runs print the same bytes. **A second backend does not exist until N14**, so the phase's "across backends" is exercised as "across optimisation levels of the one backend" and is not claimed as more |
+| The guard fails on each way of lying | `PurityNegativeControlTests` (5 tests) | a pure function that prints, one that calls a `pure: no` function, one that takes `mut`, one that writes through its parameter and one whose field says `maybe` are each reported with their own message; the negative control writes its module into a temporary directory, so the guard runs on the same code path as the library |
+| The standard library declares its purity, honestly | `nava_lang/stdlib/{math,sort,text}.nv`, `contracts.check_program` | 14 public functions carry `pure:`; ten are `yes`; the four that are not say so and no guard pretends otherwise. `check_program` returns `[]` for all three modules, and `sort.nv` is where the field's placement is demonstrated: a continuation line of `cost:` comes first, then `pure:`, then the examples — a field belongs to the block it is in, and reading it is positional |
+| A function is a value, with its module written on it | `tests/test_self_test.py: test_the_program_names_every_public_function`, `LANGUAGE.md` (`function_value`) | `test::passing` names a `fn() -> i64` across a module boundary; the parser keeps the qualifier in the tree (`Variable.module`), the checker resolves it through the module table, and the three ways it can fail are the ones a call can fail with — `E0359` module not imported, `E0325` no such function, `E0433` not `pub` — plus `E0372` when the file is edition 1 and has no function type at all |
+| The `test` module is written in Nava and behaves as documented | `nava_lang/stdlib/test.nv`, `tests/test_self_test.py`, `docs/stdlib/test.md` | five public functions: `expect_true`, `expect_i64`, `expect_str` return the number of failures, `run(name, body)` prints `ok   <name>` or `  expected 8, got 7: abs of -7` followed by `FAIL <name>: 1 failed`, and `summary(suite, failures)` prints `<suite>: ok` or `<suite>: <n> failed` and returns the count. A failing test does not stop the ones after it, and the process exit status **is** the failure count: two failures exit `2` |
+| The library tests itself, in the language, in CI | `tests/fixtures/positive/self_test.nv`, `tests/test_self_test.py` (11 tests) | 14 bodies, one per public name of `math`, `sort` and `text`, are run through `test::run` and summarised; `nava run` prints 14 `ok` lines and `standard library: ok` and exits `0` — 305 bytes, recorded as the 31st positive case, so the report itself is a regression test. The same report is produced at `-O0`, `-O2` and `-O3`, and produced identically on a second run |
+| The self-test is a test, not a ritual | `SelfTestNegativeControlTests` (4 tests) | one wrong expectation makes the run exit `1` with `  expected 8, got 7: abs of -7` and `FAIL math::abs: 1 failed` while the other 13 report `ok`; inverting a condition (`!text::is_ascii`) fails that test too; a body with two failing checks reports `two checks: 2 failed` and exits `2`; a body with none reports `ok   body` and `three checks: ok` |
+| The `test` module is documented like the rest of the library | `nava doc`, `docs/stdlib/test.md`, `tests/test_contracts.py: test_the_generated_reference_matches_the_tree` | `test.nv` carries the same doc blocks — summary, `pre:`, `post:`, `cost:`, `pure:` and examples — and `docs/stdlib/test.md` (107 lines, 3 087 bytes) is generated from them and compared byte for byte; the guard also compiles and runs the module's own examples, so the runner is tested by the machinery it exists for |
+| The specification and the guide moved with the code | `LANGUAGE.md` (the field table, "What `pure: yes` promises", "The `test` module", `function_value`), `guides/nava-1.md`, `guides/manifest.json` | purity is normative: what it forbids, what it does not promise, and the fact that a cross-module call is *reported* rather than assumed pure; the guide lists every packaged function (the guard now reads `pub fn` as well, so a module's exports cannot be omitted), shows `test::run("abs", abs_tests)` as a whole program, and is re-pinned at 28 614 bytes, 28 542 characters, 813 lines, sha256 `f13b96de…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 95 049 tokens (`cl100k_base`) and 95 434 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 94 413 / 94 798 tokens (28 614 bytes, 813 lines) |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 10 377 lines, 14 modules, 328 functions under `nava_lang/` after this increment (10 242 / 14 / 325 at N12b): `contracts.py` grew by the purity analysis and the field reader, and the parser and the checker by the qualified function value |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 700 registered tests, 11 tasks with 76 cases, 191 spec fixtures, 147 diagnostic codes`; suite **770 tests OK** (1 308 subtests); the four packaged modules are accepted by the grammar and by `tests/test_stdlib.py`, which now names `test` in its module list; release checks OK; the guide digest verifies |
+
+Negative controls: five ways of lying about purity (`PurityNegativeControlTests`)
+and four ways of writing a test that does not test what it says
+(`SelfTestNegativeControlTests`) — a wrong expectation, a wrong exit status, a
+failing body that must name itself, and a passing body that must stay quiet. Each
+is a module or a program written into a temporary directory, so nothing is
+exercised on a mock.
+
+Deliberately not done in N12c, and why: `fmt`, `io`, `fs`, `args`, `collections`
+and `time`, which are the rest of the phase and are each a module with a contract,
+an example and a line in the self-test; and the cross-backend half of the
+determinism gate, which needs the native backend of N14 before it can be measured
+rather than asserted. What is claimed here is narrower than the phase's sentence,
+and the narrower thing is the one with a probe behind it.
 
 #### Delivery record N12b (2026-10-29)
 
@@ -865,7 +898,8 @@ self-testing facility.
 |---|---|---|
 | N12a | **Tables**: `HashMap(K, V)` and `HashSet(T)` — keys that hash, a total `map_get -> Option(V)`, open addressing with tombstones, copies in and out under the element rule, and the move rules a container inherits | **Delivered** (record below) |
 | N12b | **Contracts**: a doc block (`///`) as syntax, `nava_lang/contracts.py`, `nava doc` and the reference under `docs/stdlib/`; the guard that fails on an undocumented public name, an example that is false or does not compile, and a documented failure that does not happen | **Delivered** (record below) |
-| N12c–N12x | the `test` module, determinism across backends, and the remaining `fmt`/`io`/`fs`/`args`/`collections`/`text`/`math`/`sort`/`time` modules | Not started |
+| N12c | **Purity and self-testing**: `pure: yes`/`no` as a required contract field, with a guard that reads the body instead of believing the claim; the `test` module — assertions, a runner and a summary — written in Nava; a function value that carries its module (`test::passing`); and a standard library that tests itself and returns its own failure count as the exit status | **Delivered** (record below) |
+| N12d–N12x | the remaining `fmt`/`io`/`fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here
@@ -1103,7 +1137,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 10 242 Python lines and 325 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 10 377 Python lines and 328 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |
