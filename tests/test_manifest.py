@@ -287,7 +287,7 @@ class ProjectTests(unittest.TestCase):
         self.assertIn("or in any directory above it", caught.exception.message)
 
 
-class CommandTests(unittest.TestCase):
+class ProjectCommandTests(unittest.TestCase):
     """`nava project` and `--project` on the commands that compile."""
 
     def run_nava(self, *arguments: str, cwd: str) -> subprocess.CompletedProcess:
@@ -330,7 +330,8 @@ class CommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             result = self.run_nava("project", cwd=directory)
         self.assertEqual(result.returncode, 2)
-        self.assertIn("nava: no nava.toml in", result.stderr)
+        self.assertIn("nava: error[E0701]: no nava.toml in", result.stderr)
+        self.assertIn("hint:", result.stderr)
 
     def test_the_compiling_commands_take_their_entry_from_the_manifest(self):
         with tempfile.TemporaryDirectory() as directory:

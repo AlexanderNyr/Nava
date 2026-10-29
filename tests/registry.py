@@ -244,7 +244,7 @@ REGISTERED_TESTS = {
         "test_the_manifest_is_found_in_a_parent_directory",
         "test_no_manifest_anywhere_is_its_own_code",
     },
-    "CommandTests": {
+    "ProjectCommandTests": {
         "test_the_project_command_describes_the_manifest",
         "test_the_json_report_is_byte_identical_between_two_runs",
         "test_a_broken_manifest_is_reported_with_its_code",
@@ -252,6 +252,58 @@ REGISTERED_TESTS = {
         "test_the_compiling_commands_take_their_entry_from_the_manifest",
         "test_a_source_and_a_project_together_are_refused",
         "test_neither_a_source_nor_a_project_is_refused",
+    },
+    #: N13b: `nava.lock`. The phase's package gate is a sentence about trust, so
+    #: this module carries the tamper list — one flipped byte in a vendored package,
+    #: a digest edited by hand, a version or a dependency list that moved, an entry
+    #: nothing needs, an entry that went missing — plus the digest's indifference to
+    #: paths and listing order, and a second checkout.
+    "DigestTests": {
+        "test_the_same_tree_in_two_places_has_one_digest",
+        "test_one_flipped_byte_is_a_different_package",
+        "test_a_rename_changes_the_digest_as_much_as_a_byte",
+        "test_the_order_files_were_written_in_does_not_matter",
+        "test_a_symbolic_link_is_refused_rather_than_followed",
+        "test_an_empty_package_still_has_a_digest",
+    },
+    "ResolutionTests": {
+        "test_a_transitive_dependency_is_resolved_and_sorted",
+        "test_a_package_that_is_not_vendored_is_named_with_who_wanted_it",
+        "test_a_version_outside_the_project_constraint_is_refused",
+        "test_a_version_outside_a_package_constraint_is_refused_too",
+        "test_a_cycle_is_refused_with_the_cycle_written_out",
+        "test_a_directory_that_is_not_a_package_is_refused",
+        "test_a_package_vendored_under_the_wrong_name_is_refused",
+        "test_a_package_may_not_shadow_a_standard_module",
+        "test_a_package_with_no_version_is_refused",
+    },
+    "LockfileFileTests": {
+        "test_the_text_is_the_same_bytes_twice",
+        "test_a_written_file_reads_back_to_the_same_resolution",
+        "test_the_reader_refuses_what_it_did_not_write",
+        "test_a_missing_lockfile_is_its_own_code",
+    },
+    "CheckTests": {
+        "test_an_untouched_project_checks_clean",
+        "test_one_flipped_byte_in_a_vendored_package_is_e0804",
+        "test_a_digest_edited_by_hand_is_e0804_too",
+        "test_a_version_that_moved_is_e0803",
+        "test_a_dependency_list_that_moved_is_e0803",
+        "test_an_entry_nothing_needs_is_e0803",
+        "test_an_entry_that_went_missing_is_e0803",
+        "test_a_lockfile_for_another_project_is_e0803",
+        "test_a_second_checkout_checks_clean",
+    },
+    "GraphTests": {
+        "test_the_graph_names_every_package_with_its_digest",
+        "test_the_graph_is_the_same_twice",
+    },
+    "LockCommandTests": {
+        "test_the_command_writes_the_file_and_prints_the_graph",
+        "test_the_file_is_the_same_bytes_when_written_twice",
+        "test_check_reports_ok_and_then_catches_a_tampered_package",
+        "test_the_json_report_carries_every_package",
+        "test_checking_without_a_lockfile_says_to_write_one",
     },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
@@ -1221,6 +1273,14 @@ CODES_TESTED_ELSEWHERE = {
     "E0707": "tests/test_manifest.py: test_the_entry_may_not_leave_the_project",
     "E0708": "tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name",
     "E0709": "tests/test_manifest.py: test_a_name_is_a_lower_case_identifier",
+    "E0801": "tests/test_lockfile.py: test_a_missing_lockfile_is_its_own_code",
+    "E0802": "tests/test_lockfile.py: test_the_reader_refuses_what_it_did_not_write",
+    "E0803": "tests/test_lockfile.py: test_an_entry_nothing_needs_is_e0803",
+    "E0804": "tests/test_lockfile.py: test_one_flipped_byte_in_a_vendored_package_is_e0804",
+    "E0805": "tests/test_lockfile.py: test_a_package_that_is_not_vendored_is_named_with_who_wanted_it",
+    "E0806": "tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused",
+    "E0807": "tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out",
+    "E0808": "tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -1286,6 +1346,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_collections  # noqa: PLC0415
     import test_time  # noqa: PLC0415
     import test_manifest  # noqa: PLC0415
+    import test_lockfile  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1295,7 +1356,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
                    test_io, test_fs, test_args, test_collections, test_time,
-                   test_manifest,
+                   test_manifest, test_lockfile,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1371,10 +1432,17 @@ def check_skip_state() -> list[str]:
     import test_collections  # noqa: PLC0415
     import test_time  # noqa: PLC0415
     import test_manifest  # noqa: PLC0415
-    for module, class_name in ((test_manifest, "ParsingTests"),
+    import test_lockfile  # noqa: PLC0415
+    for module, class_name in ((test_lockfile, "DigestTests"),
+                               (test_lockfile, "ResolutionTests"),
+                               (test_lockfile, "LockfileFileTests"),
+                               (test_lockfile, "CheckTests"),
+                               (test_lockfile, "GraphTests"),
+                               (test_lockfile, "LockCommandTests"),
+                               (test_manifest, "ParsingTests"),
                                (test_manifest, "NameAndVersionTests"),
                                (test_manifest, "ProjectTests"),
-                               (test_manifest, "CommandTests"),
+                               (test_manifest, "ProjectCommandTests"),
                                (test_time, "WallClockTests"),
                                (test_time, "MonotonicClockTests"),
                                (test_time, "ArithmeticTests"),

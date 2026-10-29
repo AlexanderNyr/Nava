@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+N13b: **`nava.lock`** — the resolved graph, by digest.
+
+- Packages are vendored: `vendor/<name>/` holds a `nava.toml` and its `.nv` files.
+  There is no registry and no network; a build reads the tree it was given.
+- A package is identified by a **content digest**: SHA-256 over `"F\0" + path +
+  "\0" + length + "\0" + bytes` for each regular file in byte order of the
+  relative path, then `"E\0"`. No timestamps, no modes, no absolute paths — so two
+  checkouts agree and one flipped byte does not. A symbolic link inside a package is
+  refused.
+- `nava lock` resolves the graph (transitively, every constraint on a name, cycles
+  refused), writes `nava.lock` sorted by name, and prints the graph with its
+  digests. `nava lock --check` recomputes it and stops at the first disagreement.
+- The tamper list has one code per accident: an edited package or a hand-edited
+  digest (`E0804`, with both digests in the message), a version or dependency list
+  that moved, an entry nothing needs and an entry that went missing (`E0803`), a
+  missing lockfile (`E0801`), a malformed one (`E0802`), a package that is not
+  vendored (`E0805`), a version outside a constraint placed by the project or by a
+  package (`E0806`), a cycle (`E0807`), a directory that is not a package (`E0808`).
+- `^0.2.0` no longer accepts `0.3.0`: the caret rule is semantic versioning's, which
+  may not move the left-most non-zero digit.
+- One reader serves both files: the manifest's parser became a TOML-subset reader
+  with repeated tables, used by `nava.toml` and `nava.lock`.
+
 N13a: **`nava.toml`** — a project has a manifest.
 
 - `[package]` (`name`, `version`, `edition`), `[build]` (`entry`, default

@@ -1277,6 +1277,76 @@ the lockfile will give it, no digests and no vendoring. Those are the next
 increments of the phase; what exists now is the file, read strictly, and the two
 commands that use it.
 
+## Packages: `vendor/`, `nava.lock`
+
+A dependency is **vendored**: a directory `vendor/<name>/` holding the package's
+`nava.toml` and its `.nv` files. There is no registry and no network — a build
+reads the tree it was given, and nothing else.
+
+A package is identified by its **content digest**, not by its name. The digest is
+SHA-256 over this canonical serialisation of the directory:
+
+```
+for each regular file, in byte order of its relative path:
+    "F\0" + relative path + "\0" + decimal byte length + "\0" + bytes
+end marker: "E\0"
+```
+
+Nothing else is in it: no timestamps, no file modes, no absolute paths, no order
+from a directory listing. Two checkouts of one package therefore agree, and one
+flipped byte does not. A symbolic link inside a package is refused (`E0808`: a
+package whose content depends on where a link points is not identified by its own
+bytes).
+
+`nava lock` resolves the graph from `vendor/` and writes `nava.lock`:
+
+```
+$ nava lock
+demo 0.1.0
+└── json 1.2.3 sha256:84890247…
+    └── util 0.2.1 sha256:ddea2d15…
+Wrote: nava.lock
+```
+
+```
+[lock]
+format = 1
+project = "demo"
+version = "0.1.0"
+
+[[package]]
+name = "json"
+version = "1.2.3"
+digest = "sha256:84890247…"
+source = "vendor/json"
+requires = ["util"]
+```
+
+`requires` is sorted by name and the `[[package]]` blocks are sorted by name, so
+the file `nava lock` writes is the same bytes for the same tree — which is what
+makes it worth committing.
+
+Resolution walks the graph: a package that is not vendored is `E0805` (naming who
+required it), a version outside a constraint is `E0806` (naming the constraint and
+who placed it — the project or another package), a cycle is `E0807` with the cycle
+written out (`json -> util -> json`), and a directory that is not a package is
+`E0808`. Every constraint on a name must hold, from the project and from every
+package that requires it.
+
+`nava lock --check` recomputes the resolution and compares it with the file:
+
+| What changed | Code |
+|---|---|
+| the lockfile names a package the project does not depend on, misses one it does, or disagrees about a version or a dependency list | `E0803` |
+| bytes that no longer hash to the digest they were locked at — an edited package or a hand-edited digest | `E0804` (the message names both digests) |
+| the lockfile describes another project or another version of this one | `E0803` |
+| there is no lockfile at all | `E0801` |
+| the lockfile is not in the format this compiler writes (unknown field, wrong `format`, unsorted `requires`, a digest that is not `sha256:` and 64 hex digits, a package listed twice) | `E0802` |
+
+So a tampered package fails the build with a named error, and a lockfile edited by
+hand without a matching digest fails too. Offline is not an option to remember: it
+is the only mode there is.
+
 ## The clock
 
 Three builtins read the machine's clocks, and there is no way to set one:
@@ -2642,6 +2712,19 @@ never changes meaning; a new condition gets a new code.
 | `E0507` | error | path is not a directory | `tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported` |
 | `E0508` | error | `nava doc` was asked for a module that does not exist | `tests/test_contracts.py: test_an_unknown_module_is_reported` |
 | `E0509` | error | no program to compile | `tests/test_manifest.py: test_neither_a_source_nor_a_project_is_refused` |
+
+**Packages and the lockfile**
+
+| Code | Severity | Meaning | Triggered by |
+|---|---|---|---|
+| `E0801` | error | no `nava.lock` was found | `tests/test_lockfile.py: test_checking_without_a_lockfile_says_to_write_one` |
+| `E0802` | error | malformed `nava.lock` | `tests/test_lockfile.py: test_the_reader_refuses_what_it_did_not_write` |
+| `E0803` | error | `nava.lock` does not describe this project | `tests/test_lockfile.py: test_an_entry_nothing_needs_is_e0803` |
+| `E0804` | error | a package does not match its digest | `tests/test_lockfile.py: test_one_flipped_byte_in_a_vendored_package_is_e0804` |
+| `E0805` | error | a dependency is not vendored | `tests/test_lockfile.py: test_a_package_that_is_not_vendored_is_named_with_who_wanted_it` |
+| `E0806` | error | a version is outside its constraint | `tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused` |
+| `E0807` | error | the dependency graph has a cycle | `tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out` |
+| `E0808` | error | a package is not a Nava package | `tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused` |
 
 **Projects and the manifest**
 

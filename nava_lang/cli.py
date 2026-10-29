@@ -249,6 +249,16 @@ def make_parser() -> argparse.ArgumentParser:
     )
     project_cmd.add_argument("path", nargs="?", help="directory to start from "
                                                     "(default: the working directory)")
+    lock_cmd = sub.add_parser(
+        "lock", help="resolve the dependencies and write or check nava.lock",
+        description="Resolve the project's dependencies from vendor/ and write "
+                    "nava.lock, or with --check compare the lockfile with the tree "
+                    "and stop at the first disagreement.",
+    )
+    lock_cmd.add_argument("path", nargs="?", help="directory to start from "
+                                                 "(default: the working directory)")
+    lock_cmd.add_argument("--check", action="store_true",
+                          help="check the lockfile instead of writing it")
     run = sub.add_parser(
         "run", help="compile and execute a program",
         description="Compile and run a program. By default the program runs under the best "
@@ -304,6 +314,20 @@ def compile_c(code: str, binary: Path, cc: str | None, opt: str) -> bool:
     return True
 
 
+def print_diagnostic(error: NavaError) -> None:
+    """One diagnostic on stderr, with its code and its hint.
+
+    The commands that read a project file rather than a program (`project`, `lock`)
+    have no source location to print, so they name the code and keep the hint: a
+    reader who has to look up what `E0804` means has been told something, but a
+    reader who is told "restore the package" has been helped.
+    """
+    print(f"nava: error[{error.diagnostic.code}]: {error.diagnostic.message}",
+          file=sys.stderr)
+    if error.diagnostic.hint:
+        print(f"  hint: {error.diagnostic.hint}", file=sys.stderr)
+
+
 def report_warnings(warnings: list[Diagnostic], path: Path, machine: bool) -> None:
     """Warnings go to stderr in human mode and into the JSON document otherwise."""
     if machine:
@@ -335,6 +359,45 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(f"nava: {exc.diagnostic.message}", file=sys.stderr)
             return 2
+    if args.command == "lock":
+        # Like `doc` and `project`, this command reads files that are not a
+        # program, so it needs no `main` and no C compiler.
+        from . import lockfile as lockfile_module
+        from . import manifest as manifest_module
+
+        try:
+            project = manifest_module.resolve(args.path)
+            if args.check:
+                locked = lockfile_module.read(project.root / lockfile_module.LOCK_NAME)
+                lockfile_module.check(project, locked)
+                if machine:
+                    print(report_json(str(project.path), "ok", [],
+                                      {"checked": str(project.root / lockfile_module.LOCK_NAME),
+                                       **lockfile_module.summary_json(locked)}))
+                else:
+                    print(f"OK: {lockfile_module.LOCK_NAME} describes "
+                          f"{project.name} {project.version} "
+                          f"({len(locked.packages)} packages)")
+                return 0
+            resolution = lockfile_module.resolve(project)
+            path = lockfile_module.write(resolution,
+                                         project.root / lockfile_module.LOCK_NAME)
+            if machine:
+                print(report_json(str(project.path), "ok", [],
+                                  {"written": str(path),
+                                   **lockfile_module.summary_json(resolution)}))
+            else:
+                sys.stdout.write(lockfile_module.graph(resolution, project))
+                print(f"Wrote: {path}")
+            return 0
+        except NavaError as exc:
+            where = str(Path(args.path or ".") / manifest_module.MANIFEST_NAME)
+            if machine:
+                print(report_json(where, "error", [exc.diagnostic]))
+            else:
+                print_diagnostic(exc)
+            return 2
+
     if args.command == "project":
         # Like `doc`, the project command reads a file that is not a program, so
         # it needs no `main` and no C compiler.
@@ -353,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
             if machine:
                 print(report_json(where, "error", [exc.diagnostic]))
             else:
-                print(f"nava: {exc.diagnostic.message}", file=sys.stderr)
+                print_diagnostic(exc)
             return 2
 
     # `path` is set before the `try` so the error handler has somewhere to point

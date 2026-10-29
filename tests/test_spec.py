@@ -99,6 +99,16 @@ CODES_TESTED_ELSEWHERE = {
     "E0708": "tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name, "
              "test_a_dependency_may_not_take_one_either",
     "E0709": "tests/test_manifest.py: test_a_name_is_a_lower_case_identifier",
+    # The lockfile's diagnostics need a manifest, a `vendor/` tree and a lockfile,
+    # which is three files and a directory: tests/test_lockfile.py holds them.
+    "E0801": "tests/test_lockfile.py: test_a_missing_lockfile_is_its_own_code",
+    "E0802": "tests/test_lockfile.py: test_the_reader_refuses_what_it_did_not_write",
+    "E0803": "tests/test_lockfile.py: CheckTests",
+    "E0804": "tests/test_lockfile.py: test_one_flipped_byte_in_a_vendored_package_is_e0804",
+    "E0805": "tests/test_lockfile.py: test_a_package_that_is_not_vendored_is_named_with_who_wanted_it",
+    "E0806": "tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused",
+    "E0807": "tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out",
+    "E0808": "tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

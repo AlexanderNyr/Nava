@@ -114,8 +114,10 @@ class Constraint:
     The four forms the language accepts:
 
     * `1.2.3` or `=1.2.3` — exactly that version;
-    * `^1.2.3` — the same major version, from `1.2.3` up to but not including
-      `2.0.0`; the compatibility rule of semantic versioning;
+    * `^1.2.3` — compatible with `1.2.3` in the sense of semantic versioning: from
+      `1.2.3` up to but not including the next version of the **left-most non-zero**
+      digit, so `^1.2.3` is `< 2.0.0`, `^0.2.3` is `< 0.3.0` and `^0.0.3` is
+      `< 0.0.4`;
     * `~1.2.3` — the same minor version, from `1.2.3` up to but not including
       `1.3.0`;
     * `*` — any version at all.
@@ -133,8 +135,18 @@ class Constraint:
         if self.operator == "=":
             return version == self.version
         if self.operator == "^":
-            return (version >= self.version
-                    and version.major == self.version.major)
+            # Semantic versioning's caret rule: the left-most non-zero digit may not
+            # change. `^1.2.3` is `< 2.0.0`, `^0.2.3` is `< 0.3.0` and `^0.0.3` is
+            # `< 0.0.4` — which is why a 0.x package is not "compatible" with the
+            # next minor just because the major has not moved.
+            if version < self.version:
+                return False
+            if self.version.major != 0:
+                return version.major == self.version.major
+            if self.version.minor != 0:
+                return version.major == 0 and version.minor == self.version.minor
+            return (version.major == 0 and version.minor == 0
+                    and version.patch == self.version.patch)
         if self.operator == "~":
             return (version >= self.version
                     and version.major == self.version.major
@@ -360,72 +372,163 @@ def _split_key(text: str, line: int, path: str) -> tuple[str, str]:
                Location(line, 1, path))
 
 
-def from_text(text: str, path: Path | str = MANIFEST_NAME) -> Manifest:
-    """Read a manifest from `text`; `path` is used for the project root."""
+
+@record()
+class FieldValue:
+    """One `key = value` line: what was written, of which shape, and where."""
+
+    name: str
+    value: object
+    shape: str
+    loc: Location
+
+
+@record()
+class Section:
+    """One table of a document: `[name]`, or one of the `[[name]]` repeats."""
+
+    name: str
+    loc: Location
+    values: list[FieldValue] = field(default_factory=list)
+
+    def get(self, key: str) -> object | None:
+        for item in self.values:
+            if item.name == key:
+                return item.value
+        return None
+
+    def where(self, key: str) -> Location | None:
+        for item in self.values:
+            if item.name == key:
+                return item.loc
+        return None
+
+    def raw(self, key: str) -> FieldValue | None:
+        for item in self.values:
+            if item.name == key:
+                return item
+        return None
+
+
+def shape_of(value: object) -> str:
+    """The name of a value's shape, as an error message spells it."""
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, list):
+        return "array"
+    return "string"
+
+
+def read_document(text: str, path: Path | str, allowed: tuple[str, ...],
+                  repeated: tuple[str, ...] = (), name: str = "") -> list[Section]:
+    """Read the TOML subset the project files use, as a list of tables.
+
+    The subset: table headers (`[a]`, and `[[a]]` for a table that repeats), keys,
+    strings with four escapes, integers, booleans and arrays of strings, with
+    comments and blank lines. Nothing else is accepted, and a construct outside it
+    is refused with a line rather than skipped: the two files a project is built
+    from are read by a reader whose refusals are the point.
+
+    `allowed` names the tables the caller knows about (`E0704` otherwise) and
+    `repeated` the ones that may appear more than once. `name` is what the file is
+    called in messages, so `nava.toml` and `nava.lock` both read well.
+    """
     path = Path(path)
     display = str(path)
-    values: dict[str, dict[str, object]] = {name: {} for name in TABLES}
-    locations: dict[tuple[str, str], Location] = {}
-    table = ""
+    label = name or path.name
+    sections: list[Section] = []
+    current: Section | None = None
     for number, raw in enumerate(text.splitlines(), start=1):
         line = _without_comment(raw).strip()
         if not line:
             continue
+        if line.startswith("[["):
+            if not line.endswith("]]"):
+                raise make("E0702", f"unclosed table header in {label}: {line!r}",
+                           Location(number, 1, display))
+            table = line[2:-2].strip()
+            if table not in allowed or table not in repeated:
+                raise make("E0704", f"unknown table [[{table}]] in {label}",
+                           Location(number, 1, display),
+                           hint=f"{label} has {', '.join('[' + item + ']' for item in allowed)}")
+            current = Section(table, Location(number, 1, display))
+            sections.append(current)
+            continue
         if line.startswith("["):
             if not line.endswith("]"):
-                raise make("E0702", f"unclosed table header {line!r}",
+                raise make("E0702", f"unclosed table header in {label}: {line!r}",
                            Location(number, 1, display))
-            name = line[1:-1].strip()
-            if name not in TABLES:
-                raise make("E0704", f"unknown table [{name}] in {MANIFEST_NAME}",
+            table = line[1:-1].strip()
+            if table not in allowed:
+                raise make("E0704", f"unknown table [{table}] in {label}",
                            Location(number, 1, display),
-                           hint=f"the manifest has {', '.join('[' + t + ']' for t in TABLES)}")
-            if name == "dependencies":
-                table = "dependencies"
-                continue
-            table = name
+                           hint=f"{label} has {', '.join('[' + item + ']' for item in allowed)}")
+            if table in repeated:
+                raise make("E0702", f"[{table}] is written as [[{table}]] in {label}",
+                           Location(number, 1, display))
+            if any(section.name == table for section in sections):
+                raise make("E0702", f"table [{table}] is written twice in {label}",
+                           Location(number, 1, display))
+            current = Section(table, Location(number, 1, display))
+            sections.append(current)
             continue
-        if not table:
-            raise make("E0702", "a key must follow a table header",
+        if current is None:
+            raise make("E0702", f"a key must follow a table header in {label}",
                        Location(number, 1, display),
-                       hint="the first line of nava.toml is [package]")
+                       hint="the first line of the file is a [table] header")
         key, rest = _split_key(line, number, display)
         if not key:
-            raise make("E0702", f"a key is missing on line {number}", Location(number, 1, display))
-        if table == "dependencies":
-            if key in values["dependencies"]:
-                raise make("E0702", f"dependency {key!r} is declared twice",
-                           Location(number, 1, display))
-            values["dependencies"][key] = _value(rest, number, display, table, key)
-            locations[(table, key)] = Location(number, 1, display)
-            continue
-        if key not in FIELDS[table]:
-            known = ", ".join(sorted(FIELDS[table]))
-            raise make("E0704", f"unknown field {table}.{key} in {MANIFEST_NAME}",
-                       Location(number, 1, display),
-                       hint=f"[{table}] has {known}")
-        if key in values[table]:
-            raise make("E0702", f"{table}.{key} is written twice",
+            raise make("E0702", f"a key is missing on line {number} of {label}",
                        Location(number, 1, display))
-        values[table][key] = _value(rest, number, display, table, key)
-        locations[(table, key)] = Location(number, 1, display)
+        if current.raw(key) is not None:
+            raise make("E0702", f"{current.name}.{key} is written twice",
+                       Location(number, 1, display))
+        value = _value(rest, number, display, current.name, key)
+        current.values.append(FieldValue(key, value, shape_of(value),
+                                         Location(number, 1, display)))
+    return sections
+
+
+def first_table(sections: list[Section], name: str) -> Section | None:
+    for section in sections:
+        if section.name == name:
+            return section
+    return None
+
+
+def from_text(text: str, path: Path | str = MANIFEST_NAME) -> Manifest:
+    """Read a manifest from `text`; `path` is used for the project root."""
+    path = Path(path)
+    sections = read_document(text, path, TABLES, name=MANIFEST_NAME)
+    values: dict[str, dict[str, object]] = {name: {} for name in TABLES}
+    locations: dict[tuple[str, str], Location] = {}
+    for section in sections:
+        if section.name not in values:
+            values[section.name] = {}
+        for item in section.values:
+            if section.name != "dependencies" and item.name not in FIELDS[section.name]:
+                known = ", ".join(sorted(FIELDS[section.name]))
+                raise make("E0704", f"unknown field {section.name}.{item.name} in "
+                                    f"{MANIFEST_NAME}", item.loc,
+                           hint=f"[{section.name}] has {known}")
+            values[section.name][item.name] = item.value
+            locations[(section.name, item.name)] = item.loc
 
     for table_name, fields in FIELDS.items():
         for key, shape in fields.items():
-            if key not in values[table_name]:
+            if key not in values.get(table_name, {}):
                 continue
             value = values[table_name][key]
-            actual = ("integer" if isinstance(value, int) and not isinstance(value, bool)
-                      else "boolean" if isinstance(value, bool)
-                      else "array" if isinstance(value, list)
-                      else "string")
+            actual = shape_of(value)
             if actual != shape:
                 raise make("E0702", f"{table_name}.{key} must be a {shape}, not a {actual}",
                            locations.get((table_name, key)))
 
     for table_name, required in REQUIRED.items():
         for key in required:
-            if key not in values[table_name]:
+            if key not in values.get(table_name, {}):
                 raise make(
                     "E0703",
                     f"{MANIFEST_NAME} is missing {table_name}.{key}",
@@ -447,7 +550,7 @@ def from_text(text: str, path: Path | str = MANIFEST_NAME) -> Manifest:
             locations.get(("package", "edition")),
         )
 
-    entry = str(values["build"].get("entry", DEFAULT_ENTRY))
+    entry = str(values.get("build", {}).get("entry", DEFAULT_ENTRY))
     if not entry:
         raise make("E0707", "build.entry is empty", locations.get(("build", "entry")))
     entry_path = Path(entry)
@@ -461,9 +564,9 @@ def from_text(text: str, path: Path | str = MANIFEST_NAME) -> Manifest:
                    hint="the entry file lives inside the directory of nava.toml")
 
     dependencies: list[Dependency] = []
-    for dependency_name in values["dependencies"]:
+    for dependency_name, written in values["dependencies"].items():
         location = locations.get(("dependencies", dependency_name))
-        written = values["dependencies"][dependency_name]
+        check_name(str(dependency_name), "dependency", location, standard)
         if not isinstance(written, str):
             raise make(
                 "E0702",
@@ -472,8 +575,7 @@ def from_text(text: str, path: Path | str = MANIFEST_NAME) -> Manifest:
                 location,
                 hint='write json = "^1.2.3"',
             )
-        check_name(str(dependency_name), "dependency", location, standard)
-        constraint = parse_constraint(str(values["dependencies"][dependency_name]), location)
+        constraint = parse_constraint(written, location)
         dependencies.append(Dependency(str(dependency_name), constraint))
 
     root = path.parent if str(path) != MANIFEST_NAME else Path(".")

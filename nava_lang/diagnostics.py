@@ -17,6 +17,7 @@ E04xx   Resource limits (nesting, compiler recursion)
 E05xx   Command line and host environment
 E06xx   Sandbox and isolation
 E07xx   Projects, the manifest and packages
+E08xx   Vendored packages and the lockfile
 W00xx   Warnings; never fatal
 ======  ====================================================================
 
@@ -198,6 +199,15 @@ CODES: dict[str, tuple[str, str]] = {
     "E0707": (Severity.ERROR, "unusable build entry"),
     "E0708": (Severity.ERROR, "a package shadows a standard-library module"),
     "E0709": (Severity.ERROR, "invalid package name"),
+    # --- packages and the lockfile ------------------------------------------
+    "E0801": (Severity.ERROR, "no nava.lock was found"),
+    "E0802": (Severity.ERROR, "malformed nava.lock"),
+    "E0803": (Severity.ERROR, "nava.lock does not describe this project"),
+    "E0804": (Severity.ERROR, "a package does not match its digest"),
+    "E0805": (Severity.ERROR, "a dependency is not vendored"),
+    "E0806": (Severity.ERROR, "a version is outside its constraint"),
+    "E0807": (Severity.ERROR, "the dependency graph has a cycle"),
+    "E0808": (Severity.ERROR, "a package is not a Nava package"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),

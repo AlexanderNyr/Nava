@@ -13,8 +13,9 @@ release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, t
 and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `Vec` or a `String`
 as a field, a payload or a type argument) and N11g (an element that owns storage)
 are delivered; N12 is complete through N12i (every module of the phase, with
-contracts, examples and tests), N13 has begun with N13a (`nava.toml`), and
-N13's remaining increments and N14–N18 are not started.** The
+contracts, examples and tests), N13 is in progress: N13a (`nava.toml`) and N13b
+(`nava.lock`, vendored packages and content digests) are delivered, and N13c–N13d
+and N14–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -132,7 +133,7 @@ the guard, and the two implementations must agree on every entry.
 | N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
-| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a delivered; the lockfile, vendoring, digests and reproducible builds are not |
+| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a and N13b delivered (manifest, vendored packages by digest, lockfile and its tamper checks); `--offline` as a recorded opt-in and byte-identical rebuilds are not |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
@@ -1155,9 +1156,45 @@ reproducibility records.
 | Increment | Scope | State |
 |---|---|---|
 | N13a | **`nava.toml`**: the manifest as a strict subset of TOML — `[package]`, `[build]`, `[dependencies]` — with names checked against the standard library, versions and constraints parsed and matched, the edition checked against the entry file, `nava project` to describe it and `--project` on the commands that compile | **Delivered** (record below) |
-| N13b | **The lockfile**: content-addressed digests, one line per resolved package, and the guard that refuses a lockfile that disagrees with the manifest | Not started |
+| N13b | **The lockfile**: vendored packages identified by a content digest, a resolver that walks the graph and refuses a cycle or a version outside its constraint, `nava lock` to write `nava.lock`, and `nava lock --check` to stop at the first disagreement — the tamper list the phase names, one code per accident | **Delivered** (record below) |
 | N13c | **Vendoring and `--offline`**: packages live in the tree, by digest, and a substituted or corrupted package fails the build with a named error; the dependency graph is printed | Not started |
 | N13d | **Reproducible builds**: sorted iteration everywhere it reaches output, `SOURCE_DATE_EPOCH`, recorded toolchain identity, and two checkouts producing one byte-identical binary | Not started |
+
+#### Delivery record N13b (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A package is identified by its content, not by its name | `nava_lang/lockfile.py: digest_of`, `DigestTests` (6 tests) | SHA-256 over `"F\0" + path + "\0" + length + "\0" + bytes` per regular file, in byte order of the relative path, then `"E\0"`. The same tree in two different absolute paths has one digest; one flipped byte, one rename, and one extra file each produce a different one; the order the files were written in changes nothing; an empty package still has a digest (`sha256:` of `"E\0"`); a symbolic link is refused rather than followed (`E0808`), because a package whose content depends on where a link points is not identified by its own bytes |
+| The graph is resolved, and every way it fails is named | `ResolutionTests` (9 tests) | a transitive dependency is resolved and the package list is sorted by name; a package that is not vendored is `E0805` **naming who required it**; a version outside a constraint is `E0806` naming the constraint and who placed it — the project or `json`; a cycle is `E0807` with the cycle written out (`json -> util -> json`); a directory without `nava.toml`, a package vendored under the wrong name, a package with no version and a package named after a standard module are `E0808`, `E0808`, `E0703` and `E0708` |
+| Every constraint counts, not just the project's | `test_a_version_outside_a_package_constraint_is_refused_too` | with `util 0.3.0` vendored and `json` requiring `^0.2.0`, resolution stops: `util 0.3.0 is outside ^0.2.0, required by json`. That case forced the caret rule to be the real one — the left-most non-zero digit may not move — so `^0.2.0` does not accept `0.3.0`, and `test_constraints_match_what_semantic_versioning_says` now carries the 0.x subcases (`^0.2.0` / `0.2.9` yes, `0.3.0` no; `^0.0.3` / `0.0.4` no) |
+| The lockfile is written once and read back whole | `LockfileFileTests`, `test_the_text_is_the_same_bytes_twice`, `test_a_written_file_reads_back_to_the_same_resolution` | the rendered text is identical for two resolutions of one tree; reading it back gives the same project, versions, digests and dependency lists. `requires` is sorted and the `[[package]]` blocks are sorted, so the file is the same bytes for the same tree — which is what makes committing it worth anything |
+| The lockfile is not trusted | `CheckTests` (9 tests) | one flipped byte in `vendor/json/json.nv` → `E0804` with both digests in the message; a digest edited by hand → `E0804` too; a version that moved → `E0803` naming both; a dependency list that moved → `E0803` quoting both lists; an entry nothing needs → `E0803`; an entry that went missing → `E0803`; a lockfile for another version of the project → `E0803`; no lockfile → `E0801`. The phase's tamper list, one code per accident, each with the difference printed |
+| A second checkout agrees | `test_a_second_checkout_checks_clean` | the whole project is copied to a fresh temporary directory — a different absolute path and different inodes — and the lockfile written by the first copy checks clean against it, and resolves to the same text. A digest that depended on a path would fail there; this is the local half of "builds from its lockfile in a second checkout" |
+| The graph is printed and recorded | `GraphTests`, `nava lock`, `--format json` | the command prints `demo 0.1.0` with `json 1.2.3 sha256:…` and `util 0.2.1 sha256:…` beneath it, children sorted by name, the same text twice; the JSON document carries every package with its digest, source and `requires`, so the recorded answer is the same answer |
+| The reader refuses what it did not write | `test_the_reader_refuses_what_it_did_not_write` (9 subcases) | no `[lock]` table, `format = 2`, an unknown field, a digest shorter than 64 hex digits, `requires` unsorted, `[package]` where `[[package]]` belongs, a package written twice, a missing digest, a missing name: each `E0802` (or `E0702` where the syntax is the problem). A hand-edited lockfile is a file this format can recognise |
+| One reader serves both files | `nava_lang/manifest.py: read_document`, `lockfile.py` | the manifest's parser became a general TOML-subset reader with `[[repeated]]` tables, used by `nava.toml` and `nava.lock` alike; the manifest's 29 tests were unchanged by the refactor, which is what makes it safe to say the two files are read by one set of rules |
+| Errors from these commands are named in human output too | `nava_lang/cli.py: print_diagnostic`, `test_check_reports_ok_and_then_catches_a_tampered_package` | `project` and `lock` print `nava: error[E0804]: …` and the hint on the next line rather than the bare message, so the phase's "fails the build with a named error" is true of the output a person sees, not only of the JSON |
+| The specification moved with the code | `LANGUAGE.md` (`## Packages: vendor/, nava.lock`, the code table) | the canonical digest serialisation, the resolution rules, the lockfile format and the check table are normative; the code table grows to **165** entries (157 at N13a), with a row for each of the eight new codes. A ninth (`E0809`, "the vendored package changed as opposed to the digest") was drafted and **removed**: `check` cannot tell the two apart, the message names both digests instead, and a registered code that nothing raises is a promise nobody keeps |
+| The overhead record was re-measured rather than assumed unchanged | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, the same number as N13a, and for a stated reason: the model-facing guide is unchanged, so the record was confirmed rather than copied |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 12 007 lines, 16 modules, 377 functions — 683 lines and 23 functions more than N13a; the sixteenth module is `lockfile.py` |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 838 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 165 diagnostic codes`; suite **908 tests OK** (1 487 subtests); release checks OK; the guide digest verifies |
+
+Negative controls: the flipped byte (`E0804`), the hand-edited digest (`E0804`), the
+version outside its constraint including the one a *package* placed (`E0806`), the
+cycle (`E0807`), the entry nothing needs (`E0803`), the package that is not a package
+(`E0808`), and the symbolic link inside a package (`E0808`). Each is a tree written
+into a temporary directory and run through the same code the real command runs.
+
+Deliberately not done in N13b, and why: **`--offline` as a recorded opt-in** and a
+**network fetcher**. There is nothing to fetch from — this compiler has no registry,
+and a lockfile that can only be produced by talking to one would be a promise about
+somebody else's server. Offline is the only mode, and it is stated as such rather
+than offered as a flag. **Byte-identical rebuilds** (`SOURCE_DATE_EPOCH`, toolchain
+identity, two checkouts producing one binary) are N13d: they are about the C
+compiler and the linker, not about the lockfile, and mixing them in here would put
+two different claims behind one gate. **Using a dependency's modules from a program**
+belongs with the build that consumes the graph (N13c), where the question is which
+`.nv` files enter the compilation rather than which packages exist.
 
 #### Delivery record N13a (2026-10-29)
 
