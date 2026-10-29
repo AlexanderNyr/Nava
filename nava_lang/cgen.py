@@ -718,6 +718,20 @@ static void nv_string_reserve(nv_string *text, int64_t needed) {
     text->cap = capacity;
 }
 
+/* A deep copy: a field, a payload or a returned value may hold a String, and
+   then the holder owns bytes of its own. Releasing one copy never touches the
+   other, which is what makes storing a String safe. */
+static nv_string *nv_string_copy(const nv_string *source) {
+    nv_string *copy = nv_string_new();
+    if (source != NULL && source->len > 0) {
+        nv_string_reserve(copy, nv_add(source->len, INT64_C(1)));
+        memcpy(copy->data, source->data, (size_t)source->len);
+        copy->len = source->len;
+        copy->data[copy->len] = '\0';
+    }
+    return copy;
+}
+
 static void nv_string_push(nv_string *text, const char *value) {
     int64_t length = (int64_t)strlen(value);
     nv_string_reserve(text, nv_add(nv_add(text->len, length), INT64_C(1)));
@@ -1079,22 +1093,23 @@ class CGenerator:
         return f"static {self.ctype(function.returns)} {function.cname}({params})"
 
     def owns_storage(self, typ: str | None) -> bool:
-        """Does a value of `typ` hold array storage of its own?
+        """Does a value of `typ` hold storage of its own?
 
         A `str` does not: a string is immutable and lives for the whole run. An
-        array does, and so does any struct or enum containing one, however
-        deeply — which is exactly the set of types that need a copy and a
-        release helper. The walk terminates because the checker refuses a
-        declaration that contains itself (`E0376`).
+        array, a `Vec(T)` and a `String` do, and so does any struct or enum
+        containing one, however deeply — which is exactly the set of types that
+        need a copy and a release helper. The walk terminates because the
+        checker refuses a declaration that contains itself (`E0376`).
         """
         if typ is None:
             return False
-        if is_vec(typ) or is_string(typ):
-            # A vector and a String are never copied into another value: they are
-            # created in a block, borrowed by a parameter, and released by their
-            # owner.
-            return False
-        if is_array(typ):
+        if is_vec(typ) or is_string(typ) or is_array(typ):
+            # A vector, a String and an array all own storage, so a struct or an
+            # enum that holds one contains storage and needs a copy and a
+            # release. A local of one of these types is never copied — it is
+            # moved (see `statement` and `owning_source` in the checker) — but a
+            # field, a payload and a returned value are copied, and the copy is
+            # deep because `copy_code` asks for the type's own helper.
             return True
         if typ in self.owning:
             return self.owning[typ]
@@ -1161,7 +1176,17 @@ class CGenerator:
         return f"nv_release_{self.ctype(typ)}"
 
     def copy_code(self, typ: str, code: str) -> str:
-        """A C expression that gives a value its own storage."""
+        """A C expression that gives a value its own storage.
+
+        A `Vec(T)` and a `String` are copied deeply: the copy allocates a buffer
+        of its own and copies the bytes into it, so releasing one of the two
+        never touches the other. That is what makes a field, a payload, an
+        element or a returned value able to hold one.
+        """
+        if is_string(typ):
+            return f"nv_string_copy({code})"
+        if is_vec(typ):
+            return f"nv_vec_{vec_tag(typ)}_copy({code})"
         if is_array(typ):
             return f"nv_arr_{array_tag(typ)}_copy({code})"
         if self.owns_storage(typ):
@@ -1242,6 +1267,9 @@ class CGenerator:
         """
         names = [self.ctype(name) for name in self.ordered_types()]
         names += [f"nv_arr_{array_tag(typ)}" for typ in self.value_array_types()]
+        # A struct field may be a `Vec(T)`, and the handle is defined after the
+        # structs: the name is enough here, the definition follows the fields.
+        names += [f"nv_vec_{vec_tag(typ)}" for typ in self.vector_types()]
         if not names:
             return
         for name in names:
@@ -1266,6 +1294,23 @@ class CGenerator:
             element = self.ctype(element_of(typ))
             self.line(f"typedef struct nv_arr_{tag} {{ {element} *data; int64_t len; }} "
                       f"nv_arr_{tag};")
+        self.line()
+
+    def emit_vector_declarations(self) -> None:
+        """Names a struct copy or release helper may mention.
+
+        The vector helpers are defined after the structs — a vector needs its
+        element type complete, and the element may be a struct declared below —
+        so a struct that holds a `Vec(T)` sees these prototypes first.
+        """
+        types = self.vector_types()
+        if not types:
+            return
+        for typ in types:
+            tag = vec_tag(typ)
+            name = f"nv_vec_{tag}"
+            self.line(f"static {name} *{name}_copy({name} *source);")
+            self.line(f"static void {name}_free({name} **slot);")
         self.line()
 
     def emit_structs(self) -> None:
@@ -1401,6 +1446,19 @@ class CGenerator:
                       "nv_note_array_free(); }")
             self.line("vector->data = data;")
             self.line("vector->cap = capacity;")
+            self.indent -= 1
+            self.line("}")
+            self.line(f"static {name} *{name}_copy({name} *source) {{")
+            self.indent += 1
+            self.line(f"{name} *copy = {name}_new();")
+            self.line("if (source != NULL && source->len > 0) {")
+            self.indent += 1
+            self.line(f"{name}_reserve(copy, source->len);")
+            self.line(f"memcpy(copy->data, source->data, (size_t)source->len * sizeof({element}));")
+            self.line("copy->len = source->len;")
+            self.indent -= 1
+            self.line("}")
+            self.line("return copy;")
             self.indent -= 1
             self.line("}")
             self.line(f"static void {name}_push({name} *vector, {element} value) {{")
@@ -1618,15 +1676,18 @@ class CGenerator:
         self.line("/* --- copies and releases of values that own storage ------------- */")
         for name in owners:
             if name in self.enums:
-                self.emit_enum_helpers(self.enums[name])
+                self.emit_enum_helpers(self.enums[name], name)
             else:
-                self.emit_struct_helpers(self.structs[name])
+                self.emit_struct_helpers(self.structs[name], name)
             self.line()
 
-    def emit_struct_helpers(self, struct) -> None:
-        cname = self.ctype(struct.name)
+    def emit_struct_helpers(self, struct, name: str | None = None) -> None:
+        # The instance name, not the template's: `Pair(String)` has helpers of
+        # its own and none of them may be called `Pair`.
+        name = struct.name if name is None else name
+        cname = self.ctype(name)
         owning = [item for item in struct.fields if self.owns_storage(item.typ)]
-        self.line(f"static {cname} {self.copy_helper(struct.name)}({cname} value) {{")
+        self.line(f"static {cname} {self.copy_helper(name)}({cname} value) {{")
         self.indent += 1
         for item in owning:
             place = f"value.{item.name}"
@@ -1634,19 +1695,25 @@ class CGenerator:
         self.line("return value;")
         self.indent -= 1
         self.line("}")
-        self.line(f"static void {self.release_helper(struct.name)}({cname} *value) {{")
+        self.line(f"static void {self.release_helper(name)}({cname} *value) {{")
         self.indent += 1
         for item in owning:
             self.line(self.release_statement(item.typ, f"value->{item.name}"))
         self.indent -= 1
         self.line("}")
 
-    def emit_enum_helpers(self, decl) -> None:
-        """A switch on the tag: only the live payload has storage to copy."""
-        cname = self.ctype(decl.name)
+    def emit_enum_helpers(self, decl, name: str | None = None) -> None:
+        """A switch on the tag: only the live payload has storage to copy.
+
+        `name` is the instance — `Option(Vec(i64))` — while `decl.name` is the
+        template it came from; the helpers are named after the instance, because
+        that is the type the rest of the program uses.
+        """
+        name = decl.name if name is None else name
+        cname = self.ctype(name)
         owning = [(choice, index, typ) for choice in decl.variants
                   for index, typ in enumerate(choice.types) if self.owns_storage(typ)]
-        self.line(f"static {cname} {self.copy_helper(decl.name)}({cname} value) {{")
+        self.line(f"static {cname} {self.copy_helper(name)}({cname} value) {{")
         self.indent += 1
         if owning:
             self.line("switch (value._tag) {")
@@ -1660,7 +1727,7 @@ class CGenerator:
         self.line("return value;")
         self.indent -= 1
         self.line("}")
-        self.line(f"static void {self.release_helper(decl.name)}({cname} *value) {{")
+        self.line(f"static void {self.release_helper(name)}({cname} *value) {{")
         self.indent += 1
         if owning:
             self.line("switch (value->_tag) {")
@@ -1690,6 +1757,7 @@ class CGenerator:
         self.emit_forward_types()
         self.emit_function_types()
         self.emit_array_types()
+        self.emit_vector_declarations()
         self.emit_structs()
         self.emit_arrays()
         self.emit_value_helpers()
@@ -1877,7 +1945,8 @@ class CGenerator:
                 owns_text = is_string(typ)
                 # A struct or an enum that holds an array owns that array too, so
                 # the binding is an owner and gets its own copy.
-                owns_value = self.owns_storage(typ) and not is_array(typ) and not borrowed
+                owns_value = (self.owns_storage(typ) and not is_array(typ)
+                              and not is_vec(typ) and not is_string(typ) and not borrowed)
                 if owns_array:
                     value = self.new_array(statement.value)
                 elif owns_value:
@@ -2465,7 +2534,8 @@ class CGenerator:
                 self.line(call + ";")
                 return None
             name = self.temp(expr.typ, call)
-            if self.owns_storage(expr.typ) and not is_array(expr.typ):
+            if (self.owns_storage(expr.typ) and not is_array(expr.typ)
+                    and not is_vec(expr.typ) and not is_string(expr.typ)):
                 # A returned value owns the storage it carries, and nobody else
                 # holds it: the statement is its owner until it ends. A binding
                 # that keeps it copies it (`owned_value`), so this temporary is

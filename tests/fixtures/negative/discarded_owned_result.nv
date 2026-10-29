@@ -1,0 +1,10 @@
+edition 2;
+
+fn make() -> Vec(i64) {
+    let xs: Vec(i64) = vec_new()
+    return xs
+}
+
+fn main() {
+    make()
+}

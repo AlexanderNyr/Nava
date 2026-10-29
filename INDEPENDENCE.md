@@ -10,8 +10,9 @@ N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
 (function values and pointers) are done. N11 is in progress: N11a (strings and
 enums as values, arrays of every value), N11b (owning fields, with the copy and
 release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, the `str_*` text functions
-and the arena) and N11e (moves, and the arena region a frame gets back) are
-delivered, and N12–N18 are not started.** The
+and the arena), N11e (moves, and the arena region a frame gets back) and N11f
+(a `Vec` or a `String` as a field, a payload or a type argument) are delivered,
+and N12–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -47,10 +48,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 8 759 lines,
-13 modules and 273 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 8 823 lines,
+13 modules and 274 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11e) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11f) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -288,10 +289,10 @@ prints nothing. The one that carries the language claim is
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
 
-**Increments of N11.** The phase is delivered in five patches, for the same
-reason N10 was: the memory rules, the collections, the string type and the move
-rules each change the checker, the code generator, the specification and the
-guide.
+**Increments of N11.** The phase is delivered in six patches, for the same
+reason N10 was: the memory rules, the collections, the string type, the move
+rules and the storage rules each change the checker, the code generator, the
+specification and the guide.
 
 | Increment | Scope | State |
 |---|---|---|
@@ -300,6 +301,7 @@ guide.
 | N11c | `Vec(T)` with amortised growth, `pop -> Option<T>`, iteration, and the owner/release accounting it needs | **Delivered** (record below) |
 | N11d | `String` (growing UTF-8) with the audit's methods and the **arena allocator with its accounting**, deferred from N11c for the reason that record gives; `HashMap`/`HashSet` moved to N12 | **Delivered** (record below) |
 | N11e | **Moves**: an owning value crosses a frame boundary by transfer — out of a function as its return value, between bindings, and through an assignment — with use-after-move refused; and the **arena regions** that moves make sound, since a frame can now be told what it may reclaim | **Delivered** (record below) |
+| N11f | **Storage**: a `Vec(T)` or a `String` as a struct field, a variant payload and a type argument, held by a **deep copy** so the holder owns its own buffer; the element rule stays a refusal, and moves it to N11g | **Delivered** (record below) |
 
 `HashMap` and `HashSet` are the one item of N11 that moved: the audit's dict and
 set rows are compiler bookkeeping, and the collections belong with the standard
@@ -307,6 +309,43 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N11f (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A field holds a `Vec` and a `String` | `tests/test_storage.py`: `test_a_field_holds_a_vector_and_a_string` | `struct Bag { items: Vec(i64), text: String }` compiles and runs; the generated C contains `nv_vec_i64_copy(`, `nv_string_copy(`, `static nv_struct_Bag nv_copy_nv_struct_Bag(` and `static void nv_release_nv_struct_Bag(` |
+| A stored value is a deep copy, proved from both sides | `StorageRuntimeTests.test_a_stored_vector_is_a_copy_and_the_source_goes_on` | building the bag from a one-element vector and then pushing to the source leaves the bag at 1 element, and pushing to the builder after storing leaves the field at `a`: the copy owns its own buffer and the source is unaffected |
+| A field write replaces and releases the old buffer | `test_a_field_write_replaces_and_releases_the_old_buffer` | `bag.items = other` and `bag.text = fresh` release what the fields held, keep deep copies, and the live-array counter is `0` at exit |
+| A nested holder copies every level | `test_a_nested_field_copies_both_levels`, `test_a_stored_value_travels_through_functions_and_keeps_its_storage` | `Shelf { bag: Bag, count: i64 }` copies `Bag` through `nv_copy_nv_struct_Bag(value.bag)`; two shelves returned from `build(n)` print `1` and `2`, so each owns its own buffer, with no leak |
+| A payload holds one, and an arm binds a copy | `test_a_payload_holds_a_vector_and_a_string`, `StorageRuntimeTests.test_a_payload_binding_is_a_copy_of_its_own` | `Slot::Full(Bag)` and `Slot::Text(String)` compile; growing the source vector after `Slot::Full(bag)` leaves the payload at 1 element and its text at `keep` |
+| A type argument may be an owning type | `test_a_type_argument_may_be_an_owning_type`, `StorageRuntimeTests.test_a_type_argument_value_is_independent` | `Pair(String)`, `Pair(Vec(i64))` and `Option(Vec(i64))` compile; the helper is named after the instance (`nv_copy_nv_struct_Pair_String`), and pushing to the source builder after `Pair(String)(first: a, …)` leaves `p.first` at `left` while `a` becomes `left!` |
+| The element rule is unchanged and moves up a level | `test_a_holder_of_storage_is_not_an_element` | `[Bag]` is `E0426` and `Vec(Bag)` is `E0427` **because** a `Bag` holds a `Vec` and a `String`: the refusal now follows the fields, not the shape |
+| A field is read, never moved out | `test_a_field_is_read_but_never_moved_out`, `test_a_mutating_call_on_a_field_needs_a_local` | `let stolen: Vec(i64) = bag.items` and the `String` form are `E0428`; `vec_push(bag.items, 1)` and `string_push(bag.text, "x")` are `E0444` |
+| Memory safety of the copy | `StorageRuntimeTests.test_stored_values_under_the_sanitizers`, `test_a_value_that_owns_fields_is_released_with_its_block` | 200 rounds of build → copy → `Option(Bag)` payload → match, AddressSanitizer and UndefinedBehaviorSanitizer clean with the live-array counter at `0`; 50 rounds of nested holders released by their own block leave nothing behind |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### Owning values inside a value`), `guides/nava-1.md` (`## Edition 2: storing a value that owns storage`) | the deep copy, the borrow-on-read rule, the field write and the element refusal are normative; the specification example prints `1`, `note`, `2`, `1` and the guide example prints `1`, `4`, `2` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base` and `--encoding o200k_base` | prompt 79 022 tokens (`cl100k_base`) and 79 319 (`o200k_base`), summed over the eleven tasks, of which the guide is 78 386 / 78 683 tokens at 23 735 bytes and 673 lines |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 8 823 lines, 13 modules, 274 functions under `nava_lang/` after this increment (8 759 / 13 / 273 at N11e) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 623 registered tests, 11 tasks with 76 cases, 183 spec fixtures, 145 diagnostic codes`; suite **693 tests OK** (1 202 subtests) |
+
+Negative controls: the four element and move fixtures from N11e still fail as
+they should, and `E0428` is now covered by
+`discarded_owned_result.nv` — a call that returns a `Vec` and is thrown away —
+because `string_field.nv` asserted a refusal this increment turns into a feature
+and was retired with the reason recorded here. The behavioural controls that
+carry the memory claim are the pair of sanitizer runs and the counter: a shallow
+copy would alias one buffer into two owners, and the first doubly-released buffer
+would be an AddressSanitizer report rather than a wrong number in the output. The
+control that carries the language claim is
+`test_a_holder_of_storage_is_not_an_element`: storing a buffer and being an
+element are different rules, and the second one did not move.
+
+Deliberately not done in N11f, and why: an **element** that owns storage —
+`[String]`, `[Bag]`, `Vec(String)`, `Vec(Vec(i64))` — because an element is read
+by value on every access, so the copy would have to be made on every read and
+released on every overwrite, together with `for x in v` over owning elements;
+that is N11g, and the hints of `E0426` and `E0427` now name it. `HashMap`/`HashSet`
+stay in N12 with the reason given there.
 
 #### Delivery record N11e (2026-10-29)
 
@@ -370,7 +409,7 @@ Rust and is stated here rather than discovered by a user.
 | No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 584 registered tests, 11 tasks with 76 cases, 181 spec fixtures, 143 diagnostic codes`; suite **654 tests OK** (1 186 subtests) |
 
 Negative controls: four new fixtures — `string_copied.nv` (`E0428`),
-`string_field.nv` (`E0428`), `string_mutated_through_a_borrow.nv` (`E0444`) and
+`string_field.nv` (`E0428` — retired in N11f, where a `String` field became legal; the code now has `discarded_owned_result.nv`), `string_mutated_through_a_borrow.nv` (`E0444`) and
 `array_of_strings.nv` (`E0426`) — each asserting its own code, location, message
 and hint, and two existing fixtures were updated because the text of two
 messages moved with the new rules (`E0426` now names the *move* work of N11e, and
@@ -936,7 +975,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 8 759 Python lines and 273 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 8 823 Python lines and 274 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

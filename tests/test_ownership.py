@@ -147,7 +147,7 @@ class OwningFieldFrontendTests(unittest.TestCase):
             with self.subTest(shape=name):
                 error = self.assert_code("edition 2;\n" + BAG + "\n" + body,
                                          "E0426", "Bag holds an array")
-                self.assertIn("storage work of N11f", error.hint)
+                self.assertIn("element work of N11g", error.hint)
 
     def test_an_enum_with_an_owning_payload_cannot_be_an_element_either(self):
         self.assert_code("edition 2;\n" + BAG + "\n"

@@ -175,18 +175,47 @@ class VectorFrontendTests(unittest.TestCase):
                                  "fn main() { make() }\n", "E0428")
         self.assertIn("no owner", error.message)
 
-    def test_a_vector_cannot_be_a_field_or_a_payload(self):
-        self.assert_code("edition 2;\n"
-                         "struct Holder {\n"
-                         "    xs: Vec(i64)\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
-        self.assert_code("edition 2;\n"
-                         "enum Slot {\n"
-                         "    Empty,\n"
-                         "    Full(Vec(i64))\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
+    def test_a_vector_can_be_a_field_or_a_payload(self):
+        """A field and a payload hold a vector by owning a buffer of their own.
+
+        The copy is deep — the struct's own copy helper allocates — so the value
+        that was copied and the copy never share storage.
+        """
+        source = ("edition 2;\n"
+                  "struct Holder {\n"
+                  "    xs: Vec(i64)\n"
+                  "}\n"
+                  "enum Slot {\n"
+                  "    Empty,\n"
+                  "    Full(Vec(i64))\n"
+                  "}\n"
+                  "fn main() {\n"
+                  "    let xs: Vec(i64) = vec_new()\n"
+                  "    vec_push(xs, 1)\n"
+                  "    let holder: Holder = Holder(xs: xs)\n"
+                  "    print(vec_len(holder.xs))\n"
+                  "    let slot: Slot = Slot::Full(xs)\n"
+                  "    match slot {\n"
+                  "        Slot::Full(inner) => { print(vec_len(inner)) }\n"
+                  "        Slot::Empty => { print(0) }\n"
+                  "    }\n"
+                  "}\n")
+        self.assertIn("nv_vec_i64_copy", frontend(source))
+        compile_source(source)
+
+    def test_a_field_holding_a_vector_is_read_but_not_moved_out(self):
+        """Reading a field is a borrow: the field goes on owning its buffer."""
+        error = self.assert_code("edition 2;\n"
+                                 "struct Holder {\n"
+                                 "    xs: Vec(i64)\n"
+                                 "}\n"
+                                 "fn main() {\n"
+                                 "    let xs: Vec(i64) = vec_new()\n"
+                                 "    let holder: Holder = Holder(xs: xs)\n"
+                                 "    let stolen: Vec(i64) = holder.xs\n"
+                                 "    print(vec_len(stolen))\n"
+                                 "}\n", "E0428")
+        self.assertIn("cannot be copied", error.message)
 
     def test_vec_new_needs_an_annotated_element_type(self):
         """An empty vector says nothing about what it holds."""

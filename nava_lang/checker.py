@@ -340,15 +340,15 @@ class Checker:
         for item in struct.fields:
             if is_function_type(item.typ):
                 self.check_function_type(item.typ, item.loc)
-            if is_vec(item.typ) or is_string(item.typ):
-                kind = "a vector" if is_vec(item.typ) else "a String"
-                raise make(
-                    "E0428",
-                    f"a field of {struct.name} cannot be {kind} yet",
-                    item.loc, item.loc.advance(item.name),
-                    f"a field is copied with its value, and {kind} has exactly one "
-                    f"owner; a field that owns storage arrives with the storage work of N11f",
-                )
+            if is_vec(item.typ):
+                self.validate_vec(item.typ, item.loc)
+                # A field may hold a `Vec(T)`: the struct's own copy helper
+                # copies the buffer deeply, and its release helper frees it, so
+                # the two values never share storage.
+                continue
+            if is_string(item.typ):
+                # The same for a `String`: a copied field owns its own bytes.
+                continue
             if is_array(item.typ):
                 self.check_element_type(item.typ, item.loc)
                 continue
@@ -507,16 +507,13 @@ class Checker:
         """
         span = () if variant.loc is None else (variant.loc, variant.loc.advance(variant.name))
         for item in variant.types:
-            if is_vec(item) or is_string(item):
-                kind = "a vector" if is_vec(item) else "a String"
-                raise make(
-                    "E0428",
-                    f"a payload of {enum_name}::{variant.name} cannot be {kind} yet",
-                    *span,
-                    hint=f"a payload is copied with its value, and {kind} has exactly "
-                         f"one owner; a payload that owns storage arrives with the move "
-                         f"work of N11f",
-                )
+            if is_vec(item):
+                self.validate_vec(item, None)
+                continue
+            if is_string(item):
+                # A payload and a field are the same case: the value is copied by
+                # its own helper, deeply, and released by the value that holds it.
+                continue
             if is_array(item):
                 self.check_element_type(item, variant.loc)
                 continue
@@ -731,14 +728,11 @@ class Checker:
         A `String` is a known name that may not be used here: a generic instance
         is stored inline and copied by value, and a String has exactly one owner.
         """
-        if is_string(typ):
-            raise make(
-                "E0428",
-                f"a String cannot be a type argument yet ({where.strip()})",
-                hint="a type argument is copied with the value it instantiates, and a "
-                     "String has exactly one owner; a String field arrives with N11f",
-            )
         if typ in VALUE_TYPES or self.is_struct(typ) or self.is_enum(typ):
+            return
+        if is_string(typ):
+            # A type argument is substituted into a field or a payload, and both
+            # of those may hold a value that owns storage now.
             return
         split = split_instance(typ)
         if split is not None:
@@ -983,13 +977,13 @@ class Checker:
         """Does a value of `typ` hold array storage of its own?
 
         A `str` does not: strings are immutable and live for the whole run. An
-        array does, and so does any struct or enum that contains one, however
-        deeply. The walk is finite because a struct cannot contain itself
-        (`E0376`) and an instantiation is a finite written type.
+        array, a `Vec(T)` and a `String` do, and so does any struct or enum that
+        contains one, however deeply. The walk is finite because a struct cannot
+        contain itself (`E0376`) and an instantiation is a finite written type.
         """
         if typ is None or typ in seen:
             return False
-        if is_array(typ):
+        if is_array(typ) or is_vec(typ) or is_string(typ):
             return True
         seen = seen | {typ}
         struct = self.struct_of(typ)
@@ -1018,7 +1012,7 @@ class Checker:
                 f"a vector element cannot own storage, but {element} {holder}",
                 loc,
                 hint="an element is copied on every push and every read; a vector of "
-                     "owning values waits for the storage work of N11f",
+                     "owning values waits for the element work of N11g",
             )
         if element in VALUE_TYPES or self.is_struct(element) or self.is_enum(element):
             return element
@@ -1192,7 +1186,7 @@ class Checker:
                 f"an array element cannot own storage, but {element} {holder}",
                 *((loc,) if end is None else (loc, end)),
                 hint="an element is copied on every read and every write; making those "
-                     "copies deep is the storage work of N11f, so an array of owning "
+                     "copies deep is the element work of N11g, so an array of owning "
                      "values is refused rather than shared",
             )
         if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):

@@ -1172,8 +1172,9 @@ What the type is, and what it is not:
   ends, including on an early `return`. A vector is never **copied** — two
   holders would free one buffer — but it can be **moved**: out of a local into
   another binding, into an assignment, and out of a function as its return
-  value (see [Moving an owning value](#moving-an-owning-value)). It still cannot
-  be stored in a field, used as a payload or a type argument (`E0428`).
+  value (see [Moving an owning value](#moving-an-owning-value)). It can also be
+  **stored** — in a field, a payload or a type argument — where the holder keeps
+  a deep copy of its own (see [Owning values inside a value](#owning-values-inside-a-value)).
 * `vec_new()` needs the annotation (`E0429`): an empty vector says nothing about
   what it holds, and there is no second guess.
 * one handle, shared by borrowing: a `Vec(T)` parameter reads the vector, a
@@ -1274,11 +1275,12 @@ The example prints `3`, `a-bb-ccc`, `a/bb/ccc`, `nava`, `-42`, `a+b+c`.
 The rules, and the reasons for them:
 
 * `String` has **exactly one owner**, like an array and like a vector. It is
-  never copied, but it is **moved**: into another binding, into an assignment,
-  and out of a function as its return value. It still cannot be stored in a
-  field, used as a payload or a type argument (`E0428`), and an element of an
-  array or a vector may not be a `String` (`E0426` / `E0427`). A `mut String`
-  parameter is a borrow that may write, and a `String` parameter may not.
+  never copied in a binding, but it is **moved**: into another binding, into an
+  assignment, and out of a function as its return value. It can be **stored** in
+  a field, a payload or a type argument, and the holder keeps a deep copy of its
+  own. An element of an array or a vector still may not be a `String`
+  (`E0426` / `E0427`). A `mut String` parameter is a borrow that may write, and a
+  `String` parameter may not.
 * the block that writes `let s: String = string_new()` releases the buffer when
   it ends, including on an early `return`. Growth doubles from 32 bytes; the
   buffer is allocated through the same checked allocator as an array, so the
@@ -1382,6 +1384,77 @@ The rules, and the reasons for them:
   be reached afterwards, and the conservative check for "reachable" is the
   return type and the `mut` parameters. Move a `str` out of a frame and the
   frame is not given a region — which costs memory, never correctness.
+
+### Owning values inside a value
+
+A `Vec(T)` or a `String` may be a **field**, a **payload** or a **type
+argument**. The value that holds one owns a buffer of its own: copying the holder
+copies the bytes, and releasing one holder never touches the other's buffer.
+
+```text
+store_forms    = struct_field | variant_payload | type_argument ;
+copy_rule      = "the holder keeps a deep copy" ;
+borrow_rule    = "reading a field is a borrow: it cannot be moved out" ;
+```
+
+```nava
+edition 2;
+
+struct Bag {
+    items: Vec(i64),
+    text: String
+}
+
+enum Slot {
+    Empty,
+    Full(Bag)
+}
+
+fn main() {
+    let xs: Vec(i64) = vec_new()
+    vec_push(xs, 1)
+    let s: String = string_new()
+    string_push(s, "note")
+    let bag: Bag = Bag(items: xs, text: s)
+    vec_push(xs, 2)
+    print(vec_len(bag.items))
+    print(string_text(bag.text))
+    print(vec_len(xs))
+    let slot: Slot = Slot::Full(bag)
+    match slot {
+        Slot::Full(inner) => { print(vec_len(inner.items)) }
+        Slot::Empty => { print(0) }
+    }
+}
+```
+
+The example prints `1`, `note`, `2` and `1`: the bag kept the copy it was given,
+the source vector went on growing, and the payload was copied again.
+
+The rules, and the reasons for them:
+
+* **a copy is deep.** The generated copy helper of the struct or the enum calls
+  the helper of the field's type: `nv_vec_i64_copy` allocates a buffer and copies
+  the elements into it, `nv_string_copy` does the same for the bytes. What the
+  holder contains is never shared with the value it was copied from.
+* **a holder is released with its fields.** Leaving the block that declared it
+  frees the field's buffer and then the value itself; a struct returned from a
+  function is copied on the way out and the local is released, so the caller owns
+  a buffer of its own.
+* **a field read is a borrow.** `bag.items` names storage the struct owns, so it
+  cannot be moved out (`let stolen: Vec(i64) = bag.items` is `E0428`) and it
+  cannot be handed to a mutating builtin (`vec_push(bag.items, 1)` is `E0444`).
+  Write the field as a whole — `bag.items = other` — and the field releases what
+  it had and keeps a deep copy of the new value.
+* **a payload binding is a copy too.** In `Slot::Full(inner) => …` the arm binds
+  a copy of the payload field, and the arm releases it when it ends.
+* **storage is still not an element.** An array element and a vector element are
+  read by value on every access, so an element that owns storage would have to be
+  copied on every read and released on every overwrite. `[String]`, `[Bag]`,
+  `Vec(String)`, `Vec(Vec(i64))` and `Vec(Bag)` are `E0426` / `E0427` — the
+  element work of N11g — where `Bag` is any struct that holds one of them.
+* **`str` is unchanged.** A `str` is an immutable pointer that lives for the whole
+  run, so a field of type `str` is still a plain copied value.
 
 ### `defer`, labelled loops and `pub`
 
@@ -1718,7 +1791,7 @@ never changes meaning; a new condition gets a new code.
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
 | `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
 | `E0427` | error | a vector element cannot own storage | `tests/fixtures/negative/vector_of_owning_values.nv` |
-| `E0428` | error | an owning value has exactly one owner | `tests/fixtures/negative/string_field.nv`, `vector_of_owning_values.nv` |
+| `E0428` | error | an owning value has exactly one owner | `tests/fixtures/negative/discarded_owned_result.nv` |
 | `E0429` | error | `vec_new` needs an annotated element type | `tests/fixtures/negative/vector_new_without_element_type.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
@@ -1911,9 +1984,9 @@ declarations of your own, function values with the type `fn(i64) -> i64`, growin
 vectors and growing strings, and moves of both. It does not add closures or
 function literals, `match` as an expression, generic arrays, type-parameter
 bounds, struct or enum equality, printing a struct, an enum, a function value, a
-vector or a `String`, or a field, payload, type argument or element that owns a
-`Vec` or a `String` — that is the storage work of N11f, and nothing here is a
-promise that it exists today.
+vector or a `String`, or an **element** that owns a `Vec` or a `String` — that is
+the element work of N11g, and nothing here is a promise that it exists today. A
+field, a payload and a type argument may hold one.
 
 An array keeps the length it was created with; `Vec(T)` is the type that grows.
 This version cannot express all ordinary C or C++ tasks. Save generated

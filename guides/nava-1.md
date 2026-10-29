@@ -296,8 +296,9 @@ element is `E0427`, as with an array.
 `let v: Vec(i64) = vec_new()` creates it, and the block that writes the `let`
 releases it. A vector is never copied but it can be **moved** — into another
 binding, into an assignment, and out of a function as its return value
-(`fn make() -> Vec(i64)`); it cannot be stored in a field or a payload
-(`E0428`), and `vec_new()` without the annotation is `E0429`.
+(`fn make() -> Vec(i64)`) — and **stored** in a field, a payload or a type
+argument, where the holder keeps a deep copy. `vec_new()` without the annotation
+is `E0429`.
 
 | Call | Type | Meaning |
 |---|---|---|
@@ -352,9 +353,10 @@ A `str` is immutable and lives for the run; `String` is the owner of bytes a
 program assembles a piece at a time. `let s: String = string_new()` creates it
 and the block releases it. A `String` is never copied but it can be **moved** —
 into another binding, into an assignment, and out of a function as its return
-value (`fn label(n: i64) -> String`); it cannot be stored in a field or a
-payload (`E0428`), and it cannot be an array or vector element
-(`E0426`/`E0427`). `mut String` lets a function write into the caller's builder.
+value (`fn label(n: i64) -> String`) — and **stored** in a field, a payload or a
+type argument, where the holder keeps a deep copy. It cannot be an array or
+vector element (`E0426`/`E0427`). `mut String` lets a function write into the
+caller's builder.
 
 | Call | Type | Meaning |
 |---|---|---|
@@ -447,6 +449,39 @@ fn main() {
 The example prints `3` and `n=4`. An owning value returned by a call must be
 bound: `counted(3)` used as a statement is `E0428`, because the buffer would
 have no owner.
+
+## Edition 2: storing a value that owns storage
+
+A `Vec(T)` or a `String` may be a field, a payload or a type argument, and the
+holder keeps a **deep copy**: building a struct copies the buffer, so the value it
+was copied from and the copy go their own ways. Reading a field is a borrow, so
+`let out: Vec(i64) = bag.items` is `E0428` and `vec_push(bag.items, 1)` is
+`E0444`; write the whole field instead (`bag.items = other`). An array or vector
+**element** still may not own storage (`E0426`/`E0427`).
+
+```nava
+edition 2;
+
+struct Bag {
+    items: Vec(i64),
+    text: String
+}
+
+fn main() {
+    let xs: Vec(i64) = vec_new()
+    vec_push(xs, 1)
+    let s: String = string_new()
+    string_push(s, "note")
+    let bag: Bag = Bag(items: xs, text: s)
+    vec_push(xs, 2)
+    print(vec_len(bag.items))
+    print(string_len(bag.text))
+    print(vec_len(xs))
+}
+```
+
+The example prints `1`, `4` and `2`: the bag kept its own copy while the source
+vector kept growing.
 
 ## Edition 2: `defer`, labelled loops and `pub`
 
@@ -626,9 +661,10 @@ Output: `42`, `10`, `12`.
 15. A function type is written `fn(i64) -> i64`, with the result always spelled
     out. A call through a value goes through a name only: bind `ops.op` to a
     `let` before calling it (`E0441`).
-16. A struct field or enum payload may be a `str` or an array, and a value that
-    owns an array is copied wherever it crosses a binding — `let`, assignment,
-    field write, `match` binding, `return`. Such a value may not be an array
+16. A struct field or enum payload may be a `str`, an array, a `Vec(T)` or a
+    `String`, and a value that owns storage is copied wherever it crosses a
+    binding — `let`, assignment, field write, `match` binding, `return` — with a
+    deep copy, so the two values never share a buffer. Such a value may not be an array
     element (`E0426`), and `array_zeros(n)` needs an element type whose zero
     value is real, so `[str]` and a struct holding a `str` are `E0425`.
 17. A `Vec(T)` and a `String` are moved, never copied: `let b: Vec(i64) = a`,

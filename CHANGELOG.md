@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+N11f: a `Vec` or a `String` can be **stored** — as a struct field, a variant
+payload or a type argument — and the holder keeps a deep copy of its own buffer.
+
+- `struct Bag { items: Vec(i64), text: String }`, `enum Slot { Empty, Full(Bag) }`,
+  `Pair(String)` and `Option(Vec(i64))` all work. The generated copy helper of
+  the holding type calls the helper of the field's type, so `nv_vec_i64_copy`
+  allocates a buffer and copies the elements and `nv_string_copy` copies the
+  bytes: releasing one holder never touches the other's storage.
+- Everything that crosses a binding — a `let`, an assignment, a field write, a
+  `match` binding, a `return` — copies deeply, and the block that declared the
+  holder releases what it holds.
+- A field read stays a borrow: `let out: Vec(i64) = bag.items` is `E0428` and
+  `vec_push(bag.items, 1)` is `E0444`. Write the field as a whole instead.
+- An **element** still may not own storage, and the refusal now follows the
+  fields: `[Bag]` and `Vec(Bag)` are `E0426` / `E0427` because a `Bag` holds a
+  `Vec` and a `String`. Owning elements are the element work of N11g.
+- `string_field.nv` is retired — the refusal it asserted is now a feature — and
+  `E0428` is covered by `discarded_owned_result.nv` instead.
+
 N11e: a value that owns storage crosses a frame boundary by moving, and the arena
 gets the regions that moves make sound.
 

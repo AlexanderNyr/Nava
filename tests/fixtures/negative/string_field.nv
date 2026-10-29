@@ -1,9 +1,0 @@
-edition 2;
-
-struct Note {
-    text: String,
-}
-
-fn main() {
-    print(1)
-}

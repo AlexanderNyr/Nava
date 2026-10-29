@@ -168,20 +168,43 @@ class TextFrontendTests(unittest.TestCase):
                          "}\n"
                          "fn main() { make() }\n", "E0428")
 
-    def test_a_string_cannot_be_a_field_or_a_payload(self):
-        self.assert_code("edition 2;\n"
-                         "struct Note {\n"
-                         "    text: String\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
-        self.assert_code("edition 2;\n"
-                         "enum Slot {\n"
-                         "    Empty,\n"
-                         "    Full(String)\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
+    def test_a_string_can_be_a_field_or_a_payload(self):
+        """A field holds a String by owning its own bytes: the copy is deep."""
+        source = ("edition 2;\n"
+                  "struct Note {\n"
+                  "    text: String\n"
+                  "}\n"
+                  "enum Slot {\n"
+                  "    Empty,\n"
+                  "    Full(String)\n"
+                  "}\n"
+                  "fn main() {\n"
+                  "    let s: String = string_new()\n"
+                  "    string_push(s, \"hi\")\n"
+                  "    let note: Note = Note(text: s)\n"
+                  "    print(string_text(note.text))\n"
+                  "    let slot: Slot = Slot::Full(s)\n"
+                  "    match slot {\n"
+                  "        Slot::Full(inner) => { print(string_len(inner)) }\n"
+                  "        Slot::Empty => { print(0) }\n"
+                  "    }\n"
+                  "}\n")
+        self.assertIn("nv_string_copy", frontend(source))
+        compile_source(source)
 
-    def test_a_string_cannot_be_an_element_or_a_type_argument(self):
+    def test_a_string_can_be_a_type_argument(self):
+        compile_source("edition 2;\n"
+                       "struct Pair<T> { first: T, second: T }\n"
+                       "fn main() {\n"
+                       "    let a: String = string_new()\n"
+                       "    let b: String = string_new()\n"
+                       "    let p = Pair(String)(first: a, second: b)\n"
+                       "    print(string_len(p.first))\n"
+                       "}\n")
+
+    def test_a_string_cannot_be_an_element(self):
+        """An element is read by value; an element that owns storage would have
+        to be copied on every read and released on every write."""
         self.assert_code("edition 2;\n"
                          "fn main() {\n"
                          "    let words: [String] = [\"a\", \"b\"]\n"
@@ -192,13 +215,6 @@ class TextFrontendTests(unittest.TestCase):
                          "    let v: Vec(String) = vec_new()\n"
                          "    print(vec_len(v))\n"
                          "}\n", "E0427")
-        self.assert_code("edition 2;\n"
-                         "struct Pair<T> { first: T, second: T }\n"
-                         "fn main() {\n"
-                         "    let p = Pair(String)(first: string_new(), "
-                         "second: string_new())\n"
-                         "    print(1)\n"
-                         "}\n", "E0428")
 
     def test_a_mutating_call_needs_a_writable_string(self):
         error = self.assert_code("edition 2;\n"

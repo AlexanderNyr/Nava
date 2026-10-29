@@ -208,20 +208,22 @@ class MoveFrontendTests(unittest.TestCase):
                          "}\n"
                          "fn main() { text() }\n", "E0428")
 
-    def test_an_owning_value_is_still_not_storable(self):
-        """A move crosses a frame; it does not make a `Vec` a field or an
-        element. Those are the storage rules, and they did not move."""
-        self.assert_code("edition 2;\n"
-                         "struct Bag {\n"
-                         "    items: Vec(i64)\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
-        self.assert_code("edition 2;\n"
-                         "enum Slot {\n"
-                         "    Empty,\n"
-                         "    Full(Vec(i64))\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428")
+    def test_an_owning_value_is_stored_but_not_as_an_element(self):
+        """A field and a payload hold a copy; an element cannot, because an
+        element is read by value on every access."""
+        compile_source("edition 2;\n"
+                       "struct Bag {\n"
+                       "    items: Vec(i64)\n"
+                       "}\n"
+                       "enum Slot {\n"
+                       "    Empty,\n"
+                       "    Full(Vec(i64))\n"
+                       "}\n"
+                       "fn main() {\n"
+                       "    let xs: Vec(i64) = vec_new()\n"
+                       "    let bag: Bag = Bag(items: xs)\n"
+                       "    print(vec_len(bag.items))\n"
+                       "}\n")
         self.assert_code("edition 2;\n"
                          "fn main() {\n"
                          "    let v: Vec(Vec(i64)) = vec_new()\n"

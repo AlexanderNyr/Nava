@@ -1169,7 +1169,7 @@
       "column": 9,
       "end_column": 13,
       "message": "an array element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every read and every write; making those copies deep is the storage work of N11f, so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the element work of N11g, so an array of owning values is refused rather than shared"
     },
     {
       "file": "array_zeros_str.nv",
@@ -1205,16 +1205,7 @@
       "column": 26,
       "end_column": null,
       "message": "a vector element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every push and every read; a vector of owning values waits for the storage work of N11f"
-    },
-    {
-      "file": "string_field.nv",
-      "code": "E0428",
-      "line": 4,
-      "column": 5,
-      "end_column": 9,
-      "message": "a field of Note cannot be a String yet",
-      "hint": "a field is copied with its value, and a String has exactly one owner; a field that owns storage arrives with the storage work of N11f"
+      "hint": "an element is copied on every push and every read; a vector of owning values waits for the element work of N11g"
     },
     {
       "file": "string_mutated_through_a_borrow.nv",
@@ -1232,7 +1223,16 @@
       "column": 9,
       "end_column": 14,
       "message": "an array element cannot own storage, but String owns its bytes",
-      "hint": "an element is copied on every read and every write; making those copies deep is the storage work of N11f, so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the element work of N11g, so an array of owning values is refused rather than shared"
+    },
+    {
+      "file": "discarded_owned_result.nv",
+      "code": "E0428",
+      "line": 9,
+      "column": 5,
+      "end_column": 9,
+      "message": "the vector this call returns would have no owner",
+      "hint": "bind it: `let v: Vec(i64) = ...` — a discarded owner leaks its buffer"
     },
     {
       "file": "string_moved_into_another_binding.nv",

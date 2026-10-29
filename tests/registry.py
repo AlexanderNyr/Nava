@@ -503,8 +503,9 @@ REGISTERED_TESTS = {
     # --- N11b: fields and payloads that own array storage --------------------
     "TextFrontendTests": {
         "test_a_mutating_call_needs_a_writable_string",
-        "test_a_string_cannot_be_an_element_or_a_type_argument",
-        "test_a_string_cannot_be_a_field_or_a_payload",
+        "test_a_string_cannot_be_an_element",
+        "test_a_string_can_be_a_field_or_a_payload",
+        "test_a_string_can_be_a_type_argument",
         "test_a_string_is_returned_by_moving_it",
         "test_a_string_moves_and_a_moved_string_is_dead",
         "test_a_string_is_not_printable_itself",
@@ -544,7 +545,7 @@ REGISTERED_TESTS = {
         "test_a_region_is_emitted_only_where_it_is_sound",
         "test_a_vector_and_a_string_can_be_moved_out_of_a_function",
         "test_an_owning_result_must_be_bound",
-        "test_an_owning_value_is_still_not_storable",
+        "test_an_owning_value_is_stored_but_not_as_an_element",
         "test_moving_is_a_value_transfer_and_not_a_general_expression",
     },
     "MoveRuntimeTests": {
@@ -554,6 +555,26 @@ REGISTERED_TESTS = {
         "test_an_assignment_releases_the_buffer_it_replaces",
         "test_an_early_return_moves_the_value_out_of_a_loop",
         "test_moves_and_returns_under_the_sanitizers",
+    },
+    "StorageFrontendTests": {
+        "test_a_field_holds_a_vector_and_a_string",
+        "test_a_field_is_read_but_never_moved_out",
+        "test_a_holder_of_storage_is_not_an_element",
+        "test_a_mutating_call_on_a_field_needs_a_local",
+        "test_a_nested_field_copies_both_levels",
+        "test_a_payload_holds_a_vector_and_a_string",
+        "test_a_struct_that_contains_itself_through_a_field_is_still_refused",
+        "test_a_type_argument_may_be_an_owning_type",
+        "test_an_owning_field_needs_edition_two",
+    },
+    "StorageRuntimeTests": {
+        "test_a_field_write_replaces_and_releases_the_old_buffer",
+        "test_a_payload_binding_is_a_copy_of_its_own",
+        "test_a_stored_value_travels_through_functions_and_keeps_its_storage",
+        "test_a_stored_vector_is_a_copy_and_the_source_goes_on",
+        "test_a_type_argument_value_is_independent",
+        "test_a_value_that_owns_fields_is_released_with_its_block",
+        "test_stored_values_under_the_sanitizers",
     },
     "ArenaRegionTests": {
         "test_a_frame_that_builds_text_gets_its_region_back",
@@ -567,7 +588,8 @@ REGISTERED_TESTS = {
         "test_a_moved_vector_leaves_nothing_behind",
         "test_a_vector_can_be_returned_but_not_discarded",
         "test_a_vector_cannot_be_printed_or_assigned_to",
-        "test_a_vector_cannot_be_a_field_or_a_payload",
+        "test_a_field_holding_a_vector_is_read_but_not_moved_out",
+        "test_a_vector_can_be_a_field_or_a_payload",
         "test_a_vector_is_created_in_a_block_and_grown_by_builtins",
         "test_a_vector_of_structs_and_a_vector_of_enums_compile",
         "test_a_vector_of_vectors_is_refused",
@@ -958,6 +980,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
     import test_moves  # noqa: PLC0415
+    import test_storage  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
@@ -965,8 +988,8 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_moves, test_modules, test_nava, test_ownership, test_plan,
                    test_registry, test_release, test_results, test_sandbox, test_slices,
-                   test_spec, test_structs, test_stdlib, test_study, test_text,
-                   test_values, test_vec):
+                   test_spec, test_storage, test_structs, test_stdlib, test_study,
+                   test_text, test_values, test_vec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -1027,6 +1050,7 @@ def check_skip_state() -> list[str]:
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
     import test_moves  # noqa: PLC0415
+    import test_storage  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -1043,6 +1067,7 @@ def check_skip_state() -> list[str]:
                                (test_text, "ArgumentOnceTests"),
                                (test_moves, "MoveRuntimeTests"),
                                (test_moves, "ArenaRegionTests"),
+                               (test_storage, "StorageRuntimeTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),
