@@ -49,10 +49,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 10 377 lines,
+The requirement list below is not a wish list: it is an audit of the 10 394 lines,
 14 modules and 328 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12c) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12d) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,38 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12d (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A column is three decisions, and each is a function | `nava_lang/stdlib/fmt.nv`, `docs/stdlib/fmt.md`, `tests/test_contracts.py: test_every_public_name_has_a_contract` | seven public functions — `repeat`, `pad_left`, `pad_right`, `pad_center`, `clip`, `i64_aligned`, `f64_fixed` — each with a summary, `pre:`, `post:`, `cost:`, `pure:` and examples; `contracts.check_program` returns `[]`, and `nava doc` renders 222 lines of reference from the blocks |
+| The width is a byte count, and the module says so | `LANGUAGE.md` (`### fmt`), `guides/nava-1.md` | a `str` is a byte sequence, so a width counts bytes and `clip` may cut inside a multi-byte character. The alternative — a display width — would need `text::sequence_width` and would make `fmt` depend on another module, which the purity rule reports; the choice is written down where a reader meets it rather than left to inference |
+| The text is built without growing anything | `fmt.nv` (bodies), `contracts.purity_problems` | every function answers with a `str` built by `str_concat`, never with a `String` builder, so all seven are honestly `pure: yes`: nothing prints, nothing is read and no collection grows. `repeat` doubles the text and uses `O(log times)` concatenations, which its `cost:` line states |
+| Rounding is defined, including the cases that look wrong | `fmt.nv` (`f64_fixed`), its examples, `docs/stdlib/fmt.md` | ties go away from zero (`-2.5` → `"-3"`), the rounding applies to the binary value (`1.005` → `"1.00"`), and a value that rounds to zero keeps no sign (`-0.4` → `"0"`). Each is an executed example, not a sentence |
+| The documented failure is a real failure | `tests/test_contracts.py: test_every_documented_failure_happens` | `fmt::f64_fixed(1.0e18, 6)` stops the program with `to_i64 of a value outside the i64 range`, which is the text the contract promises |
+| Every example runs, in CI | `ContractGuardTests.test_every_documented_example_is_true` | 22 examples across the module are compiled into one program and each one prints `ok`; the guard names any example that fails to compile instead of failing the module |
+| The library still tests itself, and the new module is in the test | `tests/fixtures/positive/self_test.nv`, `tests/test_self_test.py` | 21 bodies now — one per public name of `math`, `sort`, `text` and `fmt` — and the run prints 21 `ok` lines and `standard library: ok`, 439 bytes, recorded as the positive case. The same report comes out at `-O0`, `-O2` and `-O3` and on a second run |
+| A formatter is exercised end to end | `tests/fixtures/positive/fmt_table.nv` | a two-column table (100 bytes of output) is a positive fixture: `item     total`, `apples    1234`, `pears       -7`, `ratio    0.333`, a centred line, a clipped line and a rule of fourteen dashes |
+| **A pure function that calls a local helper is reported as unclaimed, not impure** | `PurityNegativeControlTests: test_a_pure_function_that_calls_an_unclaimed_helper_is_reported`, `test_a_helper_that_states_its_own_claim_is_accepted` | writing a module with a helper found a false message: the guard said the helper "has an effect", which sends the author to the wrong repair. There are now three cases — documented `pure: no`, no claim at all (naming the doc block to write) and a builtin with an effect — and the second test proves the new branch is not a blanket refusal: a helper with its own `pure: yes` gives `[]` |
+| **A module that exports nothing is not a pass** | `ContractGuardTests: test_a_module_with_no_public_function_is_not_a_pass` | an edition-2 module exports only its `pub fn`, so a module whose every function forgot `pub` passed every lane by having nothing to check. `check_program` now reports `exports no function`, which is the failure mode a contract guard has to refuse |
+| The guide lists a module's *public* surface, not its internals | `tests/test_guides.py: GuideCoverageTests.test_the_guide_lists_every_standard_library_function` | the guard now reads the edition: an edition-2 module contributes its `pub fn` names, an edition-1 module all of them. A private helper is not the guide's business, and an exported name still cannot be omitted |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### fmt`, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the table of seven functions, the byte-width rule, the rounding rule and a two-column program are normative for the library; the guide carries the same list and a second whole program, and is re-pinned at 29 252 bytes, 29 178 characters, 830 lines, sha256 `68154115…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 97 172 tokens (`cl100k_base`) and 97 579 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 96 536 / 96 943 tokens |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 10 394 lines, 14 modules, 328 functions under `nava_lang/` after this increment (10 377 / 14 / 328 at N12c): `contracts.py` grew by the two new lanes, and the standard library grew by a file that is not part of the compiler's count |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, `bash /tmp/ci-sim.sh` | registry `OK: 703 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **773 tests OK** (1 328 subtests); five packaged modules in the stdlib contract list; release checks OK; the guide digest verifies; the CI simulation passes |
+
+Negative controls: the two purity lanes above (an unclaimed helper and a claimed
+one), the module with no public surface, and the fixture that would fail if a
+column were misaligned — `fmt_table.nv` is a recorded byte-for-byte output, so a
+padding bug is a red lane and not a screenshot. `tests/test_stdlib.py` names
+`fmt` in its module list, so the module cannot ship without the version protocol.
+
+Deliberately not done in N12d: `io`, `fs`, `args`, `collections` and `time`, and
+a format-string language. The audit row asks for width/alignment/precision over
+`i64`, `f64` and `str`, which seven functions cover without inventing a parser
+for a format language nobody has specified; a `{}`-style specifier would be a new
+syntax with its own diagnostics, and that is a decision for a phase that has one.
 
 #### Delivery record N12c (2026-10-29)
 
@@ -899,7 +931,8 @@ self-testing facility.
 | N12a | **Tables**: `HashMap(K, V)` and `HashSet(T)` — keys that hash, a total `map_get -> Option(V)`, open addressing with tombstones, copies in and out under the element rule, and the move rules a container inherits | **Delivered** (record below) |
 | N12b | **Contracts**: a doc block (`///`) as syntax, `nava_lang/contracts.py`, `nava doc` and the reference under `docs/stdlib/`; the guard that fails on an undocumented public name, an example that is false or does not compile, and a documented failure that does not happen | **Delivered** (record below) |
 | N12c | **Purity and self-testing**: `pure: yes`/`no` as a required contract field, with a guard that reads the body instead of believing the claim; the `test` module — assertions, a runner and a summary — written in Nava; a function value that carries its module (`test::passing`); and a standard library that tests itself and returns its own failure count as the exit status | **Delivered** (record below) |
-| N12d–N12x | the remaining `fmt`/`io`/`fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12d | **`fmt`**: `repeat`, `pad_left`, `pad_right`, `pad_center`, `clip`, `i64_aligned` and `f64_fixed` — a column width in bytes, the side to align to and a number of decimal places, over `i64`, `f64` and `str`, which is the audit's f-string row (519) closed with a module instead of a format language | **Delivered** (record below) |
+| N12e–N12x | the remaining `io`/`fs`/`args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here
@@ -1137,7 +1170,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 10 377 Python lines and 328 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 10 394 Python lines and 328 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

@@ -1,0 +1,209 @@
+edition 2;
+
+# Nava standard library: formatting numbers and text into a fixed width.
+# Version 1.
+#
+# The audit's f-string row: a program that prints a table needs a value written
+# into a column, and the width, the side it is aligned to and the number of
+# decimal places are the three things such a program has to say.
+#
+# Two decisions are worth stating here, because they are visible from outside:
+#
+#   * a width counts **bytes**, not display columns.  A `str` is a byte
+#     sequence, `bytes_len` counts it, and this module does not pretend to know
+#     how wide a character is on a terminal.  For ASCII — which is what numbers
+#     and labels are — the two agree.
+#   * every function answers with a `str` built from `str_concat`, never with a
+#     `String` builder, so every function here is `pure: yes`: nothing is
+#     printed, nothing is read, and no collection grows.  The text lives in the
+#     caller's arena under the rule `LANGUAGE.md` states.
+#
+# A program that prints two aligned columns:
+#
+#     import fmt;
+#
+#     fn main() {
+#         print(str_concat(fmt::pad_right("name", 8), fmt::pad_left("score", 6)))
+#         print(str_concat(fmt::pad_right("nava", 8), fmt::pad_left(fmt::i64_aligned(7, 3, true), 6)))
+#         print(str_concat(fmt::pad_right("c", 8), fmt::pad_left(fmt::f64_fixed(0.5, 2), 6)))
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `repeat(text, times)` — `text` written `times` times.
+///
+/// pre: `times >= 0`; a negative count is a mistake rather than a request, and
+/// the result is empty
+/// post: the result is `text` concatenated `times` times, and it is empty when
+/// `times` is 0 or `text` is empty
+/// cost: O(bytes_len(text) × times) bytes copied, in O(log times) calls to
+/// `str_concat`, because the text is doubled rather than appended one copy at a
+/// time
+/// pure: yes
+/// example: fmt::repeat("ab", 3) == "ababab"
+/// example: fmt::repeat("x", 0) == ""
+/// example: fmt::repeat("", 5) == ""
+pub fn repeat(text: str, times: i64) -> str {
+    let result = ""
+    let chunk = text
+    let remaining = times
+    while remaining > 0 {
+        if remaining % 2 == 1 {
+            result = str_concat(result, chunk)
+        }
+        remaining = remaining / 2
+        if remaining > 0 {
+            chunk = str_concat(chunk, chunk)
+        }
+    }
+    return result
+}
+
+/// `pad_left(text, width)` — `text` aligned to the right of a column.
+///
+/// pre: `width >= 0`
+/// post: the result is `text` with spaces in front of it, so that its length in
+/// bytes is `width`; a `text` that is already `width` bytes or longer comes back
+/// unchanged, so padding never truncates
+/// cost: O(width)
+/// pure: yes
+/// example: fmt::pad_left("7", 3) == "  7"
+/// example: fmt::pad_left("abcd", 2) == "abcd"
+/// example: fmt::pad_left("", 2) == "  "
+pub fn pad_left(text: str, width: i64) -> str {
+    let length = bytes_len(text)
+    if length >= width {
+        return text
+    }
+    return str_concat(repeat(" ", width - length), text)
+}
+
+/// `pad_right(text, width)` — `text` aligned to the left of a column.
+///
+/// pre: `width >= 0`
+/// post: the result is `text` with spaces after it, so that its length in bytes
+/// is `width`; a `text` that is already `width` bytes or longer comes back
+/// unchanged
+/// cost: O(width)
+/// pure: yes
+/// example: fmt::pad_right("7", 3) == "7  "
+/// example: fmt::pad_right("abcd", 2) == "abcd"
+pub fn pad_right(text: str, width: i64) -> str {
+    let length = bytes_len(text)
+    if length >= width {
+        return text
+    }
+    return str_concat(text, repeat(" ", width - length))
+}
+
+/// `pad_center(text, width)` — `text` centred in a column.
+///
+/// pre: `width >= 0`
+/// post: the result is `text` with spaces on both sides so that its length in
+/// bytes is `width`; when the padding is odd the extra space goes on the right,
+/// so `pad_center` and `pad_right` never disagree about which side grows
+/// cost: O(width)
+/// pure: yes
+/// example: fmt::pad_center("ab", 6) == "  ab  "
+/// example: fmt::pad_center("ab", 5) == " ab  "
+/// example: fmt::pad_center("abc", 2) == "abc"
+pub fn pad_center(text: str, width: i64) -> str {
+    let length = bytes_len(text)
+    if length >= width {
+        return text
+    }
+    let total = width - length
+    let left = total / 2
+    let right = total - left
+    return str_concat(str_concat(repeat(" ", left), text), repeat(" ", right))
+}
+
+/// `clip(text, width)` — the first `width` bytes of `text`.
+///
+/// pre: `width >= 0`
+/// post: the result is a prefix of `text` of `min(width, bytes_len(text))` bytes,
+/// so a `text` shorter than `width` comes back whole; a cut may fall inside a
+/// multi-byte character, because a `str` is bytes and this module counts bytes
+/// cost: O(width)
+/// pure: yes
+/// example: fmt::clip("abcdef", 3) == "abc"
+/// example: fmt::clip("ab", 5) == "ab"
+/// example: fmt::clip("abc", 0) == ""
+pub fn clip(text: str, width: i64) -> str {
+    if width <= 0 {
+        return ""
+    }
+    if bytes_len(text) <= width {
+        return text
+    }
+    return str_slice(text, 0, width)
+}
+
+/// `i64_aligned(value, width, right_align)` — a whole number in a column.
+///
+/// pre: `width >= 0`
+/// post: the decimal text of `value`, padded to `width` bytes — on the left when
+/// `right_align` is true, which is how a column of numbers reads, and on the
+/// right otherwise
+/// cost: O(width)
+/// pure: yes
+/// example: fmt::i64_aligned(42, 5, true) == "   42"
+/// example: fmt::i64_aligned(42, 5, false) == "42   "
+/// example: fmt::i64_aligned(-7, 2, true) == "-7"
+pub fn i64_aligned(value: i64, width: i64, right_align: bool) -> str {
+    let text = str_from_i64(value)
+    if right_align {
+        return pad_left(text, width)
+    }
+    return pad_right(text, width)
+}
+
+/// `f64_fixed(value, decimals)` — a real number with a fixed number of decimal
+/// places.
+///
+/// pre: `0 <= decimals <= 9`, `value` is finite and `|value| × 10^decimals` fits
+/// in an `i64`; those bounds are what the arithmetic needs, and the conversion
+/// stops the program when the last one does not hold
+/// post: the result has exactly `decimals` digits after the point, rounded to the
+/// nearest and away from zero on a tie; the rounding applies to the binary value
+/// the machine holds, so `f64_fixed(1.005, 2)` is `"1.00"` and not `"1.01"`; a
+/// value that rounds to zero is written without a sign, so `f64_fixed(-0.4, 0)`
+/// is `"0"`
+/// cost: O(decimals)
+/// pure: yes
+/// example: fmt::f64_fixed(1.0 / 3.0, 3) == "0.333"
+/// example: fmt::f64_fixed(2.0, 2) == "2.00"
+/// example: fmt::f64_fixed(-2.5, 0) == "-3"
+/// example: fmt::f64_fixed(-0.4, 0) == "0"
+/// example: fmt::f64_fixed(1.005, 2) == "1.00"
+/// error: fmt::f64_fixed(1.0e18, 6) => to_i64 of a value outside the i64 range
+pub fn f64_fixed(value: f64, decimals: i64) -> str {
+    let negative = value < 0.0
+    let magnitude = value
+    if negative {
+        magnitude = 0.0 - value
+    }
+    let scale = 1
+    let factor = 1.0
+    let step = 0
+    while step < decimals {
+        scale = scale * 10
+        factor = factor * 10.0
+        step = step + 1
+    }
+    let rounded = to_i64(magnitude * factor + 0.5)
+    let whole = rounded / scale
+    let fraction = rounded % scale
+    let text = str_from_i64(whole)
+    if negative && rounded != 0 {
+        text = str_concat("-", text)
+    }
+    if decimals > 0 {
+        let digits = str_from_i64(fraction)
+        let zeros = repeat("0", decimals - bytes_len(digits))
+        text = str_concat(str_concat(text, "."), str_concat(zeros, digits))
+    }
+    return text
+}

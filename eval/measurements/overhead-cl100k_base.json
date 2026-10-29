@@ -13,13 +13,13 @@
     "file": "guides/nava-1.md",
     "version": 1,
     "spec_version": 1,
-    "sha256": "f13b96de12a15fba538a788f2b87982eaa35de28a458e026c564ac1834752919",
-    "bytes": 28614,
-    "chars": 28542,
-    "lines": 813
+    "sha256": "6815411513dc3a2e88d9a109d24fc2ea1b1e248ee707bbdafc47e3d15382f35d",
+    "bytes": 29252,
+    "chars": 29178,
+    "lines": 830
   },
   "guide_digests": {
-    "nava": "f13b96de12a15fba538a788f2b87982eaa35de28a458e026c564ac1834752919",
+    "nava": "6815411513dc3a2e88d9a109d24fc2ea1b1e248ee707bbdafc47e3d15382f35d",
     "c": "504ac794d16b55d66c03b3d778a98b0e233aea9e1cf455fb92d32615eafc9044",
     "cpp": "282f1dc2817ca98ec88ed242b7c9c04f174bf132a718a4dd206f21c0c92a137a"
   },
@@ -45,16 +45,16 @@
   "languages": {
     "nava": {
       "guide": {
-        "bytes": 314743,
-        "chars": 313951,
-        "lines": 8932,
-        "tokens": 94413
+        "bytes": 321761,
+        "chars": 320947,
+        "lines": 9119,
+        "tokens": 96536
       },
       "prompt": {
-        "bytes": 317336,
-        "chars": 316544,
-        "lines": 8987,
-        "tokens": 95049
+        "bytes": 324354,
+        "chars": 323540,
+        "lines": 9174,
+        "tokens": 97172
       }
     },
     "c": {
@@ -92,11 +92,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 173,
@@ -113,11 +113,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28897,
-            "chars": 28825,
-            "lines": 817,
-            "sha256": "a1c2c6c692c62bfd4c9b0758e965f5cc976a5641fb859b1f386ea1af4e24c0af",
-            "tokens": 8659
+            "bytes": 29535,
+            "chars": 29461,
+            "lines": 834,
+            "sha256": "59e36c906eb1959ddfd43714112b087a4121aa587c522af4bf304a199777a206",
+            "tokens": 8852
           }
         },
         "c": {
@@ -184,30 +184,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -217,11 +217,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 82,
@@ -238,11 +238,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28806,
-            "chars": 28734,
-            "lines": 817,
-            "sha256": "3e1614c7147ed5faa2e67875732b3f49c553e463f7144643a6b2b35d7e415e21",
-            "tokens": 8627
+            "bytes": 29444,
+            "chars": 29370,
+            "lines": 834,
+            "sha256": "6aa36c30c58631a81ec86d8cefd8e931b3e17fa2203888621ccdf85f12b81cdb",
+            "tokens": 8820
           }
         },
         "c": {
@@ -309,30 +309,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -342,11 +342,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 84,
@@ -363,11 +363,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28808,
-            "chars": 28736,
-            "lines": 817,
-            "sha256": "6e09133e77f9d0720cce8f73512239e2d8e9b61a3cd3ebf7f091ee7f0c4282dc",
-            "tokens": 8632
+            "bytes": 29446,
+            "chars": 29372,
+            "lines": 834,
+            "sha256": "e7c039c102bae808f3efde9b7c58dfb72ea8f69bc8cd0565e60d907e431b0181",
+            "tokens": 8825
           }
         },
         "c": {
@@ -434,30 +434,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -467,11 +467,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 144,
@@ -488,11 +488,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28868,
-            "chars": 28796,
-            "lines": 817,
-            "sha256": "3999dd1e6147c49a8a7477598abb38c65627f67a1fd1684ff1b5d3d14edeb1c7",
-            "tokens": 8646
+            "bytes": 29506,
+            "chars": 29432,
+            "lines": 834,
+            "sha256": "2cdefb95b17d9dddc68049475d9c461081d19c6a6e26b88b85869c025c14ec28",
+            "tokens": 8839
           }
         },
         "c": {
@@ -559,30 +559,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -592,11 +592,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 138,
@@ -613,11 +613,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28862,
-            "chars": 28790,
-            "lines": 817,
-            "sha256": "d1416367128e01ef02bd248d697f474811595365d19c6c68c629886687761437",
-            "tokens": 8642
+            "bytes": 29500,
+            "chars": 29426,
+            "lines": 834,
+            "sha256": "dbddd7b6fcfbaf8df51cd6c1ff2c8606608e0e2575cfabc8e37291b3226c36ea",
+            "tokens": 8835
           }
         },
         "c": {
@@ -684,30 +684,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -717,11 +717,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 85,
@@ -738,11 +738,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28809,
-            "chars": 28737,
-            "lines": 817,
-            "sha256": "8558d2830b0f1f017c288e9123045bd3f5ff5f434b30c64a33635a0ed5c865e8",
-            "tokens": 8628
+            "bytes": 29447,
+            "chars": 29373,
+            "lines": 834,
+            "sha256": "27f33af05c81e75ee57af96a7abd6c693e734f5262484390ebec777458dbfa9c",
+            "tokens": 8821
           }
         },
         "c": {
@@ -809,30 +809,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -842,11 +842,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 101,
@@ -863,11 +863,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28825,
-            "chars": 28753,
-            "lines": 817,
-            "sha256": "f95b3f6f352b50bb8de4acfda190c29c1e7255f3994bb92f0fefa97c07a82b90",
-            "tokens": 8634
+            "bytes": 29463,
+            "chars": 29389,
+            "lines": 834,
+            "sha256": "b11111c4b0fb3b355681d9a93cf44c91af6f3e7046e7f702305cae65dfdfea43",
+            "tokens": 8827
           }
         },
         "c": {
@@ -934,30 +934,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -967,11 +967,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 171,
@@ -988,11 +988,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28895,
-            "chars": 28823,
-            "lines": 817,
-            "sha256": "97bdac88d03a21b5926aa28494df1985d521ba5608ab2345eb8bfc8e4b094bd5",
-            "tokens": 8649
+            "bytes": 29533,
+            "chars": 29459,
+            "lines": 834,
+            "sha256": "168e7fa69df46c49b817ad979733f61866d1b5f91599b51aa5f76f9f7b175e40",
+            "tokens": 8842
           }
         },
         "c": {
@@ -1059,30 +1059,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -1092,11 +1092,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 90,
@@ -1113,11 +1113,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28814,
-            "chars": 28742,
-            "lines": 817,
-            "sha256": "fb771c7941006810b7c6268ff2b1a21076966d947a21c5b73c836ac8c5dd4cc3",
-            "tokens": 8629
+            "bytes": 29452,
+            "chars": 29378,
+            "lines": 834,
+            "sha256": "acfd027b5b97f93dd36820f3498427f75f1ca8ce00376bccd01d48388689371a",
+            "tokens": 8822
           }
         },
         "c": {
@@ -1184,30 +1184,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -1217,11 +1217,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 222,
@@ -1238,11 +1238,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28946,
-            "chars": 28874,
-            "lines": 817,
-            "sha256": "7d9b8b2acfe45a0c1eaf5396eee9d9b86e94f356061b21963f92eed7cb6983fe",
-            "tokens": 8666
+            "bytes": 29584,
+            "chars": 29510,
+            "lines": 834,
+            "sha256": "3dd04fe9ce008a9b4c47eb1467837faa3714b88415c4a8982a6c3953477bffb0",
+            "tokens": 8859
           }
         },
         "c": {
@@ -1309,30 +1309,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }
@@ -1342,11 +1342,11 @@
       "languages": {
         "nava": {
           "guide": {
-            "bytes": 28613,
-            "chars": 28541,
-            "lines": 812,
-            "sha256": "792b65f3fc89c4560a77970772122228d916d72a5d96e797e5dcaf18e7892eb9",
-            "tokens": 8583
+            "bytes": 29251,
+            "chars": 29177,
+            "lines": 829,
+            "sha256": "f7c397a7998e966e911b6fdaba08e7e191425d8132b75942caeba5161cf099c9",
+            "tokens": 8776
           },
           "task": {
             "bytes": 82,
@@ -1363,11 +1363,11 @@
             "tokens": 20
           },
           "prompt": {
-            "bytes": 28806,
-            "chars": 28734,
-            "lines": 817,
-            "sha256": "9a5cfd9ac877917db75827337694a84d28007672a7574f470b8df42606d79d26",
-            "tokens": 8637
+            "bytes": 29444,
+            "chars": 29370,
+            "lines": 834,
+            "sha256": "d370884d9d411aabc60883e61a7c528d1e1d7e2ec281ac401ed850f6af9c5c63",
+            "tokens": 8830
           }
         },
         "c": {
@@ -1434,30 +1434,30 @@
       "guidance_overhead": {
         "c": {
           "guide": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           },
           "prompt": {
-            "bytes": 28450,
-            "chars": 28378,
-            "lines": 811,
-            "tokens": 8549
+            "bytes": 29088,
+            "chars": 29014,
+            "lines": 828,
+            "tokens": 8742
           }
         },
         "cpp": {
           "guide": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           },
           "prompt": {
-            "bytes": 28470,
-            "chars": 28398,
-            "lines": 811,
-            "tokens": 8553
+            "bytes": 29108,
+            "chars": 29034,
+            "lines": 828,
+            "tokens": 8746
           }
         }
       }

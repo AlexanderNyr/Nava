@@ -64,6 +64,9 @@ REGISTERED_TESTS = {
         "test_the_generated_reference_matches_the_tree",
         "test_the_command_writes_what_the_guard_expects",
         "test_an_unknown_module_is_reported",
+        # A module that exports nothing passes every other lane by having
+        # nothing to check, so it is a lane of its own.
+        "test_a_module_with_no_public_function_is_not_a_pass",
     },
     "PurityNegativeControlTests": {
         "test_a_pure_function_that_prints_is_reported",
@@ -71,6 +74,10 @@ REGISTERED_TESTS = {
         "test_a_pure_function_that_takes_a_mut_borrow_is_reported",
         "test_a_pure_function_that_writes_through_a_parameter_is_reported",
         "test_a_value_other_than_yes_or_no_is_reported",
+        # A local helper without a claim is reported as *unclaimed*, not as
+        # impure: the two send the author to different repairs.
+        "test_a_pure_function_that_calls_an_unclaimed_helper_is_reported",
+        "test_a_helper_that_states_its_own_claim_is_accepted",
     },
     "ContractNegativeControlTests": {
         "test_a_public_function_without_a_contract_is_reported",
@@ -998,7 +1005,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
     "tests/fixtures/negative": 146,
-    "tests/fixtures/positive": 31,
+    "tests/fixtures/positive": 32,
     "tests/fixtures/warnings": 3,
 }
 

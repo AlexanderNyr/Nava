@@ -1,0 +1,16 @@
+import fmt;
+
+fn row(label: str, value: i64) -> str {
+    return str_concat(fmt::pad_right(label, 8), fmt::i64_aligned(value, 6, true))
+}
+
+fn main() {
+    print(str_concat(fmt::pad_right("item", 8), fmt::pad_left("total", 6)))
+    print(row("apples", 1234))
+    print(row("pears", -7))
+    print(str_concat(fmt::pad_right("ratio", 8),
+                     fmt::pad_left(fmt::f64_fixed(1.0 / 3.0, 3), 6)))
+    print(str_concat(fmt::pad_center("end", 14), "|"))
+    print(str_concat(fmt::clip("abcdefghij", 5), "..."))
+    print(fmt::repeat("-", 14))
+}

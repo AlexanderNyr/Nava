@@ -607,6 +607,7 @@ nava_lang/stdlib/math.nv      abs, min, max, sign, gcd, sum
 nava_lang/stdlib/sort.nv      is_sorted, insertion_sort, binary_search
 nava_lang/stdlib/text.nv      is_ascii, is_valid_utf8, code_points, ...
 nava_lang/stdlib/test.nv      expect_true, expect_i64, expect_str, run, summary
+nava_lang/stdlib/fmt.nv       repeat, pad_left, pad_right, pad_center, clip, ...
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -665,6 +666,41 @@ validation that never allocates.
 | `text::is_valid_utf8(value: str) -> bool` | strict validation: no overlong forms, no surrogates, nothing above U+10FFFF |
 | `text::code_points(value: str) -> i64` | the number of code points, or -1 when the string is not valid UTF-8 |
 | `text::is_ascii(value: str) -> bool` | true when every byte is below 128 |
+
+### `fmt`
+
+Formatting into a column: a width in bytes, the side to align to, and the number
+of decimal places. Every function answers with a `str` built by `str_concat`, so
+none of them grows a collection and each is documented `pure: yes`.
+
+| Function | Result |
+|---|---|
+| `fmt::module_version() -> i64` | the standard library version |
+| `fmt::repeat(text: str, times: i64) -> str` | `text` written `times` times; empty when `times` is 0 or `text` is empty |
+| `fmt::pad_left(text: str, width: i64) -> str` | `text` with spaces in front of it, `width` bytes in all; a longer text comes back unchanged |
+| `fmt::pad_right(text: str, width: i64) -> str` | the same with the spaces after it |
+| `fmt::pad_center(text: str, width: i64) -> str` | spaces on both sides; when the padding is odd the extra byte goes on the right |
+| `fmt::clip(text: str, width: i64) -> str` | the first `width` bytes, or the whole text when it is shorter |
+| `fmt::i64_aligned(value: i64, width: i64, right_align: bool) -> str` | the decimal text of a whole number in a column |
+| `fmt::f64_fixed(value: f64, decimals: i64) -> str` | exactly `decimals` digits after the point, rounded to the nearest with ties away from zero, and no sign on a value that rounds to zero |
+
+A width counts **bytes**, not display columns: a `str` is a byte sequence and
+`fmt` does not guess how wide a character is on a terminal, so `clip` may cut
+inside a multi-byte character. Rounding applies to the binary value the machine
+holds, so `f64_fixed(1.005, 2)` is `"1.00"`, and `|value| × 10^decimals` must fit
+in an `i64` or the conversion stops the program.
+
+```nava
+import fmt;
+
+fn main() {
+    print(str_concat(fmt::pad_right("apples", 8), fmt::i64_aligned(1234, 6, true)))
+    print(str_concat(fmt::pad_right("ratio", 8),
+                     fmt::pad_left(fmt::f64_fixed(1.0 / 3.0, 3), 6)))
+}
+```
+
+This prints `apples    1234` and `ratio    0.333`.
 
 ## Doc blocks and `nava doc`
 

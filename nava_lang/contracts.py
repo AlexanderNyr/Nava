@@ -226,6 +226,10 @@ def purity_problems(program: Program, module: str) -> list[str]:
         if function.name in EXEMPT:
             continue
         claims[function.name] = parse(function.doc).pure
+    # `claims` holds every function of this file, a helper without a doc block
+    # included (with no claim), so a call to a helper is told apart from a call
+    # to a builtin: the two are refusals for different reasons, and a message
+    # that says "has an effect" about a helper sends the reader to the wrong fix.
     problems: list[str] = []
     for function in program.functions:
         if function.name in EXEMPT or claims.get(function.name) != "yes":
@@ -246,11 +250,17 @@ def purity_problems(program: Program, module: str) -> list[str]:
                         f"purity across modules is not checked, so this cannot be "
                         f"verified — mark the function `pure: no` or call it from "
                         f"the same module")
-                elif called is None and name in claims:
-                    if claims[name] != "yes":
-                        problems.append(
-                            f"{label}: claims `pure: yes` but calls `{name}`, "
-                            f"which is documented `pure: no`")
+                elif name in claims and claims[name] == "no":
+                    problems.append(
+                        f"{label}: claims `pure: yes` but calls `{name}`, "
+                        f"which is documented `pure: no`")
+                elif name in claims and claims[name] != "yes":
+                    problems.append(
+                        f"{label}: claims `pure: yes` but calls `{name}`, which "
+                        f"has no purity claim — write `pure: yes` in its doc "
+                        f"block, or mark this function `pure: no`")
+                elif name in claims:
+                    pass
                 elif name not in PURE_BUILTINS:
                     problems.append(
                         f"{label}: claims `pure: yes` but calls `{name}`, "
@@ -323,9 +333,16 @@ def contracts_of(program: Program) -> dict[str, Contract]:
 def check_program(program: Program, module: str) -> list[str]:
     """The guard's question, asked of one parsed module."""
     problems: list[str] = []
-    for function in program.functions:
-        if not is_public(program, function):
-            continue
+    exported = [function for function in program.functions if is_public(program, function)]
+    if not exported:
+        # A module that exports nothing passes every other check by having
+        # nothing to check, which is the shape of a guard that has stopped
+        # guarding: say so instead of reporting a clean bill of health.
+        problems.append(
+            f"{module or 'this file'}: exports no function, so it has no contract "
+            f"to keep — an edition-2 module exports only its `pub fn`, and an "
+            f"edition-1 module exports all of them")
+    for function in exported:
         name = f"{module}::{function.name}" if module else function.name
         problems.extend(problems_of(parse(function.doc), name))
     problems.extend(purity_problems(program, module))

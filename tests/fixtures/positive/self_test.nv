@@ -3,6 +3,7 @@
 # checks that this file names every public function of every module — a public
 # name with no test here fails the guard.
 
+import fmt;
 import math;
 import sort;
 import test;
@@ -151,6 +152,76 @@ fn is_ascii_tests() -> i64 {
     return failures
 }
 
+fn repeat_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::repeat("ab", 3), "ababab", "ab three times")
+    failures = failures + test::expect_str(fmt::repeat("x", 0), "", "nothing times anything")
+    failures = failures + test::expect_str(fmt::repeat("", 5), "", "an empty text stays empty")
+    return failures
+}
+
+fn pad_left_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::pad_left("7", 3), "  7", "7 in three columns")
+    failures = failures + test::expect_str(fmt::pad_left("abcd", 2), "abcd",
+                                           "padding never truncates")
+    failures = failures + test::expect_str(fmt::pad_left("", 2), "  ", "nothing is two spaces")
+    return failures
+}
+
+fn pad_right_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::pad_right("7", 3), "7  ", "left aligned")
+    failures = failures + test::expect_str(fmt::pad_right("abcd", 2), "abcd",
+                                           "padding never truncates on this side either")
+    return failures
+}
+
+fn pad_center_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::pad_center("ab", 6), "  ab  ",
+                                           "even padding splits in two")
+    failures = failures + test::expect_str(fmt::pad_center("ab", 5), " ab  ",
+                                           "an odd byte goes on the right")
+    failures = failures + test::expect_str(fmt::pad_center("abc", 2), "abc",
+                                           "a text wider than the column is untouched")
+    return failures
+}
+
+fn clip_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::clip("abcdef", 3), "abc", "the first three bytes")
+    failures = failures + test::expect_str(fmt::clip("ab", 5), "ab", "a short text comes back whole")
+    failures = failures + test::expect_str(fmt::clip("abc", 0), "", "zero bytes is nothing")
+    return failures
+}
+
+fn i64_aligned_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::i64_aligned(42, 5, true), "   42",
+                                           "a number is right aligned")
+    failures = failures + test::expect_str(fmt::i64_aligned(42, 5, false), "42   ",
+                                           "or left aligned when asked")
+    failures = failures + test::expect_str(fmt::i64_aligned(-7, 2, true), "-7",
+                                           "a negative number already fills the column")
+    return failures
+}
+
+fn f64_fixed_tests() -> i64 {
+    let failures = 0
+    failures = failures + test::expect_str(fmt::f64_fixed(1.0 / 3.0, 3), "0.333",
+                                           "three decimals of a third")
+    failures = failures + test::expect_str(fmt::f64_fixed(2.0, 2), "2.00",
+                                           "digits after the point are kept")
+    failures = failures + test::expect_str(fmt::f64_fixed(-2.5, 0), "-3",
+                                           "a tie rounds away from zero")
+    failures = failures + test::expect_str(fmt::f64_fixed(-0.4, 0), "0",
+                                           "a value that rounds to zero has no sign")
+    failures = failures + test::expect_str(fmt::f64_fixed(1.005, 2), "1.00",
+                                           "rounding applies to the binary value")
+    return failures
+}
+
 fn main() -> i64 {
     let failed = 0
     failed = failed + test::run("math::abs", abs_tests)
@@ -167,5 +238,12 @@ fn main() -> i64 {
     failed = failed + test::run("text::is_valid_utf8", is_valid_utf8_tests)
     failed = failed + test::run("text::code_points", code_points_tests)
     failed = failed + test::run("text::is_ascii", is_ascii_tests)
+    failed = failed + test::run("fmt::repeat", repeat_tests)
+    failed = failed + test::run("fmt::pad_left", pad_left_tests)
+    failed = failed + test::run("fmt::pad_right", pad_right_tests)
+    failed = failed + test::run("fmt::pad_center", pad_center_tests)
+    failed = failed + test::run("fmt::clip", clip_tests)
+    failed = failed + test::run("fmt::i64_aligned", i64_aligned_tests)
+    failed = failed + test::run("fmt::f64_fixed", f64_fixed_tests)
     return test::summary("standard library", failed)
 }

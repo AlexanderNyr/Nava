@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+N12d: **`fmt`**. Printing a table needs a column width, a side to align to and a
+number of decimal places; the audit's f-string row (519) is closed with a module
+instead of a format language.
+
+- `fmt::pad_left`, `fmt::pad_right`, `fmt::pad_center`, `fmt::clip`,
+  `fmt::i64_aligned`, `fmt::f64_fixed` and `fmt::repeat`, each with a full contract
+  and executed examples, and all of them `pure: yes` because every one answers
+  with a `str` built by `str_concat` rather than a `String` builder.
+- A width counts **bytes**: a `str` is a byte sequence and the module does not
+  guess how wide a character is on a terminal, so `clip` may cut inside a
+  multi-byte character. `f64_fixed` rounds the binary value with ties away from
+  zero (`-2.5` → `"-3"`, `1.005` → `"1.00"`), keeps no sign on a value that rounds
+  to zero (`-0.4` → `"0"`), and documents the overflow it can hit
+  (`to_i64 of a value outside the i64 range`).
+- Two holes in the guards, found by writing the module. A `pure: yes` function
+  that called a **local helper** was reported as calling something with "an
+  effect", which names the wrong repair; there are now three cases — documented
+  `pure: no`, no claim at all (with the doc block to write) and a builtin with an
+  effect — and a helper that states `pure: yes` gives `[]`. And a module whose
+  every function forgot `pub` used to pass every lane by having nothing to check;
+  `check_program` now reports `exports no function`.
+- The guide guard reads a module's public surface by edition (`pub fn` in edition
+  2, every `fn` in edition 1), so a private helper is not the guide's business
+  while an exported name still cannot be omitted.
+- `self_test.nv` names 21 public functions now and prints 21 `ok` lines;
+  `tests/fixtures/positive/fmt_table.nv` is a two-column table recorded byte for
+  byte; `docs/stdlib/fmt.md` is generated and compared.
+
 N12c: **purity and self-testing**. A contract now says whether the function has
 effects, the guard checks that claim against the body, and the standard library
 tests itself in Nava and returns its own failure count.

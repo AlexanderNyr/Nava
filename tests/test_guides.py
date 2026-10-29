@@ -157,9 +157,14 @@ class GuideCoverageTests(unittest.TestCase):
         """A guide that omits a stdlib function sends a model to the wrong call."""
         for module in sorted((ROOT / "nava_lang/stdlib").glob("*.nv")):
             source = module.read_text(encoding="utf-8")
-            # `pub fn` counts too: an edition-2 module exports only its public
-            # functions, and a guide that omits one sends a model to the wrong call.
-            for name in re.findall(r"^(?:pub )?fn (\w+)", source, re.MULTILINE):
+            # Which functions a module exports depends on its edition: an
+            # edition-2 module exports only `pub fn`, an edition-1 module exports
+            # all of them. Either way an exported name the guide omits sends a
+            # model to the wrong call, and a private helper is not the guide's
+            # business.
+            edition_two = source.lstrip().startswith("edition 2;")
+            pattern = r"^pub fn (\w+)" if edition_two else r"^fn (\w+)"
+            for name in re.findall(pattern, source, re.MULTILINE):
                 if name == "module_version":
                     continue
                 with self.subTest(module=module.stem, function=name):

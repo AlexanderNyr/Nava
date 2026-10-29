@@ -149,6 +149,23 @@ fn main() {
 - `test` — `test::expect_true`, `test::expect_i64`, `test::expect_str`,
   `test::run`, `test::summary`, `test::passing`: assertions and a runner, so a
   program can test itself and return the failure count as its exit status.
+- `fmt` — `fmt::repeat`, `fmt::pad_left`, `fmt::pad_right`, `fmt::pad_center`,
+  `fmt::clip`, `fmt::i64_aligned`, `fmt::f64_fixed`: a column width in **bytes**,
+  the side to align to and the number of decimal places, which is what printing a
+  table needs. Every one of them answers with a `str`, so they compose with
+  `str_concat`.
+
+Two aligned columns, without a format language to learn:
+
+```nava
+import fmt;
+
+fn main() {
+    print(str_concat(fmt::pad_right("apples", 8), fmt::i64_aligned(1234, 6, true)))
+    print(str_concat(fmt::pad_right("ratio", 8),
+                     fmt::pad_left(fmt::f64_fixed(1.0 / 3.0, 3), 6)))
+}
+```
 
 For a single-file answer, do not write imports; use the built-ins above.
 

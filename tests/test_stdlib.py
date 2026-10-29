@@ -239,7 +239,7 @@ class StdlibContractTests(unittest.TestCase):
         paths = sorted(modules.stdlib_path().glob("*.nv"))
         # Every packaged module declares the version it was written against; a
         # new module is added here on purpose, so one can never ship without it.
-        self.assertEqual([path.stem for path in paths], ["math", "sort", "test", "text"])
+        self.assertEqual([path.stem for path in paths], ["fmt", "math", "sort", "test", "text"])
         for path in paths:
             with self.subTest(module=path.stem):
                 program = parse(path.read_text(encoding="utf-8"), path=str(path))

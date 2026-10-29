@@ -358,6 +358,19 @@ class ContractGuardTests(unittest.TestCase):
                 self.assertEqual((Path(directory) / name).read_text(encoding="utf-8"),
                                  (REFERENCE / name).read_text(encoding="utf-8"))
 
+    def test_a_module_with_no_public_function_is_not_a_pass(self):
+        """A module that exports nothing passes every check by having none.
+
+        That is the shape of a guard that has stopped guarding, so it is
+        reported: without this, an edition-2 module whose every function forgot
+        `pub` would be documented as clean.
+        """
+        reported = contracts.check_program(
+            parse("edition 2;\n\nfn private_helper(x: i64) -> i64 {\n"
+                  "    return x\n}\n"), "sample")
+        self.assertTrue(any("exports no function" in item for item in reported),
+                        reported)
+
     def test_an_unknown_module_is_reported(self):
         result = subprocess.run([sys.executable, str(NAVA), "doc", "nosuchmodule"],
                                 capture_output=True, text=True, timeout=300)
@@ -410,6 +423,35 @@ class PurityNegativeControlTests(unittest.TestCase):
             "/// example: bump(1) == 1\n"
             "pub fn bump(xs: mut [i64]) -> i64 {\n    xs[0] = 1\n    return len(xs)\n}\n")
         self.assertTrue(any("takes `mut [i64]`" in item for item in reported), reported)
+
+    def test_a_pure_function_that_calls_an_unclaimed_helper_is_reported(self):
+        """A local helper without a claim is an open question, not a pass.
+
+        The message has to say *that*, because "which has an effect" would send
+        the author to the wrong repair: the helper may well be pure, it just has
+        not said so.
+        """
+        reported = self.problems(
+            "edition 2;\n\nfn helper(x: i64) -> i64 {\n    return x + 1\n}\n\n"
+            "/// `wrapper(x)` — claims purity.\n/// pre: none\n"
+            "/// post: the result is `x + 1`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: wrapper(1) == 2\n"
+            "pub fn wrapper(x: i64) -> i64 {\n    return helper(x)\n}\n")
+        self.assertTrue(
+            any("calls `helper`, which has no purity claim" in item for item in reported),
+            reported)
+        self.assertFalse(any("has an effect" in item for item in reported), reported)
+
+    def test_a_helper_that_states_its_own_claim_is_accepted(self):
+        reported = self.problems(
+            "edition 2;\n\n/// `helper(x)` — adds one.\n/// pre: none\n"
+            "/// post: the result is `x + 1`\n/// cost: O(1)\n/// pure: yes\n"
+            "fn helper(x: i64) -> i64 {\n    return x + 1\n}\n\n"
+            "/// `wrapper(x)` — claims purity.\n/// pre: none\n"
+            "/// post: the result is `x + 1`\n/// cost: O(1)\n/// pure: yes\n"
+            "/// example: wrapper(1) == 2\n"
+            "pub fn wrapper(x: i64) -> i64 {\n    return helper(x)\n}\n")
+        self.assertEqual(reported, [])
 
     def test_a_value_other_than_yes_or_no_is_reported(self):
         reported = self.problems(
