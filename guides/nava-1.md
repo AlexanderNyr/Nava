@@ -86,6 +86,28 @@ read-only view. An array is created by a `let` binding, has exactly one owner,
 is released when its block ends, and is never copied (`E0331`) or returned
 (`E0330`); a borrow cannot outlive the call, so there are no lifetimes.
 
+## Doc blocks
+
+`///` lines directly above a `fn` are that function's contract: a summary line,
+then `pre:`, `post:`, `cost:`, one or more `example:` lines whose last statement
+must be `true`, and `error:` lines shaped `statements => what the program prints
+before it stops`. `nava doc` turns them into reference pages. A `///` block
+anywhere else — over a `struct`, or inside a body — is `E0207`.
+
+```nava
+edition 2;
+
+/// `double(x)` — twice `x`.
+///
+/// pre: none
+/// post: the result is `2 * x`
+/// cost: O(1)
+/// example: double(2) == 4
+pub fn double(x: i64) -> i64 {
+    return x * 2
+}
+```
+
 ## Built-in functions
 
 - `print(value)` — one `i64`, `bool`, `f64` or `str`, plus a newline.

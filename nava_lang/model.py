@@ -607,6 +607,9 @@ class Function:
     #: Type parameters as written; empty for an ordinary function. A declaration
     #: with them is a template, and every call instantiates it.
     type_params: list[str] = field(default_factory=list)
+    #: The `///` lines above the declaration, without the marker. `nava_lang/
+    #: contracts.py` reads them; the compiler itself only carries them.
+    doc: list[str] = field(default_factory=list)
 
     @property
     def qualified(self) -> str:

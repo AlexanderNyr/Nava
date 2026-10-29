@@ -44,6 +44,11 @@ as a guaranteed return.
   may continue on the next line only while it is inside one of those
   delimiters. Outside them an expression cannot be split across lines.
 - **Comments** — `#` or `//` to the end of the line.
+- **Doc comments** — `///` to the end of the line, in a run of adjacent lines
+  directly above a `fn` declaration. A doc block is not trivia: the compiler
+  keeps it, `nava doc` reads it, and it documents the function under it. Such a
+  block anywhere else is `E0207`. See
+  [Doc blocks and `nava doc`](#doc-blocks-and-nava-doc).
 - **Keywords** — `fn`, `let`, `if`, `else`, `while`, `for`, `in`, `break`,
   `continue`, `return`, `import`, `true`, `false`, `mut` (only in a parameter
   type, see [Arrays and ownership](#arrays-and-ownership)).
@@ -81,7 +86,8 @@ or `;`; a separator is not required before `}`.
 ```text
 program        = [ edition ] { import } { function } end_of_file ;
 import         = "import" IDENT ;
-function       = "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
+function       = { doc_line } "fn" IDENT "(" [ parameters ] ")" [ "->" type ] block ;
+doc_line       = "///" { any character except newline } ;
 parameters     = parameter { "," parameter } ;
 parameter      = IDENT ":" [ "mut" ] type ;
 type           = "i64" | "bool" | "str" | "void"
@@ -122,7 +128,8 @@ arguments      = expression { "," expression } ;
 
 All binary operators are left-associative. Only a call may be used as a
 statement (`E0313` otherwise). Every `import` must appear before the first
-`fn` (`E0354`).
+`fn` (`E0354`). A doc block may stand only between declarations, immediately
+above the `fn` it documents: it is not a statement, and it is not a comment.
 
 ## Types and values
 
@@ -657,6 +664,75 @@ validation that never allocates.
 | `text::is_valid_utf8(value: str) -> bool` | strict validation: no overlong forms, no surrogates, nothing above U+10FFFF |
 | `text::code_points(value: str) -> i64` | the number of code points, or -1 when the string is not valid UTF-8 |
 | `text::is_ascii(value: str) -> bool` | true when every byte is below 128 |
+
+## Doc blocks and `nava doc`
+
+A `///` block above a function is the function's contract, written in the
+language and checked by the test suite. The block is prose plus repeated
+fields; a line that starts with a known `key:` is a field, and every other
+line is prose (the first prose line is the summary).
+
+```nava
+/// `clamp(x, low, high)` — `x` limited to the closed range.
+///
+/// pre: `low <= high`
+/// post: the result is `low` when `x < low`, `high` when `x > high`,
+/// and `x` otherwise
+/// cost: O(1)
+/// example: clamp(5, 0, 3) == 3 && clamp(-1, 0, 3) == 0
+fn clamp(x: i64, low: i64, high: i64) -> i64 {
+    if x < low {
+        return low
+    }
+    if x > high {
+        return high
+    }
+    return x
+}
+
+fn main() {
+    print(clamp(5, 0, 3))     # 3
+    print(clamp(-1, 0, 3))    # 0
+}
+```
+
+| Field | Count | Meaning |
+|---|---|---|
+| `pre:` | one | the precondition: what the caller must guarantee |
+| `post:` | one | the postcondition: what the function guarantees |
+| `cost:` | one | the complexity, in terms of the arguments |
+| `example:` | one or more | statements whose last one must be `true` |
+| `error:` | zero or more | statements, `=>`, and the text the program prints before it stops |
+
+Fields are read literally: `pres:` is prose, so the `pre:` line looks missing
+and the guard says so instead of accepting a typo. Repeating a single field is
+reported too.
+
+`nava doc` renders the reference from the blocks:
+
+```bash
+python3 nava doc                      # the whole standard library, to stdout
+python3 nava doc math                 # one module
+python3 nava doc --out docs/stdlib    # one Markdown file per module
+```
+
+An unknown module is `E0508`. The output is generated, never edited: the files
+under `docs/stdlib/` are committed and `tests/test_contracts.py` regenerates
+them and fails when the two disagree.
+
+`tests/test_contracts.py` is the guard behind the claims, and it runs in CI:
+
+- every `pub` function of every packaged module has a summary, `pre:`, `post:`,
+  `cost:` and at least one `example:` — a public name without a contract fails;
+- every example is compiled and run, and has to be true; an example that does
+  not compile is reported with the compiler's diagnostic;
+- every `error:` line is run: the program must stop, and must print the
+  documented text — a documented failure that does not happen fails the suite.
+
+Those three rules are what separate a contract from a comment, and the file
+also carries the negative controls that show the guard fails: a public function
+with no contract, an example that does not compile, an example that is false,
+and a documented failure that does not happen.
 
 ## Text, bytes and UTF-8
 
@@ -1926,6 +2002,7 @@ never changes meaning; a new condition gets a new code.
 | `E0206` | error | an array element type is not allowed (`[void]`, `[f64]`, `[[i64]]`, `[Name]`) | `tests/fixtures/negative/array_nested_type.nv`, `array_of_void.nv`, `array_of_f64.nv` |
 | `E0204` | error | unclosed block | `tests/fixtures/negative/parse_unclosed_block.nv` |
 | `E0205` | error | expected an expression | `tests/fixtures/negative/parse_expected_expression.nv` |
+| `E0207` | error | a doc comment documents a function (`///` before something else, or inside a body) | `tests/fixtures/negative/doc_comment_before_a_struct.nv`, `doc_comment_in_a_body.nv` |
 
 | `E0370` | error | the edition declaration is not the first statement | `tests/fixtures/negative/edition_not_first.nv` |
 | `E0371` | error | unknown edition | `tests/fixtures/negative/edition_unknown.nv` |
@@ -2063,6 +2140,7 @@ never changes meaning; a new condition gets a new code.
 | `E0505` | error | output directory does not exist | — |
 | `E0506` | error | directory does not exist | `tests/test_files.py: test_a_missing_grant_directory_is_reported` |
 | `E0507` | error | path is not a directory | `tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported` |
+| `E0508` | error | `nava doc` was asked for a module that does not exist | `tests/test_contracts.py: test_an_unknown_module_is_reported` |
 
 **Sandbox and isolation**
 

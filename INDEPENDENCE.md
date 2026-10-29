@@ -12,8 +12,8 @@ enums as values, arrays of every value), N11b (owning fields, with the copy and
 release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, the `str_*` text functions
 and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `Vec` or a `String`
 as a field, a payload or a type argument) and N11g (an element that owns storage)
-are delivered; N12 has begun with N12a (`HashMap`/`HashSet`), and N13–N18 are not
-started.** The
+are delivered; N12 has begun with N12a (`HashMap`/`HashSet`) and N12b (doc blocks,
+`nava doc` and the contracts guard), and N13–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -49,10 +49,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 9 850 lines,
-13 modules and 311 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 10 242 lines,
+14 modules and 325 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11g) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12b) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,42 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12b (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A doc block is syntax, not trivia | `tests/test_contracts.py`: `DocBlockTests.test_a_doc_block_attaches_to_the_function_below_it` | the lexer emits a `DOC` token for `///` (the branch stands *before* `#` and `//`, or the line would be eaten as a comment), the parser keeps the run in `Function.doc`, and the six lines of a block arrive with their text intact; a doc block does not leak onto the next declaration |
+| A doc block belongs to the function under it, and nowhere else | `test_a_doc_comment_inside_a_body_is_refused`, `test_a_doc_comment_before_something_that_is_not_a_function_is_refused`, fixtures `doc_comment_before_a_struct.nv`, `doc_comment_in_a_body.nv` | `E0207` for `///` above a `struct` (`4:1`, hint "write `///` lines directly above a `fn` declaration") and inside a body (`2:5`, hint "move the `///` lines above the enclosing `fn` declaration") |
+| Every public name carries a contract | `ContractGuardTests.test_every_public_name_has_a_contract` | `contracts.check_program` returns `[]` for all three packaged modules: 14 public functions (6 in `math`, 3 in `sort`, 5 in `text`), each with a summary, `pre:`, `post:`, `cost:` and at least one `example:`; `module_version` is exempt by name, because it is the module protocol rather than the library |
+| Every documented example runs and is true | `ContractGuardTests.test_every_documented_example_is_true` | 25 examples are compiled into one program per module (each inside its own block) and run; every one prints `ok`. An example that does not compile is named individually, with the compiler's own code and message, instead of failing the module |
+| Every documented failure happens | `ContractGuardTests.test_every_documented_failure_happens` | 4 `error:` lines are executed: `math::abs(-9223372036854775808)` and `math::gcd(-9223372036854775808, 0)` print `i64 overflow in unary -`, `math::sum([i64_max, 1])` prints `i64 overflow in +` and `text::sequence_width("abc", 7)` prints `byte index 7 is out of bounds for a string of 3 bytes`; each stops the program, and the lane asserts the exact text |
+| The reference is generated, not written | `test_the_generated_reference_matches_the_tree`, `test_the_command_writes_what_the_guard_expects` | `docs/stdlib/{math,sort,text}.md` are 2 865 / 2 338 / 3 094 bytes (134 / 93 / 123 lines); the guard regenerates them from the doc blocks and compares byte for byte, and `nava doc --out DIR` writes exactly those files |
+| The command has one diagnostic and it is registered | `test_an_unknown_module_is_reported`, `LANGUAGE.md` code table | `nava doc nosuchmodule` exits `2` and prints `no module named 'nosuchmodule': neither a file nor a standard module`; `E0508` is in the table and in `CODES_TESTED_ELSEWHERE` |
+| The fields are read literally, so a typo is visible | `test_a_miswritten_field_shows_up_as_missing`, `test_fields_are_read_and_a_duplicate_is_reported`, `test_an_error_line_needs_both_halves` | `pres:` is prose, so the report says that the precondition line is missing rather than accepting the typo; a repeated single field is reported as written more than once; an `error:` line without `=>` is reported as one that "does not say what the program prints" |
+| The grammar agrees with the compiler about doc blocks | `tests/test_grammar.py`: `test_the_standard_library_is_accepted_with_its_doc_blocks`, `CorpusConformanceTests` | the GBNF and the token backend carry `doc_lines`/`doc_opt` inside the `function` rule, so all three packaged modules are accepted, while both `E0207` fixtures are rejected by the grammar for the same reason the parser rejects them — `E0207` is classified as syntactic |
+| The guard fails when a contract is missing or untrue | `ContractNegativeControlTests` (5 tests) | a public function with no doc block is reported for a missing summary and a missing `example:` line; an example that does not compile is reported as `example 1 does not compile: E0205 expected an expression`; a false example as `example 1 is false: sample::twice(2) == 5`; a documented failure that does not happen as `did not stop the program`; and one that stops with the wrong text as printing `nava runtime error: division by zero` rather than the documented words |
+| The specification, the guide and the records moved with the code | `LANGUAGE.md` (lexical structure, the grammar block, a new "Doc blocks and `nava doc`" section, two code rows), `guides/nava-1.md` (a "Doc blocks" section), `guides/manifest.json` | the block syntax, the five fields, the generated reference and the three lanes are normative; the guide is re-pinned at 27 975 bytes, 790 lines, sha256 `4e35993a…`; `E0207` and `E0508` bring the code table to 147 entries |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | prompt 93 036 tokens (`cl100k_base`) and 93 432 (`o200k_base`), summed over the eleven tasks, of which the guide is 8 366 / 8 402 tokens once (27 975 bytes, 790 lines) |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 10 242 lines, 14 modules, 325 functions under `nava_lang/` after this increment (9 850 / 13 / 311 at N12a); the fourteenth module is `contracts.py`, which is the parser for the blocks and the renderer for the reference |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 681 registered tests, 11 tasks with 76 cases, 190 spec fixtures, 147 diagnostic codes`; suite **751 tests OK** (1 282 subtests); release checks OK; the guide digests verify |
+
+Negative controls: the five in `ContractNegativeControlTests` are the ones the
+phase asks for — a public function without a contract, an example that does not
+compile, an example that is false, a documented failure that does not happen and a
+documented failure with the wrong text — and each is a *module written into a
+temporary directory*, so the guard is exercised on the same code path as the real
+one rather than on a mock. The two `E0207` fixtures carry the syntax refusal into
+the corpus, where `tests/test_grammar.py` requires both sides to reject them.
+
+Deliberately not done in N12b, and why: the **`test` module**, determinism across
+backends, and `fmt`/`io`/`fs`/`args`/`collections`/`time`. The contracts and the
+guard are the mechanism those modules will be written against, and the three
+modules that exist are where the mechanism was proved; a `test` module that
+asserts on contracts is worth writing once `fmt` exists to make an assertion worth
+reading. Doc blocks are also *not* a docstring mechanism for arbitrary code — a
+block above a `struct` is `E0207` — because a contract belongs to something that
+can be called and checked.
 
 #### Delivery record N12a (2026-10-29)
 
@@ -828,7 +864,8 @@ self-testing facility.
 | Increment | Scope | State |
 |---|---|---|
 | N12a | **Tables**: `HashMap(K, V)` and `HashSet(T)` — keys that hash, a total `map_get -> Option(V)`, open addressing with tombstones, copies in and out under the element rule, and the move rules a container inherits | **Delivered** (record below) |
-| N12b–N12x | contracts, `nava doc`, the `test` module, determinism across backends and the remaining `fmt`/`io`/`fs`/`args`/`collections`/`text`/`math`/`sort`/`time` modules | Not started |
+| N12b | **Contracts**: a doc block (`///`) as syntax, `nava_lang/contracts.py`, `nava doc` and the reference under `docs/stdlib/`; the guard that fails on an undocumented public name, an example that is false or does not compile, and a documented failure that does not happen | **Delivered** (record below) |
+| N12c–N12x | the `test` module, determinism across backends, and the remaining `fmt`/`io`/`fs`/`args`/`collections`/`text`/`math`/`sort`/`time` modules | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here
@@ -1066,7 +1103,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 9 850 Python lines and 311 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 10 242 Python lines and 325 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

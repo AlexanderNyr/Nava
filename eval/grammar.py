@@ -92,6 +92,10 @@ TERMINALS: dict[str, dict] = {
     "MATCH": _terminal({"MATCH"}, '"match"'),
     "DEFER": _terminal({"DEFER"}, '"defer"'),
     "PUB": _terminal({"PUB"}, '"pub"'),
+    #: A doc block line. The compiler keeps `///` as a token because `nava doc`
+    #: reads it; the grammar only records *where* a block may stand, which is
+    #: what makes `E0207` a shape the two agree on.
+    "DOC": _terminal({"DOC"}, '"///" [^\\n]*'),
     "DEFER": _terminal({"DEFER"}, '"defer"'),
     "PUB": _terminal({"PUB"}, '"pub"'),
     "FATARROW": _terminal({"=>"}, '"=>"'),
@@ -159,8 +163,15 @@ CORE: dict[str, list[list[tuple]]] = {
     "types_tail": [[T("COMMA"), N("type"), N("types_tail")], []],
     "structure": [[T("STRUCT"), T("IDENT"), N("type_params"), T("LBRACE"),
                    N("fields_opt"), T("RBRACE")]],
-    "function": [[N("pub_opt"), T("FN"), T("IDENT"), N("type_params"), T("LPAREN"),
-                  N("params_opt"), T("RPAREN"), N("returns"), N("block")]],
+    #: A doc block belongs to the function under it and nowhere else, so it is
+    #: part of the `function` rule: `///` before a struct or an import is a shape
+    #: the grammar refuses, exactly as the parser does with `E0207`.
+    "function": [[N("doc_opt"), N("pub_opt"), T("FN"), T("IDENT"), N("type_params"),
+                  T("LPAREN"), N("params_opt"), T("RPAREN"), N("returns"), N("block")]],
+    #: One or more `///` lines, each ending in a separator of its own, which is
+    #: why the rule carries `sep_plus` between the lines and one before `fn`.
+    "doc_opt": [[N("doc_lines"), N("sep_plus")], []],
+    "doc_lines": [[T("DOC"), N("sep_plus"), N("doc_lines")], [T("DOC")]],
     #: `<T, U>` after a declared name. The grammar cannot tell a type parameter
     #: from any other name, and does not have to.
     "type_params": [[T("LT"), N("type_params_body"), T("GT")], []],

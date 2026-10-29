@@ -59,6 +59,11 @@ GRAMMAR_REJECTS = frozenset(
     | {"E0441", "E0443"}
     # `edition` is a prefix of the file in the grammar and in the compiler.
     | {"E0370"}
+    # A doc block belongs to the function under it: the grammar puts the `///`
+    # lines inside the `function` rule, so `///` before a struct or a statement
+    # is refused by both sides, and the two corpus fixtures for E0207 are
+    # rejected here as the parser rejects them.
+    | {"E0207"}
 )
 
 #: Codes produced after the source was read successfully: the program is
@@ -272,6 +277,17 @@ class CorpusConformanceTests(unittest.TestCase):
         for path in sorted((ROOT / "examples").rglob("*.nv")):
             with self.subTest(example=path.name):
                 self.assertTrue(accept(path.read_text(encoding="utf-8"), path.name))
+
+    def test_the_standard_library_is_accepted_with_its_doc_blocks(self):
+        """A doc block is part of the shape, so the packaged modules must pass.
+
+        The standard library is where `///` is used for real; if the grammar
+        treated a doc block as anything but a block above a `fn`, the modules
+        that `nava doc` documents would be programs the grammar refuses.
+        """
+        for path in sorted((ROOT / "nava_lang" / "stdlib").glob("*.nv")):
+            with self.subTest(module=path.name):
+                self.assertTrue(accept(path.read_text(encoding="utf-8"), str(path)))
 
 
 class SyntaxIsNotSemanticsTests(unittest.TestCase):

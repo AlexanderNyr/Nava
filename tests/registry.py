@@ -39,6 +39,36 @@ REQUIRED_TOOLS = ("cc", "c++")
 
 #: Registered test methods per `unittest` class in `tests/test_nava.py`.
 REGISTERED_TESTS = {
+    #: N12b: doc blocks are a contract, and the guard is what makes the claim
+    #: true. `ContractGuardTests` carries the three CI lanes (every public name
+    #: documented, every example true, every documented failure real) and the
+    #: regeneration check; `ContractNegativeControlTests` proves the lanes fail.
+    "DocBlockTests": {
+        "test_a_doc_block_attaches_to_the_function_below_it",
+        "test_a_blank_line_ends_a_doc_block",
+        "test_a_doc_comment_inside_a_body_is_refused",
+        "test_a_doc_comment_before_something_that_is_not_a_function_is_refused",
+        "test_fields_are_read_and_a_duplicate_is_reported",
+        "test_a_miswritten_field_shows_up_as_missing",
+        "test_an_error_line_needs_both_halves",
+        "test_statements_split_on_semicolons_but_not_inside_strings",
+        "test_the_module_protocol_function_is_exempt",
+    },
+    "ContractGuardTests": {
+        "test_every_public_name_has_a_contract",
+        "test_every_documented_example_is_true",
+        "test_every_documented_failure_happens",
+        "test_the_generated_reference_matches_the_tree",
+        "test_the_command_writes_what_the_guard_expects",
+        "test_an_unknown_module_is_reported",
+    },
+    "ContractNegativeControlTests": {
+        "test_a_public_function_without_a_contract_is_reported",
+        "test_an_example_that_does_not_compile_is_reported",
+        "test_an_example_that_is_false_is_reported",
+        "test_a_documented_failure_that_does_not_happen_is_reported",
+        "test_a_documented_failure_with_the_wrong_message_is_reported",
+    },
     "FrontendTests": {
         "test_requires_main",
         "test_main_signature",
@@ -869,6 +899,7 @@ REGISTERED_TESTS = {
         "test_multi_file_module_fixtures_are_accepted",
         "test_negative_fixtures_are_accepted_or_rejected_as_classified",
         "test_the_shipped_examples_are_accepted",
+        "test_the_standard_library_is_accepted_with_its_doc_blocks",
     },
     "SyntaxIsNotSemanticsTests": {
         "test_a_runtime_failure_survives_both_the_grammar_and_the_compiler",
@@ -939,7 +970,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 144,
+    "tests/fixtures/negative": 146,
     "tests/fixtures/positive": 30,
     "tests/fixtures/warnings": 3,
 }
@@ -972,6 +1003,9 @@ CODES_TESTED_ELSEWHERE = {
     "E0361": "tests/test_modules.py: test_the_standard_library_version_is_checked",
     "E0506": "tests/test_files.py: test_a_missing_grant_directory_is_reported",
     "E0507": "tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported",
+    # `nava doc` is the only command that reads modules rather than a program,
+    # so its one diagnostic is covered by the contracts guard.
+    "E0508": "tests/test_contracts.py: test_an_unknown_module_is_reported",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -998,6 +1032,7 @@ def discovered_tests() -> dict[str, set[str]]:
         sys.path.insert(0, str(ROOT / "tests"))
     import test_ab  # noqa: PLC0415  (import after sys.path setup)
     import test_arrays  # noqa: PLC0415
+    import test_contracts  # noqa: PLC0415
     import test_control  # noqa: PLC0415
     import test_defers  # noqa: PLC0415
     import test_enums  # noqa: PLC0415
@@ -1030,7 +1065,8 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_tables  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
-    for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
+    for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
+                   test_files,
                    test_float, test_functions, test_generics, test_grammar, test_guides,
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
@@ -1086,6 +1122,7 @@ def check_skip_state() -> list[str]:
         if getattr(class_object, "__unittest_skip__", False):
             problems.append(f"{class_name} is skipped on this host; required tool: {required}")
     import test_arrays  # noqa: PLC0415
+    import test_contracts  # noqa: PLC0415
     import test_control  # noqa: PLC0415
     import test_files  # noqa: PLC0415
     import test_float  # noqa: PLC0415
@@ -1101,7 +1138,9 @@ def check_skip_state() -> list[str]:
     import test_elements  # noqa: PLC0415
     import test_storage  # noqa: PLC0415
     import test_tables  # noqa: PLC0415
-    for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
+    for module, class_name in ((test_contracts, "ContractGuardTests"),
+                               (test_contracts, "ContractNegativeControlTests"),
+                               (test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
                                (test_float, "FloatRuntimeTests"),

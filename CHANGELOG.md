@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+N12b: **contracts**. A `///` block above a `fn` is that function's contract, and
+the standard library writes one for every public name; `nava doc` renders the
+reference from them, and the test suite compiles and runs every example and every
+documented failure in CI.
+
+- A doc comment is **syntax**, not trivia: `///` lines in a run belong to the `fn`
+  below and are kept in the syntax tree (`Function.doc`). A block anywhere else —
+  over a `struct`, or inside a body — is `E0207`. The grammar models the same rule,
+  so a doc block is part of the shape the conformance checker and the GBNF agree
+  on, and the packaged modules are programs both accept.
+- The contract fields are read literally: `pre:`, `post:`, `cost:`, one or more
+  `example:` lines and zero or more `error: statements_must_stop => message`
+  lines; every other line is prose. A typo such as `pres:` shows up as a *missing*
+  `pre:` rather than being silently accepted, and a repeated single field is
+  reported.
+- `nava doc [MODULE…] [--out DIR]` generates Markdown from the blocks; with no
+  module named it documents the whole standard library, in file order, so the
+  output is reproducible. An unknown module is `E0508`.
+- `docs/stdlib/{math,sort,text}.md` are generated and committed; the guard
+  regenerates them and compares byte for byte, the same discipline as the pinned
+  guide digest.
+- `tests/test_contracts.py` is the gate: every public function has a summary,
+  `pre:`, `post:`, `cost:` and at least one `example:`; every example is compiled
+  into a program and must be `true`; every `error:` line is run, and the program
+  must stop with the documented text. The file also carries the negative controls
+  — an undocumented public function, an example that does not compile, an example
+  that is false and a documented failure that does not happen — because a guard
+  whose negative control passes is not a guard.
+- `nava_lang/contracts.py` is the module behind both: parse, `problems`,
+  `check_program`, `module_version`, `signature` and `render_module`.
+- `E0207` and `E0508` are new, so the code table has 147 entries.
+
 N12a: `HashMap(K, V)` and `HashSet(T)` — the first increment of the standard
 library, and the two collections N11 moved to N12 on purpose.
 

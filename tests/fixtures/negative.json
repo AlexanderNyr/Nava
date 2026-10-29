@@ -1296,6 +1296,24 @@
       "end_column": 23,
       "message": "set_new needs to know the type it holds",
       "hint": "write the annotation, as in `let s: HashSet(str) = set_new()`"
+    },
+    {
+      "file": "doc_comment_before_a_struct.nv",
+      "code": "E0207",
+      "line": 4,
+      "column": 1,
+      "end_column": 1,
+      "message": "a doc comment documents the function that follows it",
+      "hint": "write `///` lines directly above a `fn` declaration"
+    },
+    {
+      "file": "doc_comment_in_a_body.nv",
+      "code": "E0207",
+      "line": 2,
+      "column": 5,
+      "end_column": 5,
+      "message": "a doc comment documents a function, not a statement",
+      "hint": "move the `///` lines above the enclosing `fn` declaration"
     }
   ]
 }

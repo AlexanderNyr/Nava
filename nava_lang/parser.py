@@ -122,6 +122,26 @@ class Parser:
         while self.at("NL") or self.at(";"):
             self.i += 1
 
+    def doc_block(self) -> list[str]:
+        """The `///` lines that document the declaration that follows them.
+
+        A block is a run of adjacent doc lines: a blank line between two of them
+        ends it, so a paragraph of prose cannot attach itself to whatever
+        declaration happens to come next. What the lines *mean* is not the
+        parser's business — `nava_lang/contracts.py` reads the fields — and a
+        file that documents nothing is ordinary Nava.
+        """
+        lines: list[str] = []
+        while self.at("DOC"):
+            lines.append(str(self.current.value))
+            self.i += 1
+            if self.at("NL"):
+                self.i += 1
+                if self.at("NL"):
+                    break
+        self.separators()
+        return lines
+
     def end_statement(self) -> None:
         if self.at(".."):
             raise make("E0350", "a range a..b is only allowed directly after `in`",
@@ -526,6 +546,14 @@ class Parser:
             self.edition_declaration()
             self.separators()
         while not self.at("EOF"):
+            doc = self.doc_block()
+            if doc and not (self.at("FN") or self.at("PUB")):
+                raise make(
+                    "E0207",
+                    "a doc comment documents the function that follows it",
+                    self.current.loc,
+                    hint="write `///` lines directly above a `fn` declaration",
+                )
             if self.at("EDITION"):
                 token = self.current
                 raise make(
@@ -552,7 +580,7 @@ class Parser:
                         public.loc, public.loc.advance("pub"),
                         hint="a module exposes functions; struct and enum visibility is later",
                     )
-                functions.append(self.function(public=True))
+                functions.append(self.function(public=True, doc=doc))
             elif self.at("IMPORT"):
                 if functions:
                     raise make(
@@ -564,7 +592,7 @@ class Parser:
                     )
                 imports.append(self.import_statement())
             else:
-                functions.append(self.function())
+                functions.append(self.function(doc=doc))
             self.separators()
         program = Program(functions, imports=imports, structs=structs, enums=enums)
         program.edition = self.edition
@@ -584,7 +612,7 @@ class Parser:
         self.end_statement()
         return Import(str(name.value), start.loc, name.loc)
 
-    def function(self, public: bool = False) -> Function:
+    def function(self, public: bool = False, doc: list[str] | None = None) -> Function:
         start = self.expect("FN", "'fn'")
         if public:
             self.require_edition(start.loc, "a public function")
@@ -603,7 +631,8 @@ class Parser:
         finally:
             self.type_params_in_scope = saved_params
         function = Function(str(name.value), params, returns, body, start.loc,
-                            public=public, type_params=type_params)
+                            public=public, type_params=type_params,
+                            doc=list(doc or []))
         return function
 
     def block(self) -> list:
@@ -626,6 +655,13 @@ class Parser:
 
     def statement(self):
         token = self.current
+        if self.at("DOC"):
+            raise make(
+                "E0207",
+                "a doc comment documents a function, not a statement",
+                token.loc,
+                hint="move the `///` lines above the enclosing `fn` declaration",
+            )
         if self.take("LET"):
             name = self.expect("IDENT", "variable name")
             annotation = self.parse_type() if self.take(":") else None

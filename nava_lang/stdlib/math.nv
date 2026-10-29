@@ -1,14 +1,21 @@
 # Nava standard library: integer helpers.  Version 1.
 #
 # Every standard module declares `module_version`; the compiler refuses a
-# module whose version is not the one it was built against.
+# module whose version is not the one it was built against.  The function is
+# part of the module protocol, not of the library: it carries no contract, and
+# `nava_lang/contracts.py` says so by name.
 
 fn module_version() -> i64 {
     return 1
 }
 
-# The absolute value.  `abs(-9223372036854775808)` is a runtime error: the
-# result does not fit in i64, and Nava never wraps silently.
+/// `abs(x)` — the absolute value of `x`.
+///
+/// pre: `x` is any `i64`
+/// post: the result is `x` when `x >= 0`, and `-x` otherwise
+/// cost: O(1)
+/// example: math::abs(-7) == 7 && math::abs(4) == 4 && math::abs(0) == 0
+/// error: math::abs(-9223372036854775808) => i64 overflow in unary -
 fn abs(x: i64) -> i64 {
     if x < 0 {
         return -x
@@ -16,6 +23,12 @@ fn abs(x: i64) -> i64 {
     return x
 }
 
+/// `min(a, b)` — the smaller of two integers.
+///
+/// pre: none
+/// post: the result is `a` or `b`, and never greater than either
+/// cost: O(1)
+/// example: math::min(3, 5) == 3 && math::min(-1, -2) == -2 && math::min(4, 4) == 4
 fn min(a: i64, b: i64) -> i64 {
     if a < b {
         return a
@@ -23,6 +36,12 @@ fn min(a: i64, b: i64) -> i64 {
     return b
 }
 
+/// `max(a, b)` — the larger of two integers.
+///
+/// pre: none
+/// post: the result is `a` or `b`, and never smaller than either
+/// cost: O(1)
+/// example: math::max(3, 5) == 5 && math::max(-1, -2) == -1 && math::max(4, 4) == 4
 fn max(a: i64, b: i64) -> i64 {
     if a > b {
         return a
@@ -30,6 +49,12 @@ fn max(a: i64, b: i64) -> i64 {
     return b
 }
 
+/// `sign(x)` — the sign of `x` as -1, 0 or 1.
+///
+/// pre: none
+/// post: the result is -1 when `x < 0`, 0 when `x == 0` and 1 when `x > 0`
+/// cost: O(1)
+/// example: math::sign(-9) == -1 && math::sign(0) == 0 && math::sign(4) == 1
 fn sign(x: i64) -> i64 {
     if x < 0 {
         return -1
@@ -40,7 +65,13 @@ fn sign(x: i64) -> i64 {
     return 0
 }
 
-# Euclid's algorithm on the absolute values.  `gcd(0, 0)` is 0.
+/// `gcd(a, b)` — the greatest common divisor of the absolute values.
+///
+/// pre: none
+/// post: the result divides both arguments, is non-negative, and `gcd(0, 0)` is 0
+/// cost: O(log(max(|a|, |b|)))
+/// example: math::gcd(48, 18) == 6 && math::gcd(0, 0) == 0 && math::gcd(-12, 8) == 4
+/// error: math::gcd(-9223372036854775808, 0) => i64 overflow in unary -
 fn gcd(a: i64, b: i64) -> i64 {
     let u = abs(a)
     let v = abs(b)
@@ -52,7 +83,14 @@ fn gcd(a: i64, b: i64) -> i64 {
     return u
 }
 
-# The sum of a possibly empty array; an empty array sums to 0.
+/// `sum(values)` — the sum of an array, which may be empty.
+///
+/// pre: none
+/// post: the result is the arithmetic sum of the elements, and 0 for an empty array
+/// cost: O(n) for n elements
+/// example: let values: [i64] = [1, 2, 3]; math::sum(values) == 6
+/// example: let empty: [i64] = []; math::sum(empty) == 0
+/// error: let big: [i64] = [9223372036854775807, 1]; math::sum(big) => i64 overflow in +
 fn sum(values: [i64]) -> i64 {
     let total = 0
     for value in values {

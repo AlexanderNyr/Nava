@@ -77,6 +77,9 @@ CODES_TESTED_ELSEWHERE = {
              "test_a_standard_module_must_declare_its_version",
     "E0506": "tests/test_files.py: test_a_missing_grant_directory_is_reported",
     "E0507": "tests/test_files.py: test_a_grant_that_is_not_a_directory_is_reported",
+    # `nava doc` is the only command that reads modules rather than a program,
+    # so its one diagnostic is covered by the contracts guard.
+    "E0508": "tests/test_contracts.py: test_an_unknown_module_is_reported",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

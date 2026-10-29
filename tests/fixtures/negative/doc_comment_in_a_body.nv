@@ -1,0 +1,8 @@
+fn helper() -> i64 {
+    /// this line documents nothing
+    return 1
+}
+
+fn main() {
+    print(helper())
+}

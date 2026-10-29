@@ -135,6 +135,44 @@ def add_project_options(command: argparse.ArgumentParser) -> None:
                               "default)")
 
 
+def document_modules(names: list[str], out: Path | None) -> list[Path]:
+    """`nava doc`: the reference generated from the modules' contracts.
+
+    A name is a path to a `.nv` file, or the name of a packaged standard module.
+    With no name at all the whole standard library is documented, in the order the
+    files are read, so the output is the same on every machine.
+    """
+    from . import contracts
+    from .parser import parse as parse_module
+
+    root = Path(__file__).resolve().parent.parent
+    if not names:
+        names = sorted(path.stem for path in modules.stdlib_path().glob("*.nv"))
+    written: list[Path] = []
+    for name in names:
+        path = Path(name)
+        if not path.is_file():
+            path = modules.stdlib_path() / (name + ".nv")
+        if not path.is_file():
+            raise make("E0508", f"no module named {name!r}: neither a file nor a "
+                                f"standard module")
+        program = parse_module(path.read_text(encoding="utf-8"), path=str(path))
+        try:
+            display = path.resolve().relative_to(root).as_posix()
+        except ValueError:
+            display = Path(name).as_posix()
+        text = contracts.render_module(path.stem, Path(display), program,
+                                       contracts.module_version(program))
+        if out is None:
+            sys.stdout.write(text)
+            continue
+        out.mkdir(parents=True, exist_ok=True)
+        target = out / (path.stem + ".md")
+        target.write_text(text, encoding="utf-8")
+        written.append(target)
+    return written
+
+
 def make_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="nava",
@@ -162,6 +200,17 @@ def make_parser() -> argparse.ArgumentParser:
     build.add_argument("--cc", help="C compiler command (default: $CC or cc)")
     build.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
     add_project_options(build)
+    doc_cmd = sub.add_parser(
+        "doc", help="write the reference generated from the modules' contracts",
+        description="Generate reference documentation from the doc blocks of one "
+                    "module or a few. With no module named, the whole standard "
+                    "library is documented.",
+    )
+    doc_cmd.add_argument("modules", nargs="*",
+                         help="module names or .nv files (default: the standard library)")
+    doc_cmd.add_argument("--out", type=Path, metavar="DIR",
+                         help="write one Markdown file per module into DIR "
+                              "(default: stdout)")
     run = sub.add_parser(
         "run", help="compile and execute a program",
         description="Compile and run a program. By default the program runs under the best "
@@ -219,8 +268,28 @@ def report_warnings(warnings: list[Diagnostic], path: Path, machine: bool) -> No
 
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
-    path = Path(args.source)
     machine = args.format == "json"
+    if args.command == "doc":
+        # `doc` reads modules rather than a program: it needs no `main`, no
+        # capabilities and no C compiler, so it returns before any of that.
+        try:
+            written = document_modules(args.modules, args.out)
+            if machine:
+                print(report_json("nava doc", "ok", [],
+                                  {"written": [str(item) for item in written]}))
+            elif not written:
+                pass
+            else:
+                for item in written:
+                    print(f"Wrote: {item}")
+            return 0
+        except NavaError as exc:
+            if machine:
+                print(report_json("nava doc", "error", [exc.diagnostic]))
+            else:
+                print(f"nava: {exc.diagnostic.message}", file=sys.stderr)
+            return 2
+    path = Path(args.source)
     try:
         try:
             source = path.read_text(encoding="utf-8")

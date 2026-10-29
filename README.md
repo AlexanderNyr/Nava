@@ -22,6 +22,11 @@ explicit function types, inferred local types and checked arithmetic.
 
 - `i64`, `bool`, `str` and `f64`; mutable locals and parameters with block
   scope.
+- Doc blocks: `///` above a `fn` is that function's contract (`pre:`, `post:`,
+  `cost:`, `example:`, `error:`), and `nava doc` renders the reference from it.
+  The standard library documents every public name that way, and
+  `tests/test_contracts.py` compiles and runs every documented example and every
+  documented failure in CI.
 - Fixed-length arrays `[i64]`, `[bool]` and `[str]`: array literals,
   `array_zeros(n)`, `len(a)`, checked indexing with `a[i]` and `a[i] = value`,
   read-only `[T]` and mutable `mut [T]` parameters. One owner per array, no
@@ -173,6 +178,11 @@ printf '48 18\n' | ./gcd       # 6
 
 # Inspect the generated C.
 python3 nava emit-c examples/gcd.nv -o gcd.c
+
+# Generate the standard library reference from its doc blocks (one file per
+# module), or print one module's reference.
+python3 nava doc --out docs/stdlib
+python3 nava doc math
 
 # A program split across files, using the standard library.
 python3 nava check examples/modules/main.nv

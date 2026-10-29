@@ -8,13 +8,29 @@ fn module_version() -> i64 {
     return 1
 }
 
+/// `is_continuation(byte)` — is this byte a UTF-8 continuation byte?
+///
+/// pre: `byte` is a byte value, 0..255 in practice
+/// post: the result is `true` exactly for the range 128..191
+/// cost: O(1)
+/// example: text::is_continuation(128) && text::is_continuation(191)
+/// example: !text::is_continuation(127) && !text::is_continuation(192)
 fn is_continuation(byte: i64) -> bool {
     return byte >= 128 && byte <= 191
 }
 
-# Width in bytes of the well-formed UTF-8 sequence that starts at byte `index`,
-# or 0 when the sequence is malformed.  Strict: no overlong forms, no
-# surrogates (U+D800..U+DFFF) and nothing above U+10FFFF.
+/// `sequence_width(value, index)` — the length in bytes of the UTF-8 sequence at
+/// `index`, or 0 when it is malformed.
+///
+/// pre: `0 <= index < bytes_len(value)`; the caller checks the range, and the
+/// byte read stops the program when it does not hold
+/// post: the result is 1, 2, 3 or 4 for a well-formed sequence and 0 for a
+/// malformed one — overlong forms, surrogates and anything above U+10FFFF are
+/// malformed
+/// cost: O(1)
+/// example: text::sequence_width("a", 0) == 1 && text::sequence_width("\u00e9", 0) == 2
+/// example: text::sequence_width("\u20ac", 0) == 3
+/// error: text::sequence_width("abc", 7) => byte index 7 is out of bounds for a string of 3 bytes
 fn sequence_width(value: str, index: i64) -> i64 {
     let length = bytes_len(value)
     let first = byte_at(value, index)
@@ -70,6 +86,14 @@ fn sequence_width(value: str, index: i64) -> i64 {
     return 0
 }
 
+/// `is_valid_utf8(value)` — is the whole string well-formed UTF-8?
+///
+/// pre: none
+/// post: the result is `true` exactly when every sequence in the string is
+/// well-formed, so the builtin `chars_len` would accept it
+/// cost: O(n) for n bytes
+/// example: text::is_valid_utf8("hello") && text::is_valid_utf8("")
+/// example: text::is_valid_utf8("\u00e9\u20ac")
 fn is_valid_utf8(value: str) -> bool {
     let length = bytes_len(value)
     let index = 0
@@ -83,8 +107,14 @@ fn is_valid_utf8(value: str) -> bool {
     return true
 }
 
-# Number of code points, or -1 when the string is not valid UTF-8.  Compare
-# with the builtin `chars_len`, which stops the program instead of returning -1.
+/// `code_points(value)` — how many code points the string holds.
+///
+/// pre: none
+/// post: the result is the number of well-formed sequences, or -1 when the string
+/// is not valid UTF-8; the builtin `chars_len` stops the program instead
+/// cost: O(n) for n bytes
+/// example: text::code_points("hello") == 5 && text::code_points("") == 0
+/// example: text::code_points("\u00e9\u20ac") == 2
 fn code_points(value: str) -> i64 {
     let length = bytes_len(value)
     let index = 0
@@ -100,6 +130,13 @@ fn code_points(value: str) -> i64 {
     return count
 }
 
+/// `is_ascii(value)` — is every byte below 128?
+///
+/// pre: none
+/// post: the result is `true` exactly when no byte of the string is 128 or above
+/// cost: O(n) for n bytes
+/// example: text::is_ascii("hello") && text::is_ascii("")
+/// example: !text::is_ascii("\u00e9")
 fn is_ascii(value: str) -> bool {
     let index = 0
     while index < bytes_len(value) {

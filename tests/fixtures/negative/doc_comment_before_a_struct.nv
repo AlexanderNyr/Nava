@@ -1,0 +1,11 @@
+edition 2;
+
+/// A point in the plane.
+struct Point {
+    x: i64
+}
+
+fn main() {
+    let p = Point(x: 1)
+    print(p.x)
+}

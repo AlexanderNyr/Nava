@@ -55,6 +55,16 @@ def _lex(source: str) -> list[Token]:
             i += 1
             line += 1
             col = 1
+        elif source.startswith("///", i):
+            # A doc comment is a comment the compiler keeps: `nava doc` and the
+            # contract guard read it, so it is a token rather than trivia.
+            start = i + 3
+            end = source.find("\n", start)
+            if end < 0:
+                end = n
+            tokens.append(Token("DOC", source[start:end], loc))
+            col += end - i
+            i = end
         elif ch == "#" or source.startswith("//", i):
             while i < n and source[i] != "\n":
                 i += 1

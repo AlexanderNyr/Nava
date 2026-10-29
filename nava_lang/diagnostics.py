@@ -50,6 +50,7 @@ CODES: dict[str, tuple[str, str]] = {
     "E0201": (Severity.ERROR, "unexpected token"),
     "E0202": (Severity.ERROR, "missing statement separator"),
     "E0206": (Severity.ERROR, "an array element type is not allowed"),
+    "E0207": (Severity.ERROR, "a doc comment documents a function"),
     "E0203": (Severity.ERROR, "unknown type"),
     "E0204": (Severity.ERROR, "unclosed block"),
     "E0205": (Severity.ERROR, "expected an expression"),
@@ -184,6 +185,7 @@ CODES: dict[str, tuple[str, str]] = {
     "E0505": (Severity.ERROR, "output directory does not exist"),
     "E0506": (Severity.ERROR, "directory does not exist"),
     "E0507": (Severity.ERROR, "path is not a directory"),
+    "E0508": (Severity.ERROR, "no such module to document"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),
