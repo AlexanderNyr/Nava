@@ -1169,7 +1169,7 @@
       "column": 9,
       "end_column": 13,
       "message": "an array element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every read and every write; making those copies deep is the move work of N11e, so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the storage work of N11f, so an array of owning values is refused rather than shared"
     },
     {
       "file": "array_zeros_str.nv",
@@ -1179,15 +1179,6 @@
       "end_column": null,
       "message": "array_zeros cannot create [str]: an all-zero str is a null pointer, not an empty string",
       "hint": "write a literal, or use an element type whose zero value is a value: i64, bool, f64, or a struct or enum of those"
-    },
-    {
-      "file": "vector_copied.nv",
-      "code": "E0428",
-      "line": 5,
-      "column": 9,
-      "end_column": 11,
-      "message": "a vector cannot be copied: 'ys' would share one buffer with another vector",
-      "hint": "create it with `let v: Vec(i64) = vec_new()` and fill it with vec_push"
     },
     {
       "file": "vector_mutated_through_a_borrow.nv",
@@ -1214,16 +1205,7 @@
       "column": 26,
       "end_column": null,
       "message": "a vector element cannot own storage, but Bag holds an array",
-      "hint": "an element is copied on every push and every read; a vector of owning values waits for the move work of N11e"
-    },
-    {
-      "file": "string_copied.nv",
-      "code": "E0428",
-      "line": 5,
-      "column": 9,
-      "end_column": 10,
-      "message": "a String cannot be copied: 't' would share one buffer with another String",
-      "hint": "create it with `let s: String = string_new()` and fill it with string_push"
+      "hint": "an element is copied on every push and every read; a vector of owning values waits for the storage work of N11f"
     },
     {
       "file": "string_field.nv",
@@ -1232,7 +1214,7 @@
       "column": 5,
       "end_column": 9,
       "message": "a field of Note cannot be a String yet",
-      "hint": "a field is copied with its value, and a String has exactly one owner; a field that owns storage arrives with the move work of N11e"
+      "hint": "a field is copied with its value, and a String has exactly one owner; a field that owns storage arrives with the storage work of N11f"
     },
     {
       "file": "string_mutated_through_a_borrow.nv",
@@ -1250,7 +1232,43 @@
       "column": 9,
       "end_column": 14,
       "message": "an array element cannot own storage, but String owns its bytes",
-      "hint": "an element is copied on every read and every write; making those copies deep is the move work of N11e, so an array of owning values is refused rather than shared"
+      "hint": "an element is copied on every read and every write; making those copies deep is the storage work of N11f, so an array of owning values is refused rather than shared"
+    },
+    {
+      "file": "string_moved_into_another_binding.nv",
+      "code": "E0445",
+      "line": 6,
+      "column": 22,
+      "end_column": 23,
+      "message": "'s' was moved: its value belongs to another binding now",
+      "hint": "a move hands the buffer to the new binding and leaves the old one empty; declare a fresh value, or move the buffer back"
+    },
+    {
+      "file": "string_returned_from_a_borrow.nv",
+      "code": "E0446",
+      "line": 4,
+      "column": 5,
+      "end_column": 11,
+      "message": "only a local String this function owns can be moved, and 's' is a borrow",
+      "hint": "the caller owns what it passed and frees it; declare a String here, or take it as `mut String` and change it"
+    },
+    {
+      "file": "vector_moved_into_another_binding.nv",
+      "code": "E0445",
+      "line": 6,
+      "column": 19,
+      "end_column": 21,
+      "message": "'xs' was moved: its value belongs to another binding now",
+      "hint": "a move hands the buffer to the new binding and leaves the old one empty; declare a fresh value, or move the buffer back"
+    },
+    {
+      "file": "vector_reassigned_in_a_borrow.nv",
+      "code": "E0446",
+      "line": 4,
+      "column": 5,
+      "end_column": 7,
+      "message": "a borrowed vector cannot be reassigned ('xs' is a parameter)",
+      "hint": "the caller owns this vector; change what it holds with the `mut` builtins instead of replacing it"
     }
   ]
 }

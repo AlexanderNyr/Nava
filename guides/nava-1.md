@@ -245,7 +245,7 @@ unchanged, never converted, and the rest of the function does not run.
 An array element may be `i64`, `bool`, `str`, a **struct** or an **enum** that
 owns nothing itself — anything that is a value with no owner. A struct or enum
 holding an array is refused as an element (`E0426`): an element is copied on every
-read and every write, so an owning element waits for the move work (N11e). `for point in points` copies each
+read and every write, so an owning element waits for the storage work (N11f). `for point in points` copies each
 element, and `points[i].x` reads a field of an element. `array_zeros(n)` gives
 every element its zero value, so it needs an element type whose zero bits are a
 value: `i64`, `bool`, `f64`, a struct of those, or an enum whose first variant is
@@ -294,8 +294,10 @@ An array keeps the length it was created with; a `Vec(T)` grows. `T` is
 element is `E0427`, as with an array.
 
 `let v: Vec(i64) = vec_new()` creates it, and the block that writes the `let`
-releases it. A vector cannot be copied, reassigned, returned or stored in a
-field (`E0428`), and `vec_new()` without the annotation is `E0429`.
+releases it. A vector is never copied but it can be **moved** — into another
+binding, into an assignment, and out of a function as its return value
+(`fn make() -> Vec(i64)`); it cannot be stored in a field or a payload
+(`E0428`), and `vec_new()` without the annotation is `E0429`.
 
 | Call | Type | Meaning |
 |---|---|---|
@@ -348,10 +350,11 @@ fn main() {
 
 A `str` is immutable and lives for the run; `String` is the owner of bytes a
 program assembles a piece at a time. `let s: String = string_new()` creates it
-and the block releases it. A `String` cannot be copied, reassigned, returned,
-stored in a field or a payload (`E0428`), and it cannot be an array or vector
-element (`E0426`/`E0427`). `mut String` lets a function write into the caller's
-builder.
+and the block releases it. A `String` is never copied but it can be **moved** —
+into another binding, into an assignment, and out of a function as its return
+value (`fn label(n: i64) -> String`); it cannot be stored in a field or a
+payload (`E0428`), and it cannot be an array or vector element
+(`E0426`/`E0427`). `mut String` lets a function write into the caller's builder.
 
 | Call | Type | Meaning |
 |---|---|---|
@@ -371,11 +374,12 @@ builder.
 | `str_split(x, sep, out)` | `void` | appends the fields to a `Vec(str)` |
 | `str_join(parts, sep)` | `str` | the vector joined by `sep` |
 
-`str_split` fills a vector rather than returning one, because a function cannot
-return a vector: `let parts: Vec(str) = vec_new()` then
-`str_split(text, ",", parts)`. Built `str` values live in an arena that is
-released when the process exits; lengths and slices count **bytes**, not
-characters (`chars_len` counts code points and validates UTF-8).
+`str_split` fills a vector rather than returning one, because the separator
+work is done piece by piece: `let parts: Vec(str) = vec_new()` then
+`str_split(text, ",", parts)`. Built `str` values live in an arena; a call
+frees its own region when it returns, unless it returns `str` or writes it
+through a `mut` parameter. Lengths and slices count **bytes**, not characters
+(`chars_len` counts code points and validates UTF-8).
 
 ```nava
 edition 2;
@@ -401,6 +405,48 @@ fn main() {
     print(str_replace("a-b-c", "-", "+"))
 }
 ```
+
+## Edition 2: moves
+
+A `Vec(T)` and a `String` own one buffer, so a program hands it on instead of
+copying it. Three places accept a move — a `let`, an assignment, and `return` —
+and the value comes from a constructor (`vec_new`, `string_new`), a call that
+returns the same type, or a local of that type. After a move the source binding
+is empty and every later use of it is `E0445`. A parameter is a borrow: returning
+one or assigning over one is `E0446`.
+
+```nava
+edition 2;
+
+fn counted(n: i64) -> Vec(i64) {
+    let v: Vec(i64) = vec_new()
+    let i = 0
+    while i < n {
+        vec_push(v, i)
+        i = i + 1
+    }
+    return v
+}
+
+fn label(n: i64) -> String {
+    let s: String = string_new()
+    string_push(s, "n=")
+    string_push(s, str_from_i64(n))
+    return s
+}
+
+fn main() {
+    let xs: Vec(i64) = counted(3)
+    let ys: Vec(i64) = xs
+    print(vec_len(ys))
+    let text: String = label(4)
+    print(string_text(text))
+}
+```
+
+The example prints `3` and `n=4`. An owning value returned by a call must be
+bound: `counted(3)` used as a statement is `E0428`, because the buffer would
+have no owner.
 
 ## Edition 2: `defer`, labelled loops and `pub`
 
@@ -585,3 +631,7 @@ Output: `42`, `10`, `12`.
     field write, `match` binding, `return`. Such a value may not be an array
     element (`E0426`), and `array_zeros(n)` needs an element type whose zero
     value is real, so `[str]` and a struct holding a `str` are `E0425`.
+17. A `Vec(T)` and a `String` are moved, never copied: `let b: Vec(i64) = a`,
+    `b = a` and `return a` hand the buffer on, and afterwards `a` is dead
+    (`E0445`). A parameter is a borrow, so returning one or assigning over one is
+    `E0446`, and an owning result that is not bound is `E0428`.

@@ -1,0 +1,11 @@
+edition 2;
+
+fn refill(xs: mut Vec(i64)) {
+    xs = vec_new()
+}
+
+fn main() {
+    let xs: Vec(i64) = vec_new();
+    refill(xs)
+    print(vec_len(xs))
+}

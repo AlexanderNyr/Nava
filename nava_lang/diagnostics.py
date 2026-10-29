@@ -151,7 +151,7 @@ CODES: dict[str, tuple[str, str]] = {
     "E0425": (Severity.ERROR, "array_zeros needs a zero value"),
     "E0426": (Severity.ERROR, "an array element cannot own storage"),
     "E0427": (Severity.ERROR, "a vector element cannot own storage"),
-    "E0428": (Severity.ERROR, "a vector cannot be copied, returned or stored"),
+    "E0428": (Severity.ERROR, "an owning value has exactly one owner"),
     "E0429": (Severity.ERROR, "vec_new needs an annotated element type"),
     "E0430": (Severity.ERROR, "a deferred block cannot leave the function"),
     "E0431": (Severity.ERROR, "no loop carries this label"),
@@ -167,6 +167,8 @@ CODES: dict[str, tuple[str, str]] = {
     "E0442": (Severity.ERROR, "function values cannot be compared"),
     "E0443": (Severity.ERROR, "a function type has no mutable parameter"),
     "E0444": (Severity.ERROR, "a vector argument must be a writable local"),
+    "E0445": (Severity.ERROR, "a moved value cannot be used again"),
+    "E0446": (Severity.ERROR, "only an owning local can be moved"),
     # --- resource limits ----------------------------------------------------
     "E0401": (Severity.ERROR, "nesting too deep"),
     "E0402": (Severity.ERROR, "compiler recursion limit reached"),

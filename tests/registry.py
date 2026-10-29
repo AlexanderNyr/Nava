@@ -504,8 +504,9 @@ REGISTERED_TESTS = {
     "TextFrontendTests": {
         "test_a_mutating_call_needs_a_writable_string",
         "test_a_string_cannot_be_an_element_or_a_type_argument",
-        "test_a_string_cannot_be_copied_or_reassigned",
-        "test_a_string_cannot_be_returned_a_field_or_a_payload",
+        "test_a_string_cannot_be_a_field_or_a_payload",
+        "test_a_string_is_returned_by_moving_it",
+        "test_a_string_moves_and_a_moved_string_is_dead",
         "test_a_string_is_not_printable_itself",
         "test_a_string_needs_edition_two",
         "test_every_text_function_is_usable_with_its_declared_type",
@@ -525,6 +526,7 @@ REGISTERED_TESTS = {
         "test_the_arena_is_one_chunk_for_small_text_and_freed_at_exit",
         "test_the_reports_are_printed_once_each",
         "test_the_builder_grows_by_doubling_and_keeps_its_text",
+        "test_a_returned_string_is_owned_by_the_caller_and_released",
         "test_the_constructors_produce_the_text_that_print_writes",
         "test_trim_and_replace_build_the_expected_text",
     },
@@ -532,13 +534,39 @@ REGISTERED_TESTS = {
         "test_a_text_argument_with_a_side_effect_runs_once",
         "test_a_vector_argument_with_a_side_effect_runs_once",
     },
+    # --- N11e: moves, and the arena region a frame gets ----------------------
+    "MoveFrontendTests": {
+        "test_a_borrow_cannot_be_moved_out_of_the_frame",
+        "test_a_local_moves_into_another_binding_and_into_an_assignment",
+        "test_a_moved_binding_cannot_be_read_passed_or_moved_again",
+        "test_a_moved_string_cannot_be_read_or_returned",
+        "test_a_mut_parameter_cannot_be_replaced",
+        "test_a_region_is_emitted_only_where_it_is_sound",
+        "test_a_vector_and_a_string_can_be_moved_out_of_a_function",
+        "test_an_owning_result_must_be_bound",
+        "test_an_owning_value_is_still_not_storable",
+        "test_moving_is_a_value_transfer_and_not_a_general_expression",
+    },
+    "MoveRuntimeTests": {
+        "test_a_move_copies_no_elements_and_releases_once",
+        "test_a_moved_binding_inside_a_nested_block_is_released_by_the_receiver",
+        "test_a_returned_vector_is_owned_by_the_caller",
+        "test_an_assignment_releases_the_buffer_it_replaces",
+        "test_an_early_return_moves_the_value_out_of_a_loop",
+        "test_moves_and_returns_under_the_sanitizers",
+    },
+    "ArenaRegionTests": {
+        "test_a_frame_that_builds_text_gets_its_region_back",
+        "test_text_that_can_escape_keeps_its_chunks",
+        "test_text_written_through_a_mut_parameter_survives_the_call",
+    },
     "VectorFrontendTests": {
         "test_a_mut_vector_argument_must_be_created_here",
         "test_a_mut_vector_parameter_may_grow_the_caller_s_vector",
-        "test_a_vector_cannot_be_copied",
+        "test_a_borrowed_vector_cannot_be_reassigned",
+        "test_a_moved_vector_leaves_nothing_behind",
+        "test_a_vector_can_be_returned_but_not_discarded",
         "test_a_vector_cannot_be_printed_or_assigned_to",
-        "test_a_vector_cannot_be_reassigned",
-        "test_a_vector_cannot_be_returned",
         "test_a_vector_cannot_be_a_field_or_a_payload",
         "test_a_vector_is_created_in_a_block_and_grown_by_builtins",
         "test_a_vector_of_structs_and_a_vector_of_enums_compile",
@@ -844,7 +872,7 @@ REGISTERED_LANGUAGES = ("nava", "c", "cpp")
 
 #: Executable-specification fixture directories and their expected sizes.
 REGISTERED_FIXTURE_DIRS = {
-    "tests/fixtures/negative": 139,
+    "tests/fixtures/negative": 141,
     "tests/fixtures/positive": 28,
     "tests/fixtures/warnings": 3,
 }
@@ -929,15 +957,16 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_values  # noqa: PLC0415
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
+    import test_moves  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_control, test_defers, test_enums, test_files,
                    test_float, test_functions, test_generics, test_grammar, test_guides,
                    test_local_model_server,
-                   test_modules, test_nava, test_ownership, test_plan, test_registry,
-                   test_release, test_results, test_sandbox, test_slices, test_spec,
-                   test_structs, test_stdlib, test_study, test_text, test_values,
-                   test_vec):
+                   test_moves, test_modules, test_nava, test_ownership, test_plan,
+                   test_registry, test_release, test_results, test_sandbox, test_slices,
+                   test_spec, test_structs, test_stdlib, test_study, test_text,
+                   test_values, test_vec):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -997,6 +1026,7 @@ def check_skip_state() -> list[str]:
     import test_values  # noqa: PLC0415
     import test_vec  # noqa: PLC0415
     import test_text  # noqa: PLC0415
+    import test_moves  # noqa: PLC0415
     for module, class_name in ((test_arrays, "ArrayRuntimeTests"),
                                (test_arrays, "ArrayMemoryTests"),
                                (test_control, "ForRuntimeTests"),
@@ -1011,6 +1041,8 @@ def check_skip_state() -> list[str]:
                                (test_vec, "VectorRuntimeTests"),
                                (test_text, "TextRuntimeTests"),
                                (test_text, "ArgumentOnceTests"),
+                               (test_moves, "MoveRuntimeTests"),
+                               (test_moves, "ArenaRegionTests"),
                                (test_generics, "GenericRuntimeTests"),
                                (test_files, "FileCapabilityTests"),
                                (test_files, "FileCommandLineTests"),

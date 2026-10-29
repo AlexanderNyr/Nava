@@ -9,9 +9,9 @@ no C compiler, no libc.
 N10e (`defer`, labelled loops, `pub`), N10f (monomorphised generics) and N10g
 (function values and pointers) are done. N11 is in progress: N11a (strings and
 enums as values, arrays of every value), N11b (owning fields, with the copy and
-release rules they need), N11c (`Vec(T)`, the growing vector) and N11d (`String`,
-the `str_*` text functions and the arena) are delivered, and N12–N18 are not
-started.** The
+release rules they need), N11c (`Vec(T)`, the growing vector), N11d (`String`, the `str_*` text functions
+and the arena) and N11e (moves, and the arena region a frame gets back) are
+delivered, and N12–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -47,10 +47,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 8 573 lines,
-13 modules and 266 functions under `nava_lang/`, which is the program Nava must be
+The requirement list below is not a wish list: it is an audit of the 8 759 lines,
+13 modules and 273 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N11d) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N11e) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -288,9 +288,10 @@ prints nothing. The one that carries the language claim is
 never become the writable borrower, so the exclusivity rule from N4 survives
 the first construct that hands out a view.
 
-**Increments of N11.** The phase is delivered in four patches, for the same
-reason N10 was: the memory rules, the collections and the string type each change
-the checker, the code generator, the specification and the guide.
+**Increments of N11.** The phase is delivered in five patches, for the same
+reason N10 was: the memory rules, the collections, the string type and the move
+rules each change the checker, the code generator, the specification and the
+guide.
 
 | Increment | Scope | State |
 |---|---|---|
@@ -298,6 +299,7 @@ the checker, the code generator, the specification and the guide.
 | N11b | Owning fields: an array field and an array payload, with the copy and release rules they need | **Delivered** (record below) |
 | N11c | `Vec(T)` with amortised growth, `pop -> Option<T>`, iteration, and the owner/release accounting it needs | **Delivered** (record below) |
 | N11d | `String` (growing UTF-8) with the audit's methods and the **arena allocator with its accounting**, deferred from N11c for the reason that record gives; `HashMap`/`HashSet` moved to N12 | **Delivered** (record below) |
+| N11e | **Moves**: an owning value crosses a frame boundary by transfer — out of a function as its return value, between bindings, and through an assignment — with use-after-move refused; and the **arena regions** that moves make sound, since a frame can now be told what it may reclaim | **Delivered** (record below) |
 
 `HashMap` and `HashSet` are the one item of N11 that moved: the audit's dict and
 set rows are compiler bookkeeping, and the collections belong with the standard
@@ -305,6 +307,50 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N11e (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| An owning value crosses a frame boundary by moving | `tests/test_moves.py`: `test_a_vector_and_a_string_can_be_moved_out_of_a_function`, `MoveRuntimeTests.test_a_returned_vector_is_owned_by_the_caller`, `test_an_early_return_moves_the_value_out_of_a_loop` | `fn make(n: i64) -> Vec(i64)` and `fn label(n: i64) -> String` compile, `let xs: Vec(i64) = make(3)` binds and `vec_len` reads 3 with capacity 4; an early `return` from inside a `while` moves the same buffer, and the live-array counter reads `0` afterwards, so exactly one release happened |
+| A move transfers the buffer and copies nothing | `MoveRuntimeTests.test_a_move_copies_no_elements_and_releases_once`, `test_an_assignment_releases_the_buffer_it_replaces`, `test_a_moved_binding_inside_a_nested_block_is_released_by_the_receiver` | 100 pushes, then `let ys: Vec(i64) = xs`: length 100, capacity 128 and element 99 read back after the move, with the live-array counter at `0`; `xs = fill(2)` releases the 40-element buffer it replaces and keeps the 2-element one; a move inside an `if` body is released by the inner block and the outer block frees nothing |
+| A moved-from binding is dead | `MoveFrontendTests.test_a_moved_binding_cannot_be_read_passed_or_moved_again` (four subtests), `test_a_moved_string_cannot_be_read_or_returned` | every later use — `print(vec_len(xs))`, passing it, a second move, and even `xs = vec_new()` — is `E0445` naming the binding; the same for a `String`, including in a `return` |
+| Only what this function owns can be moved out | `MoveFrontendTests.test_a_borrow_cannot_be_moved_out_of_the_frame`, `test_a_mut_parameter_cannot_be_replaced` | returning a `Vec` or a `String` parameter is `E0446` (the caller owns it), and assigning over a `mut` parameter is `E0446` in both directions |
+| An owning result is never discarded | `MoveFrontendTests.test_an_owning_result_must_be_bound` | `make(3)` as a statement is `E0428`: the buffer would have no owner |
+| Storing an owning value is still refused | `MoveFrontendTests.test_an_owning_value_is_still_not_storable` | a `Vec(i64)` or `String` field and payload are `E0428`, `Vec(Vec(i64))` is `E0427`: a move crosses a frame, it does not make a buffer storable |
+| The arena region is real and measurable | `ArenaRegionTests.test_a_frame_that_builds_text_gets_its_region_back` | 2 000 calls that each build eight pieces of text inside the frame report `nava: arena bytes: 0, chunks: 0` at exit; without a region the figure is the sum of all 2 000 |
+| The escape rule is conservative and written down | `MoveFrontendTests.test_a_region_is_emitted_only_where_it_is_sound`, `ArenaRegionTests.test_text_that_can_escape_keeps_its_chunks`, `test_text_written_through_a_mut_parameter_survives_the_call` | the generated C carries `nv_arena_mark nv_region` for a function that returns `i64`, and carries none for one returning `str`, for one with a `mut Vec(str)` parameter, or for `main`; a `str`-returning function's 500 calls leave live bytes behind (the caller reads them) and the `mut Vec(str)` case still returns `p0`, `p2` after the call |
+| Memory safety of the transfer | `MoveRuntimeTests.test_moves_and_returns_under_the_sanitizers` | 200 rounds of `label` → move → `grow` → move → reassign of the vector, AddressSanitizer and UndefinedBehaviorSanitizer clean, live-array counter `0` |
+| A defect found while building it is closed | `tests/test_text.py`: `test_the_reports_are_printed_once_each` | releasing a region takes the chunk count back to zero, and the exit report was being registered again on the next allocation, so the same report printed twice; registration is now a one-shot flag and the test counts the lines |
+| The specification and the guide moved with the code | `LANGUAGE.md` (`### Moving an owning value`), `guides/nava-1.md` (`## Edition 2: moves`) | the three move forms, `E0445`, `E0446`, the discarded-result rule and the region rule are normative; the specification example prints `n=7`, `4`, `4`, `n=9` and the guide example prints `3`, `n=4` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base` and `--encoding o200k_base` | prompt 75 403 tokens (`cl100k_base`) and 75 689 (`o200k_base`), summed over the eleven tasks, of which the guide is 74 767 / 75 053 tokens at 22 612 bytes and 637 lines |
+| The audit is re-measured, not remembered | `python3 tools/audit_compiler_needs.py` | 8 759 lines, 13 modules, 273 functions under `nava_lang/` after this increment (8 573 / 13 / 269 at N11d) |
+| No skipped tests | `python3 tests/registry.py`, `python3 -m pytest -q` | registry `OK: 605 registered tests, 11 tasks with 76 cases, 183 spec fixtures, 145 diagnostic codes`; suite **675 tests OK** (1 199 subtests) |
+
+Negative controls: four new fixtures — `string_moved_into_another_binding.nv`
+(`E0445`), `vector_moved_into_another_binding.nv` (`E0445`),
+`string_returned_from_a_borrow.nv` (`E0446`) and
+`vector_reassigned_in_a_borrow.nv` (`E0446`) — each asserting its own code,
+location, message and hint. Two fixtures were **retired** because the behaviour
+they asserted is now legal: `string_copied.nv` and `vector_copied.nv` recorded
+"a copy is refused", and this increment turns that copy into a move with its own
+refusal (`E0445`) and its own fixture. The behavioural control that carries the
+memory claim is the counter plus the sanitizers: a second release of a moved
+buffer, a read through the emptied source, or a leaked handle is a report rather
+than a number. The control that carries the arena claim is the pair of
+`ArenaRegionTests`: the same loop reports zero live bytes when the frame can give
+its region back and a growing figure when it cannot, so a rule that reset too
+much would show up as a use-after-free under AddressSanitizer in
+`test_text_written_through_a_mut_parameter_survives_the_call`.
+
+Deliberately not done in N11e: an owning value in a **field, payload, type
+argument or element** (`Vec(String)`, `Vec(Vec(i64))`, `[String]`, a struct or an
+enum that holds a `Vec` or a `String`) — that needs deep copy in the storage
+itself and is the storage work of N11f, which the hints now name;
+`str_from_bool`, `str_chars`, string indexing and iteration over a `String`;
+UTF-8-aware slicing; and a move that is *conditional* on a branch — the checker
+rejects the second use of a moved binding on any path, which is stricter than
+Rust and is stated here rather than discovered by a user.
 
 #### Delivery record N11d (2026-10-28)
 
@@ -890,7 +936,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 8 573 Python lines and 269 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 8 759 Python lines and 273 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

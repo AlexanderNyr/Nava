@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+N11e: a value that owns storage crosses a frame boundary by moving, and the arena
+gets the regions that moves make sound.
+
+- `fn make() -> Vec(i64)` and `fn label(n: i64) -> String` are allowed: `return`
+  **moves** the value out of the frame, the caller's binding owns it, and the
+  callee releases nothing. An early `return` from inside a loop moves the same
+  way.
+- `let b: Vec(i64) = a`, `b = a` and reassignment of an owning local are moves,
+  not copies: the buffer is transferred and the source binding is emptied. A
+  moved-from binding is dead — reading it, passing it, returning it, moving it
+  again or assigning to it is **`E0445`**.
+- Only a value the function owns can be moved out: returning a parameter or
+  assigning over one is **`E0446`**, because the caller still owns it. A call
+  that returns an owning value and is thrown away is `E0428`.
+- The arena now has **regions**. A call is given one — a mark taken on entry and
+  released on return — when nothing it allocates can be reached afterwards: the
+  return type holds no text and no `mut` parameter holds text. 2 000 calls that
+  each build text internally therefore report no live arena bytes; a function
+  that returns `str` or writes through `mut Vec(str)` keeps its chunks, which is
+  the price of soundness and is asserted too.
+- Fixed while building it: the arena registered its exit report every time the
+  chunk count returned to one, so a program that used regions printed the same
+  report twice; the registration is a one-shot flag and a test counts the lines.
+- Still not storable: an owning value in a field, a payload, a type argument or
+  an element — that is the storage work of N11f.
+
 N11d: text a program builds — `String`, the `str_*` functions and the arena.
 
 - `str_concat`, `str_from_i64`, `str_from_f64`, `str_slice`, `str_index_of`,

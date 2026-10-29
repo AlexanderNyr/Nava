@@ -486,18 +486,20 @@ static void nv_arr_str_free(nv_arr_str *array) {
    run, exactly like a literal. It is therefore allocated in an arena: a list of
    chunks that are bump-allocated and released together when the process exits.
 
-   There is no per-frame reset, and the reason is written down rather than
-   hidden: a `str` may be stored wherever a value may go — a struct field, a
-   variant payload, a returned local — so a region cannot be reclaimed while
-   something that crossed a frame boundary can still point into it. That needs
-   move tracking, which is N11e. Until then every chunk is freed at exit, and
-   the leak check under AddressSanitizer is what proves it. */
+   A frame gets a region when nothing it allocates can outlive it: the rule is
+   in one place (`arena_region`), it is conservative, and it is what makes the
+   reset sound. A function that returns text, or that writes through a `mut`
+   parameter that can hold text, is not given one — its text may be read after
+   the call returns, so its chunks last until the process exits. Everything is
+   freed at exit either way, and the leak check under AddressSanitizer is what
+   proves it. */
 
 #define NV_ARENA_CHUNK ((size_t)65536)
 
 typedef struct nv_arena_chunk { struct nv_arena_chunk *next; size_t size; size_t used; unsigned char data[]; } nv_arena_chunk;
 
 static nv_arena_chunk *nv_arena_chunks = NULL;
+static bool nv_arena_cleanup_registered = false;
 static int64_t nv_arena_chunk_count = 0;
 static int64_t nv_arena_bytes = 0;
 
@@ -541,12 +543,48 @@ static void *nv_arena_alloc(int64_t size) {
         chunk->used = 0;
         nv_arena_chunks = chunk;
         nv_arena_chunk_count += 1;
-        if (nv_arena_chunk_count == 1) atexit(nv_arena_cleanup);
+        /* Registered once: a region can take the count back to zero, and a
+           second registration would print the same report twice. */
+        if (!nv_arena_cleanup_registered) {
+            atexit(nv_arena_cleanup);
+            nv_arena_cleanup_registered = true;
+        }
     }
     void *result = nv_arena_chunks->data + nv_arena_chunks->used;
     nv_arena_chunks->used += (size_t)size;
     nv_arena_bytes = nv_add(nv_arena_bytes, size);
     return result;
+}
+
+/* A region is the part of the arena one call allocated: a mark taken when the
+   frame is entered, released when it is left. Chunks are a stack, so releasing
+   to a mark frees every chunk above it and rewinds the chunk it names. A
+   function is given a region only when nothing it allocates can outlive it —
+   see `arena_region` in the generator: a function that returns text, or that
+   writes through a `mut` parameter that can hold text, keeps its allocations
+   for the whole run, exactly as before. */
+typedef struct nv_arena_mark { nv_arena_chunk *chunk; size_t used; } nv_arena_mark;
+
+static nv_arena_mark nv_arena_mark_now(void) {
+    nv_arena_mark mark;
+    mark.chunk = nv_arena_chunks;
+    mark.used = nv_arena_chunks == NULL ? 0 : nv_arena_chunks->used;
+    return mark;
+}
+
+static void nv_arena_release_to(nv_arena_mark mark) {
+    while (nv_arena_chunks != NULL && nv_arena_chunks != mark.chunk) {
+        nv_arena_chunk *chunk = nv_arena_chunks;
+        nv_arena_chunks = chunk->next;
+        nv_arena_bytes = nv_add(nv_arena_bytes, -(int64_t)chunk->used);
+        nv_arena_chunk_count -= 1;
+        free(chunk);
+    }
+    if (nv_arena_chunks != NULL && nv_arena_chunks->used > mark.used) {
+        nv_arena_bytes = nv_add(nv_arena_bytes,
+                                -((int64_t)nv_arena_chunks->used - (int64_t)mark.used));
+        nv_arena_chunks->used = mark.used;
+    }
 }
 
 /* A copy of `length` bytes plus a terminator: the only way text enters the
@@ -971,6 +1009,10 @@ class CGenerator:
         self.temporaries: list[tuple[str, str]] = []
         #: Return type of the function being generated, for `?` propagation.
         self.current_return_type = "void"
+        #: Name of the C variable holding this frame's arena mark, or None when
+        #: the function cannot be given a region: something it allocates may
+        #: outlive the call. See `arena_region`.
+        self.region: str | None = None
         #: Owned-frame index of each open loop body, innermost last. `break` and
         #: `continue` jump out of that frame, so its arrays must be released
         #: explicitly before the jump.
@@ -1068,6 +1110,49 @@ class CGenerator:
             answer = False
         self.owning[typ] = answer
         return answer
+
+    def holds_text(self, typ: str | None, seen: frozenset[str] = frozenset()) -> bool:
+        """Can a value of `typ` point at arena text?
+
+        That is exactly the set a region reset has to respect: `str` is arena
+        text, a vector or an array of it holds pointers into the arena, and a
+        struct or an enum is whatever its fields and payloads are. The walk is
+        guarded, so a type that contains itself — refused by the checker —
+        still terminates here.
+        """
+        if typ is None or typ in seen:
+            return False
+        if typ == "str":
+            return True
+        if is_vec(typ):
+            return self.holds_text(vec_element(typ), seen | {typ})
+        if is_array(typ):
+            return self.holds_text(element_of(typ), seen | {typ})
+        struct = self.structs.get(typ)
+        if struct is not None:
+            return any(self.holds_text(item.typ, seen | {typ}) for item in struct.fields)
+        decl = self.enums.get(typ)
+        if decl is not None:
+            return any(self.holds_text(item, seen | {typ})
+                       for choice in decl.variants for item in choice.types)
+        return False
+
+    def arena_region(self, function: Function) -> bool:
+        """May this frame own an arena region?
+
+        A region is released when the frame is left, so it is only sound when no
+        allocation of the frame can be reached afterwards. Two ways out are
+        possible and both are checked: the returned value, and a `mut`
+        parameter — a borrow the caller keeps reading after the call. `main` is
+        excluded on purpose: its frame ends with the process, and its region is
+        the one the exit report describes.
+        """
+        if function.name == "main":
+            return False
+        if self.holds_text(function.returns):
+            return False
+        return not any(param.mutable and self.holds_text(param.typ)
+                       for param in function.params)
 
     def copy_helper(self, typ: str) -> str:
         return f"nv_copy_{self.ctype(typ)}"
@@ -1621,8 +1706,13 @@ class CGenerator:
             self.indent += 1
             self.owned = [[]]
             self.defers = [[]]
+            self.region = "nv_region" if self.arena_region(function) else None
+            if self.region is not None:
+                self.line(f"nv_arena_mark {self.region} = nv_arena_mark_now();")
             self.statements(function.body)
             self.release(0)
+            if self.region is not None:
+                self.line(f"nv_arena_release_to({self.region});")
             self.owned = []
             self.defers = []
             self.indent -= 1
@@ -1795,6 +1885,11 @@ class CGenerator:
                 else:
                     value = self.expression(statement.value)
                 self.line(f"{self.ctype(typ)} {statement.symbol.cname} = {value};")
+                if (owns_vec or owns_text) and isinstance(statement.value, Variable):
+                    # A move: the new binding keeps the handle and the old one
+                    # is emptied, so the frame exit that frees the source finds
+                    # nothing to free. No bytes are copied.
+                    self.line(f"{statement.value.symbol.cname} = NULL;")
                 if owns_array or owns_value or owns_vec or owns_text:
                     self.owned[-1].append((statement.symbol.cname, typ))
             elif isinstance(statement, IndexAssign):
@@ -1809,7 +1904,17 @@ class CGenerator:
             elif isinstance(statement, Assign):
                 typ = statement.symbol.typ
                 name = statement.symbol.cname
-                if self.owns_storage(typ) and not is_array(typ):
+                if is_vec(typ) or is_string(typ):
+                    # Move the new buffer into the binding, then release what it
+                    # held. The order matters: the initializer may not read the
+                    # binding it replaces, and a released buffer must never be
+                    # the one that is stored.
+                    material = self.temp(typ, self.expression(statement.value))
+                    if isinstance(statement.value, Variable):
+                        self.line(f"{statement.value.symbol.cname} = NULL;")
+                    self.line(self.release_statement(typ, name))
+                    self.line(f"{name} = {material};")
+                elif self.owns_storage(typ) and not is_array(typ):
                     # The new value is computed before the old one is released:
                     # the initializer may read the binding it replaces.
                     material = self.temp(typ, self.owned_value(typ, statement.value))
@@ -1852,11 +1957,26 @@ class CGenerator:
                 if statement.value is None:
                     self.release_temporaries()
                     self.release()
+                    if self.region is not None:
+                        self.line(f"nv_arena_release_to({self.region});")
                     self.line("return;")
                 else:
                     # The result is materialised before the arrays are released,
                     # so no released storage can appear in the returned value.
                     typ = self.current_return_type
+                    if is_vec(typ) or is_string(typ):
+                        # A move out of the frame: the value is materialised
+                        # first, then the local that held it is emptied, so the
+                        # release below frees nothing the caller now owns.
+                        value = self.temp(typ, self.expression(statement.value))
+                        if isinstance(statement.value, Variable):
+                            self.line(f"{statement.value.symbol.cname} = NULL;")
+                        self.release_temporaries()
+                        self.release()
+                        if self.region is not None:
+                            self.line(f"nv_arena_release_to({self.region});")
+                        self.line(f"return {value};")
+                        return
                     if self.owns_storage(typ) and not is_array(typ) \
                             and not isinstance(statement.value, (StructLiteral, VariantValue)):
                         # A returned value is a copy: the local it came from is
@@ -1868,6 +1988,10 @@ class CGenerator:
                         value = self.expression(statement.value)
                     self.release_temporaries()
                     self.release()
+                    if self.region is not None:
+                        # Everything this frame built and nobody can reach any
+                        # more goes back to the arena in one step.
+                        self.line(f"nv_arena_release_to({self.region});")
                     self.line(f"return {value};")
             elif isinstance(statement, If):
                 condition = self.expression(statement.condition)

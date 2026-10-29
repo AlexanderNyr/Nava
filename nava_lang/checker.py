@@ -259,16 +259,12 @@ class Checker:
                     function.loc.advance("fn " + function.name),
                     "an array has exactly one owner; write into a mut [T] parameter instead",
                 )
-            if is_vec(function.returns) or is_string(function.returns):
-                noun = "a vector" if is_vec(function.returns) else "a String"
-                raise make(
-                    "E0428",
-                    f"function {function.name!r} cannot return {noun}",
-                    function.loc,
-                    function.loc.advance("fn " + function.name),
-                    "a vector has exactly one owner; take `mut Vec(T)` and fill it, "
-                    "the same way an array is written through `mut [T]`",
-                )
+            if is_vec(function.returns):
+                # An owning return is a move: the value is created in this
+                # function and handed to the caller, who becomes its owner. The
+                # `return` statement checks that the value is one this function
+                # owns; nothing is copied.
+                self.validate_vec(function.returns, function.loc)
             for param in function.params:
                 if self.is_template(param.typ):
                     raise make(
@@ -351,7 +347,7 @@ class Checker:
                     f"a field of {struct.name} cannot be {kind} yet",
                     item.loc, item.loc.advance(item.name),
                     f"a field is copied with its value, and {kind} has exactly one "
-                    f"owner; a field that owns storage arrives with the move work of N11e",
+                    f"owner; a field that owns storage arrives with the storage work of N11f",
                 )
             if is_array(item.typ):
                 self.check_element_type(item.typ, item.loc)
@@ -519,7 +515,7 @@ class Checker:
                     *span,
                     hint=f"a payload is copied with its value, and {kind} has exactly "
                          f"one owner; a payload that owns storage arrives with the move "
-                         f"work of N11e",
+                         f"work of N11f",
                 )
             if is_array(item):
                 self.check_element_type(item, variant.loc)
@@ -740,7 +736,7 @@ class Checker:
                 "E0428",
                 f"a String cannot be a type argument yet ({where.strip()})",
                 hint="a type argument is copied with the value it instantiates, and a "
-                     "String has exactly one owner; a String field arrives with N11e",
+                     "String has exactly one owner; a String field arrives with N11f",
             )
         if typ in VALUE_TYPES or self.is_struct(typ) or self.is_enum(typ):
             return
@@ -1022,7 +1018,7 @@ class Checker:
                 f"a vector element cannot own storage, but {element} {holder}",
                 loc,
                 hint="an element is copied on every push and every read; a vector of "
-                     "owning values waits for the move work of N11e",
+                     "owning values waits for the storage work of N11f",
             )
         if element in VALUE_TYPES or self.is_struct(element) or self.is_enum(element):
             return element
@@ -1031,6 +1027,45 @@ class Checker:
             f"unknown type {element!r}; use i64, bool, str, f64, a declared struct "
             f"or enum",
             loc,
+        )
+
+    def owning_source(self, typ: str, value, loc, end, *, action: str,
+                      consume: bool = True) -> None:
+        """Where the storage an owning binding takes comes from.
+
+        Three forms are allowed and all three are a *move*, never a copy: the
+        constructor (`vec_new`, `string_new`), a call that returns the same
+        owning type — the callee moved the value out, so the caller owns it
+        now — and a local of that type, which is marked moved so that a second
+        use is `E0445`. A parameter is a borrow, so moving out of one is
+        `E0446`: the caller still owns what it passed and would free it again.
+        """
+        noun = "vector" if is_vec(typ) else "String"
+        if isinstance(value, Call):
+            # A constructor, or a call whose result the callee moved out. The
+            # type was already checked against the binding, so nothing is
+            # converted here.
+            return
+        if isinstance(value, Variable):
+            symbol = value.symbol
+            if symbol is None or not symbol.owned or symbol.borrowed:
+                raise make(
+                    "E0446",
+                    f"only a local {noun} this function owns can be moved, and "
+                    f"{value.name!r} is a borrow",
+                    loc, end,
+                    hint=f"the caller owns what it passed and frees it; declare a "
+                         f"{noun} here, or take it as `mut {typ}` and change it",
+                )
+            if consume:
+                symbol.moved = True
+            return
+        raise make(
+            "E0428",
+            f"a {noun} cannot be copied into {action}",
+            loc, end,
+            hint=f"a {noun} has exactly one owner: create one, move one, or take a "
+                 f"`mut {typ}` parameter",
         )
 
     def vec_target(self, expr: Call, name: str, mutating: bool) -> str:
@@ -1157,7 +1192,7 @@ class Checker:
                 f"an array element cannot own storage, but {element} {holder}",
                 *((loc,) if end is None else (loc, end)),
                 hint="an element is copied on every read and every write; making those "
-                     "copies deep is the move work of N11e, so an array of owning "
+                     "copies deep is the storage work of N11f, so an array of owning "
                      "values is refused rather than shared",
             )
         if element in SCALAR_ELEMENTS or self.is_struct(element) or self.is_enum(element):
@@ -1457,9 +1492,21 @@ class Checker:
         """A function of the current module by name, or None."""
         return self.by_module.get(self.current_module, {}).get(name)
 
+    def check_not_moved(self, symbol: Symbol, name: str, loc) -> None:
+        """A binding that was moved out of has no value left to read."""
+        if symbol.moved:
+            raise make(
+                "E0445",
+                f"{name!r} was moved: its value belongs to another binding now",
+                loc, loc.advance(name),
+                hint="a move hands the buffer to the new binding and leaves the old one "
+                     "empty; declare a fresh value, or move the buffer back",
+            )
+
     def lookup(self, name, loc) -> Symbol:
         symbol = self.find_symbol(name)
         if symbol is not None:
+            self.check_not_moved(symbol, name, loc)
             return symbol
         raise make("E0308", f"unknown variable {name!r}", loc, loc.advance(name),
                    "declare it with `let` in this or an enclosing block before use")
@@ -1631,33 +1678,14 @@ class Checker:
                                name_loc, name_loc.advance(statement.name),
                                "there are no implicit conversions between i64, bool, f64 and str")
             self.check_element_type(typ, name_loc, name_loc.advance(statement.name))
-            if is_string(typ):
-                create = (isinstance(statement.value, Call)
-                          and statement.value.module is None
-                          and statement.value.name == "string_new")
-                if not create:
-                    raise make(
-                        "E0428",
-                        f"a String cannot be copied: {statement.name!r} would share "
-                        f"one buffer with another String",
-                        name_loc, name_loc.advance(statement.name),
-                        hint="create it with `let s: String = string_new()` and fill it "
-                             "with string_push",
-                    )
             if is_vec(typ):
                 self.validate_vec(typ, name_loc)
-                create = (isinstance(statement.value, Call)
-                          and statement.value.module is None
-                          and statement.value.name == "vec_new")
-                if not create:
-                    raise make(
-                        "E0428",
-                        f"a vector cannot be copied: {statement.name!r} would share "
-                        f"one buffer with another vector",
-                        name_loc, name_loc.advance(statement.name),
-                        hint="create it with `let v: Vec(i64) = vec_new()` and fill it "
-                             "with vec_push",
-                    )
+            if is_vec(typ) or is_string(typ):
+                # The binding becomes the owner of exactly one buffer, so the
+                # storage arrives by being created here or moved here.
+                self.owning_source(typ, statement.value, name_loc,
+                                   name_loc.advance(statement.name),
+                                   action=f"{statement.name!r}")
             borrowed = isinstance(statement.value, Slice)
             if is_array(typ) and not owns_new_array(statement.value) and not borrowed:
                 raise make(
@@ -1731,34 +1759,51 @@ class Checker:
                     "an array owns its storage for the life of its block; "
                     "write elements with a[i] = value",
                 )
-            if is_string(statement.symbol.typ):
+            owning = is_vec(statement.symbol.typ) or is_string(statement.symbol.typ)
+            if owning and not statement.symbol.owned:
+                # A parameter is a borrow: its buffer is the caller's, and a new
+                # one written into the local copy would never reach the caller.
+                noun = "vector" if is_vec(statement.symbol.typ) else "String"
                 raise make(
-                    "E0428",
-                    f"a String cannot be reassigned ({statement.name!r} is String)",
+                    "E0446",
+                    f"a borrowed {noun} cannot be reassigned ({statement.name!r} is "
+                    f"a parameter)",
                     statement.loc, statement.loc.advance(statement.name),
-                    "a String owns its bytes for the life of its block; change it with "
-                    "string_push, string_push_byte and string_clear",
+                    hint=f"the caller owns this {noun}; change what it holds with the "
+                         f"`mut` builtins instead of replacing it",
                 )
-            if is_vec(statement.symbol.typ):
-                raise make(
-                    "E0428",
-                    f"a vector cannot be reassigned ({statement.name!r} is "
-                    f"{statement.symbol.typ})",
-                    statement.loc, statement.loc.advance(statement.name),
-                    "a vector owns its buffer for the life of its block; change it "
-                    "with vec_push, vec_pop and vec_set",
-                )
-            typ = self.expression(statement.value)
+            # A vector constructor takes its element type from the binding it
+            # replaces, exactly as it does in the `let` that declared it.
+            typ = self.expression(statement.value,
+                                  expected=statement.symbol.typ if is_vec(statement.symbol.typ) else None)
             if typ != statement.symbol.typ:
                 raise make("E0312", f"cannot assign {typ} to {statement.symbol.typ}",
                            statement.loc, statement.loc.advance(statement.name),
                            "there are no implicit conversions between i64, bool and str")
+            if owning:
+                # The old buffer is released by the generator; the new one is
+                # created here or moved here, exactly as in `let`.
+                self.owning_source(statement.symbol.typ, statement.value, statement.loc,
+                                   statement.loc.advance(statement.name),
+                                   action=f"{statement.name!r}")
         elif isinstance(statement, ExprStmt):
             if not isinstance(statement.expr, Call):
                 raise make("E0313", "only function calls can be used as statements",
                            statement.loc,
                            hint="remove the expression or use its value, as in `print(x)`")
-            self.expression(statement.expr)
+            discarded = self.expression(statement.expr)
+            if is_vec(discarded) or is_string(discarded):
+                # The buffer would be handed to nobody and never released: the
+                # value owns storage, so it has to be bound to an owner.
+                noun = "vector" if is_vec(discarded) else "String"
+                raise make(
+                    "E0428",
+                    f"the {noun} this call returns would have no owner",
+                    statement.loc,
+                    statement.loc.advance(statement.expr.name),
+                    hint=f"bind it: `let v: {discarded} = ...` — a discarded owner "
+                         f"leaks its buffer",
+                )
         elif isinstance(statement, Return):
             assert self.current_function is not None
             if self.defer_depth:
@@ -1782,6 +1827,16 @@ class Checker:
                 )
             if actual != expected:
                 raise make("E0315", f"return expects {expected}, got {actual}", statement.loc)
+            if is_vec(expected) or is_string(expected):
+                # The value leaves this frame: the callee stops being its owner
+                # and the caller becomes one. Nothing is copied and nothing is
+                # released here.
+                # A `return` ends the frame, so the local is not marked moved:
+                # a second `return` on another path hands out the same buffer
+                # from the same binding, and only one of them can run.
+                self.owning_source(expected, statement.value, statement.loc,
+                                   statement.loc.advance("return"),
+                                   action="the return value", consume=False)
         elif isinstance(statement, If):
             typ = self.expression(statement.condition)
             if typ != "bool":
@@ -1965,6 +2020,7 @@ class Checker:
         elif isinstance(expr, Variable):
             symbol = self.find_symbol(expr.name)
             if symbol is not None:
+                self.check_not_moved(symbol, expr.name, expr.loc)
                 expr.symbol = symbol
                 typ = symbol.typ
             else:

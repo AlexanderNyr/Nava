@@ -86,6 +86,10 @@ GRAMMAR_ACCEPTS = frozenset(
      # is a call, so an element that owns storage, a copy, a missing annotation
      # and a mutating call through a borrow are all decisions of the checker.
      | {"E0427", "E0428", "E0429", "E0444"}
+     # Moves: `let b = a`, `return s` and `xs = ys` are ordinary statements and
+     # calls, so whether the source is a local, a borrow or nothing at all is a
+     # question only a symbol table can answer.
+     | {"E0445", "E0446"}
      # A jump that names no enclosing loop, and a jump out of a deferred block.
      | {"E0430", "E0431", "E0433"}
      # Generics: a duplicate parameter, a template used as a type, an argument

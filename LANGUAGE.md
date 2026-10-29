@@ -821,7 +821,7 @@ assignment, a field write, a `match` binding and a `return` — and is not elide
 
 A value that owns an array may not be an **array element** (`E0426`): an element
 is copied on every read and every write, so `[Bag]` would need those copies to be
-deep, which is the move work of N11e. A struct name is shared by
+deep, which is the storage work of N11f. A struct name is shared by
 every module of the program (`E0380` for a duplicate), and a struct may not
 contain itself directly or through another struct (`E0377`), because a struct is
 stored inline and a recursive type would have no finite size. A variant payload
@@ -1029,7 +1029,7 @@ an enum that owns nothing itself. `f64`, `void` and another array are refused
 (`E0206` for the shapes no symbol table could allow, `E0203` for a name that is
 not declared), and a struct or enum that holds an array is refused with `E0426`:
 an element is copied on every read and every write, so an owning element would
-need deep copies in the storage itself, which the move work of N11e brings. An
+need deep copies in the storage itself, which the storage work of N11f brings. An
 enum is a value like a struct — its payload is stored inline — so `[Shape]` is
 an array of plain values and the array stays the single owner.
 
@@ -1166,12 +1166,14 @@ What the type is, and what it is not:
   name that declares nothing is `E0203`. An element may not own storage
   (`E0427`): a vector copies elements on every push and every read, and a
   shrinking vector would have to release elements it never copied, so an owning
-  element waits for the move work of N11e, exactly as an owning array element
-  does.
+  element waits for the storage work of N11f, exactly as an owning array
+  element does.
 * the block that writes the `let` owns the vector and releases it when the block
-  ends, including on an early `return`. A vector cannot be **copied** (`E0428`:
-  two holders would free one buffer), **reassigned** (`E0428`), **returned**
-  (`E0428`) or stored in a field or a payload (`E0428`).
+  ends, including on an early `return`. A vector is never **copied** — two
+  holders would free one buffer — but it can be **moved**: out of a local into
+  another binding, into an assignment, and out of a function as its return
+  value (see [Moving an owning value](#moving-an-owning-value)). It still cannot
+  be stored in a field, used as a payload or a type argument (`E0428`).
 * `vec_new()` needs the annotation (`E0429`): an empty vector says nothing about
   what it holds, and there is no second guess.
 * one handle, shared by borrowing: a `Vec(T)` parameter reads the vector, a
@@ -1271,11 +1273,12 @@ The example prints `3`, `a-bb-ccc`, `a/bb/ccc`, `nava`, `-42`, `a+b+c`.
 
 The rules, and the reasons for them:
 
-* `String` has **exactly one owner**, like an array and like a vector. It cannot
-  be copied, reassigned, returned, stored in a field, used as a payload or a type
-  argument (`E0428`), and an element of an array or a vector may not be a
-  `String` (`E0426` / `E0427`). A `mut String` parameter is a borrow that may
-  write, and a `String` parameter may not.
+* `String` has **exactly one owner**, like an array and like a vector. It is
+  never copied, but it is **moved**: into another binding, into an assignment,
+  and out of a function as its return value. It still cannot be stored in a
+  field, used as a payload or a type argument (`E0428`), and an element of an
+  array or a vector may not be a `String` (`E0426` / `E0427`). A `mut String`
+  parameter is a borrow that may write, and a `String` parameter may not.
 * the block that writes `let s: String = string_new()` releases the buffer when
   it ends, including on an early `return`. Growth doubles from 32 bytes; the
   buffer is allocated through the same checked allocator as an array, so the
@@ -1284,21 +1287,101 @@ The rules, and the reasons for them:
   cannot return an array or a vector: `let parts: Vec(str) = vec_new()` followed
   by `str_split(x, sep, parts)` is the shape, and `vec_len(parts)` is the count.
   An empty separator is a runtime error rather than an empty field list.
-* **Built `str` values live in an arena** — one list of chunks, bump-allocated
-  and released together when the process exits. Text a program builds is
-  immutable and may be stored anywhere `str` may go (a field, a payload, a
-  returned local), so a region cannot be reclaimed while something that crossed
-  a frame boundary can still point into it; that needs the move tracking of
-  N11e. Cycles and literals are unaffected: literals are static and are never
-  copied. Under `-DNAVA_TRACK_ALLOCS` the arena prints its own accounting
-  (`nava: arena bytes: N, chunks: M`) and frees every chunk at exit, which is
-  what the AddressSanitizer gate checks.
+* **Built `str` values live in an arena** — a stack of chunks, bump-allocated.
+  A call is given a **region**: a mark taken when it starts and released when it
+  returns, which gives the text the frame built back in one step. It is only
+  given one when nothing it allocates can outlive it, and the rule is
+  conservative: a function whose return type can hold text — `str`, a `Vec` or
+  an array of it, a struct or an enum containing one — or that writes through a
+  `mut` parameter that can hold text keeps its chunks for the whole run, because
+  the caller can still read that text afterwards. `main` has no region either:
+  its frame ends with the process. Cycles and literals are unaffected: literals
+  are static and are never copied. Under `-DNAVA_TRACK_ALLOCS` the arena prints
+  its live accounting (`nava: arena bytes: N, chunks: M`) and frees whatever is
+  left at exit, which is what the AddressSanitizer gate checks.
 * `string_text` copies into the arena rather than handing out the builder's
   buffer: the builder may grow afterwards, and a `str` must not change.
 * bytes are not characters. `string_len` and `str_slice` count bytes, like
   `bytes_len` and `byte_at`; `chars_len` remains the one place where UTF-8 is
   validated, and the `text` standard module (`is_valid_utf8`, `code_points`)
   adds classification without allocating.
+
+### Moving an owning value
+
+A `Vec(T)` and a `String` own one buffer each, so a program can hand the buffer
+to somebody else but never duplicate it. Handing it on is a **move**: the value
+is transferred, nothing is copied, and the binding it came from is empty from
+then on.
+
+```text
+move_target    = let_binding | assignment | return_statement ;
+move_source    = constructor | call | IDENT ;   # vec_new / string_new included
+```
+
+```nava
+edition 2;
+
+fn label(n: i64) -> String {
+    let s: String = string_new()
+    string_push(s, "n=")
+    string_push(s, str_from_i64(n))
+    return s
+}
+
+fn counted(n: i64) -> Vec(i64) {
+    let v: Vec(i64) = vec_new()
+    let i = 0
+    while i < n {
+        vec_push(v, i)
+        i = i + 1
+    }
+    return v
+}
+
+fn main() {
+    let a: String = label(7)
+    print(string_text(a))
+    let xs: Vec(i64) = counted(4)
+    print(vec_len(xs))
+    let more: Vec(i64) = xs
+    print(vec_len(more))
+    let other: String = string_new()
+    other = label(9)
+    print(string_text(other))
+}
+```
+
+The example prints `n=7`, `4`, `4` and `n=9`.
+
+The rules, and the reasons for them:
+
+* three forms reach an owning binding: a **constructor** (`vec_new`,
+  `string_new`), a **call** that returns the same owning type — the callee moved
+  the value out and this function owns it now — and a **local** of that type,
+  which is moved and then dead. A value that is not one of these is refused
+  (`E0428`), because there is nothing to copy it from.
+* a moved-from local cannot be read again: passing it, printing it, returning
+  it, moving it a second time, even assigning to it is `E0445`. The buffer
+  belongs to the new binding, and the frame that wrote the old `let` no longer
+  frees anything.
+* `return` of a `Vec(T)` or a `String` is a move **out of the frame**. The
+  caller's binding becomes the owner and releases the buffer when its own block
+  ends; the callee releases nothing. An early `return` from inside a loop or a
+  nested block moves exactly the same way.
+* only a value this function owns can be moved out. A parameter is a borrow:
+  returning one, or assigning over one, is `E0446`, because the caller still
+  owns what it passed and would free it as well.
+* the value a call returns must be bound. A call to a function returning `Vec(T)`
+  or `String` used as a statement is `E0428`: the buffer would be handed to
+  nobody and never released.
+* moving is not copying, and the type system still has no deep copy: an owning
+  value cannot be stored in a field, used as a payload, used as a type argument
+  (`E0428`) or used as an element of an array or a vector (`E0426` / `E0427`).
+* the arena has regions, and moves are why the rule is written down rather than
+  assumed: text a frame built is released when the frame returns unless it can
+  be reached afterwards, and the conservative check for "reachable" is the
+  return type and the `mut` parameters. Move a `str` out of a frame and the
+  frame is not given a region — which costs memory, never correctness.
 
 ### `defer`, labelled loops and `pub`
 
@@ -1635,7 +1718,7 @@ never changes meaning; a new condition gets a new code.
 | `E0425` | error | `array_zeros` needs a zero value | `tests/fixtures/negative/array_zeros_str.nv` |
 | `E0426` | error | an array element cannot own storage | `tests/fixtures/negative/array_of_owning_values.nv` |
 | `E0427` | error | a vector element cannot own storage | `tests/fixtures/negative/vector_of_owning_values.nv` |
-| `E0428` | error | a vector or a String cannot be copied, returned or stored | `tests/fixtures/negative/vector_copied.nv`, `string_copied.nv` |
+| `E0428` | error | an owning value has exactly one owner | `tests/fixtures/negative/string_field.nv`, `vector_of_owning_values.nv` |
 | `E0429` | error | `vec_new` needs an annotated element type | `tests/fixtures/negative/vector_new_without_element_type.nv` |
 | `E0430` | error | a deferred block cannot leave the function | `tests/fixtures/negative/defer_returns.nv` |
 | `E0431` | error | no loop carries this label | `tests/fixtures/negative/label_unknown.nv` |
@@ -1651,6 +1734,8 @@ never changes meaning; a new condition gets a new code.
 | `E0442` | error | function values cannot be compared | `tests/fixtures/negative/compare_function_values.nv` |
 | `E0443` | error | a function type has no mutable parameter | `tests/fixtures/negative/mutable_in_function_type.nv` |
 | `E0444` | error | a mutating vector call needs a writable target | `tests/fixtures/negative/vector_mutated_through_a_borrow.nv` |
+| `E0445` | error | a moved value cannot be used again | `tests/fixtures/negative/vector_moved_into_another_binding.nv`, `string_moved_into_another_binding.nv` |
+| `E0446` | error | only an owning local can be moved | `tests/fixtures/negative/string_returned_from_a_borrow.nv`, `vector_reassigned_in_a_borrow.nv` |
 
 **Types and semantics**
 
@@ -1812,24 +1897,26 @@ program's, not the compiler's.
 
 ## Not implemented
 
-There are no resizable collections, arrays of arrays, `f64` arrays, array
-copies, array results from functions, labelled `break`/`continue`, string
-indexing, string concatenation, string input, mathematical functions such as
-`sqrt`, floating-point `%`, pointers, FFI, networking, package resolution, a
-module visibility keyword, or more than one file per module. Module imports and
-a capability-limited file API are implemented, as described above; a package
-manager is not.
-Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of structs,
-slices, `defer`, labelled loops, `pub`, generic declarations of your own and
-function values with the type `fn(i64) -> i64`; it does not add closures or
-function literals, `match` as an expression, generic arrays, type-parameter
-bounds, string or array fields, arrays of enums, arrays of function values,
-struct or enum equality, or printing a struct, an enum or a function value.
-Those are N11 and later in `INDEPENDENCE.md`, and nothing here is a promise that
-they exist today.
+There is no `HashMap` or `HashSet` (they arrive with the standard library in
+N12), no arrays of arrays, no array copies, no array results from a function,
+no string indexing or string input, no floating-point `%`, no pointers, FFI,
+networking, dynamic loading or package resolution. Module imports, a
+capability-limited file API, `Vec(T)`, `String` and the `str_*` functions, the
+`math` module and `pub` visibility are implemented, as described above; a
+package manager is not.
 
-Array length is fixed at creation and the element types are exactly `i64`,
-`bool` and `str`. This version cannot express all ordinary C or C++ tasks. Save generated
+Edition 2 adds structs, enums, `match`, `Option`/`Result`, `?`, arrays of
+structs and of enums, slices, `defer`, labelled loops, `pub`, generic
+declarations of your own, function values with the type `fn(i64) -> i64`, growing
+vectors and growing strings, and moves of both. It does not add closures or
+function literals, `match` as an expression, generic arrays, type-parameter
+bounds, struct or enum equality, printing a struct, an enum, a function value, a
+vector or a `String`, or a field, payload, type argument or element that owns a
+`Vec` or a `String` — that is the storage work of N11f, and nothing here is a
+promise that it exists today.
+
+An array keeps the length it was created with; `Vec(T)` is the type that grows.
+This version cannot express all ordinary C or C++ tasks. Save generated
 C with `nava emit-c`; building requires C11 and the C standard library. GCC and
 Clang can use built-in overflow checks; a portable C11 fallback is also
 provided.

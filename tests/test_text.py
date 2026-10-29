@@ -131,29 +131,44 @@ class TextFrontendTests(unittest.TestCase):
                   "}\n")
         self.assertTrue(compile_source(source))
 
-    def test_a_string_cannot_be_copied_or_reassigned(self):
+    def test_a_string_moves_and_a_moved_string_is_dead(self):
+        """`let t = s` hands the bytes on; reading `s` afterwards is `E0445`."""
         error = self.assert_code("edition 2;\n"
                                  "fn main() {\n"
                                  "    let s: String = string_new()\n"
                                  "    let t: String = s\n"
-                                 "    print(string_len(t))\n"
-                                 "}\n", "E0428")
-        self.assertIn("cannot be copied", error.message)
+                                 "    print(string_len(s))\n"
+                                 "}\n", "E0445")
+        self.assertIn("was moved", error.message)
+        # A reinit after a move is refused too: the binding is dead for the
+        # whole block, so there is exactly one way to get a buffer into it.
         self.assert_code("edition 2;\n"
                          "fn main() {\n"
                          "    let s: String = string_new()\n"
-                         "    let t: String = string_new()\n"
-                         "    s = t\n"
+                         "    let t: String = s\n"
+                         "    s = string_new()\n"
                          "    print(1)\n"
-                         "}\n", "E0428")
+                         "}\n", "E0445")
 
-    def test_a_string_cannot_be_returned_a_field_or_a_payload(self):
+    def test_a_string_is_returned_by_moving_it(self):
+        compile_source("edition 2;\n"
+                       "fn make() -> String {\n"
+                       "    let s: String = string_new()\n"
+                       "    string_push(s, \"out\")\n"
+                       "    return s\n"
+                       "}\n"
+                       "fn main() {\n"
+                       "    let s: String = make()\n"
+                       "    print(string_text(s))\n"
+                       "}\n")
         self.assert_code("edition 2;\n"
                          "fn make() -> String {\n"
                          "    let s: String = string_new()\n"
                          "    return s\n"
                          "}\n"
-                         "fn main() { print(1) }\n", "E0428", "cannot return a String")
+                         "fn main() { make() }\n", "E0428")
+
+    def test_a_string_cannot_be_a_field_or_a_payload(self):
         self.assert_code("edition 2;\n"
                          "struct Note {\n"
                          "    text: String\n"
@@ -359,6 +374,24 @@ class TextRuntimeTests(unittest.TestCase):
                                      "}\n", tracked=False)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn(message, result.stderr)
+
+    def test_a_returned_string_is_owned_by_the_caller_and_released(self):
+        """The callee stops owning what it returns; the caller frees it once."""
+        result = self.run_program("fn make(n: i64) -> String {\n"
+                                  "    let s: String = string_new()\n"
+                                  "    string_push(s, \"out-\")\n"
+                                  "    string_push(s, str_from_i64(n))\n"
+                                  "    return s\n"
+                                  "}\n"
+                                  "fn main() {\n"
+                                  "    let a: String = make(1)\n"
+                                  "    let b: String = make(2)\n"
+                                  "    print(string_text(a))\n"
+                                  "    print(string_text(b))\n"
+                                  "}\n")
+        self.assertEqual(result.stdout.splitlines(), ["out-1", "out-2"])
+        self.assertEqual(result.stderr.count("nava: live arrays at exit: 0"), 1,
+                         result.stderr)
 
     def test_split_fills_a_vector_and_join_reads_one(self):
         result = self.run_program("fn main() {\n"

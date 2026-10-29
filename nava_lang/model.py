@@ -94,6 +94,10 @@ class Symbol:
     #: True for a slice: a view into an array that somebody else owns. It is
     #: never freed, never written through, and never handed on as a `mut` borrow.
     borrowed: bool = False
+    #: True once an owning value has been moved out of this binding: the buffer
+    #: now belongs to somebody else, so the local is dead for the rest of its
+    #: block and every later use is `E0445`.
+    moved: bool = False
 
 
 @record()

@@ -1,0 +1,7 @@
+edition 2;
+
+fn main() {
+    let s: String = string_new();
+    let t: String = s;
+    print(string_len(s))
+}

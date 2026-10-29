@@ -131,33 +131,49 @@ class VectorFrontendTests(unittest.TestCase):
                   "}\n")
         self.assertTrue(compile_source(source))
 
-    def test_a_vector_cannot_be_copied(self):
-        """Two holders of one handle would free one buffer between them."""
+    def test_a_moved_vector_leaves_nothing_behind(self):
+        """`let ys = xs` is a move, so a later read of `xs` is `E0445`."""
         error = self.assert_code("edition 2;\n"
                                  "fn main() {\n"
                                  "    let xs: Vec(i64) = vec_new()\n"
                                  "    let ys: Vec(i64) = xs\n"
-                                 "    print(vec_len(ys))\n"
-                                 "}\n", "E0428")
-        self.assertIn("cannot be copied", error.message)
+                                 "    print(vec_len(xs))\n"
+                                 "}\n", "E0445")
+        self.assertIn("was moved", error.message)
 
-    def test_a_vector_cannot_be_reassigned(self):
-        self.assert_code("edition 2;\n"
-                         "fn main() {\n"
-                         "    let xs: Vec(i64) = vec_new()\n"
-                         "    let ys: Vec(i64) = vec_new()\n"
-                         "    xs = ys\n"
-                         "    print(vec_len(xs))\n"
-                         "}\n", "E0428")
+    def test_a_borrowed_vector_cannot_be_reassigned(self):
+        """A parameter is a borrow: replacing what it holds would never reach
+        the caller, and would free the caller's buffer here."""
+        error = self.assert_code("edition 2;\n"
+                                 "fn refill(xs: mut Vec(i64)) {\n"
+                                 "    xs = vec_new()\n"
+                                 "}\n"
+                                 "fn main() {\n"
+                                 "    let xs: Vec(i64) = vec_new()\n"
+                                 "    refill(xs)\n"
+                                 "}\n", "E0446")
+        self.assertIn("borrowed vector", error.message)
 
-    def test_a_vector_cannot_be_returned(self):
-        self.assert_code("edition 2;\n"
-                         "fn make() -> Vec(i64) {\n"
-                         "    let xs: Vec(i64) = vec_new()\n"
-                         "    return xs\n"
-                         "}\n"
-                         "fn main() { print(1) }\n", "E0428",
-                         "cannot return a vector")
+    def test_a_vector_can_be_returned_but_not_discarded(self):
+        """A return moves the buffer out; a call whose result nobody binds
+        would leak it."""
+        compile_source("edition 2;\n"
+                       "fn make() -> Vec(i64) {\n"
+                       "    let xs: Vec(i64) = vec_new()\n"
+                       "    vec_push(xs, 1)\n"
+                       "    return xs\n"
+                       "}\n"
+                       "fn main() {\n"
+                       "    let xs: Vec(i64) = make()\n"
+                       "    print(vec_len(xs))\n"
+                       "}\n")
+        error = self.assert_code("edition 2;\n"
+                                 "fn make() -> Vec(i64) {\n"
+                                 "    let xs: Vec(i64) = vec_new()\n"
+                                 "    return xs\n"
+                                 "}\n"
+                                 "fn main() { make() }\n", "E0428")
+        self.assertIn("no owner", error.message)
 
     def test_a_vector_cannot_be_a_field_or_a_payload(self):
         self.assert_code("edition 2;\n"
