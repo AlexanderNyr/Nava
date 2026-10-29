@@ -22,6 +22,8 @@ BUILTINS = {
     # The filesystem questions: existence, size and a listing. Reserved like the
     # rest, and all three are read-grant operations rather than write ones.
     "path_exists", "file_size", "list_dir",
+    # The command line: how many words the program was given, and one of them.
+    "arg_count", "arg_at",
     # The whole vector interface, including the constructor: `vec_new` is
     # resolved like the rest, so a declaration of that name would be dead code.
     "vec_new", "vec_len", "vec_capacity", "vec_push", "vec_pop", "vec_get", "vec_set",
@@ -64,6 +66,8 @@ TEXT_SIGNATURES = {
 #: ones: an argument written with `mut ` must be a writable target, for the same
 #: reason (`list_dir` appends to the caller's vector).
 FS_SIGNATURES = {
+    "arg_count": ((), "i64"),
+    "arg_at": (("i64",), "str"),
     "path_exists": (("str",), "bool"),
     "file_size": (("str",), "i64"),
     "list_dir": (("str", "mut Vec(str)"), "void"),

@@ -240,7 +240,7 @@ class StdlibContractTests(unittest.TestCase):
         # Every packaged module declares the version it was written against; a
         # new module is added here on purpose, so one can never ship without it.
         self.assertEqual([path.stem for path in paths],
-                         ["fmt", "fs", "io", "math", "sort", "test", "text"])
+                         ["args", "fmt", "fs", "io", "math", "sort", "test", "text"])
         for path in paths:
             with self.subTest(module=path.stem):
                 program = parse(path.read_text(encoding="utf-8"), path=str(path))

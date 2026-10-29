@@ -813,6 +813,26 @@ static const char *nv_string_text(nv_string *text) {
 static int64_t nv_read_total_bytes = 0;
 static int64_t nv_read_calls = 0;
 
+/* --- program arguments --------------------------------------------------
+   The words after the program name, exactly as the process received them: no
+   splitting, no expansion, no interpretation. `nv_argc` is 0 for a program that
+   was started with none, which is why `arg_count` cannot be confused with the
+   number of words including the name. */
+
+static int64_t nv_argc = 0;
+static char **nv_argv = NULL;
+
+static int64_t nv_arg_count(void) {
+    return nv_argc;
+}
+
+static const char *nv_arg_at(int64_t index) {
+    if (index < 0 || index >= nv_argc)
+        nv_failf("argument index %" PRId64 " is out of bounds for %" PRId64
+                 " argument%s", index, nv_argc, nv_argc == 1 ? "" : "s");
+    return nv_argv[index];
+}
+
 static bool nv_path_inside(const char *path, const char *root) {
     size_t length = strlen(root);
     if (length == 0) return false;
@@ -2532,8 +2552,12 @@ class CGenerator:
             self.line("}")
             self.line()
         main = next(f for f in concrete if f.name == "main")
-        self.line("int main(void) {")
+        # `argc`/`argv` are kept for `arg_count`/`arg_at`; `argv[0]` is the
+        # program itself and is not an argument.
+        self.line("int main(int argc, char **argv) {")
         self.indent += 1
+        self.line("nv_argc = argc > 0 ? (int64_t)argc - 1 : 0;")
+        self.line("nv_argv = argv + (argc > 0 ? 1 : 0);")
         if main.returns == "void":
             self.line(f"{main.cname}();")
             self.line("return 0;")
@@ -3406,6 +3430,10 @@ class CGenerator:
             if expr.module is None and expr.name == "write_file":
                 self.line(f"nv_write_file({args[0]}, {args[1]});")
                 return None
+            if expr.module is None and expr.name == "arg_count":
+                return self.temp("i64", "nv_arg_count()")
+            if expr.module is None and expr.name == "arg_at":
+                return self.temp("str", f"nv_arg_at({args[0]})")
             if expr.module is None and expr.name == "path_exists":
                 return self.temp("bool", f"nv_path_exists({args[0]})")
             if expr.module is None and expr.name == "file_size":

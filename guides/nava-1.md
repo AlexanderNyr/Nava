@@ -121,6 +121,9 @@ pub fn double(x: i64) -> i64 {
 - `path_exists(path) -> bool`, `file_size(path) -> i64` and
   `list_dir(path, out: mut Vec(str))` — questions about a path; the same grant
   rule applies, and `list_dir` appends the names in byte order.
+- `arg_count() -> i64` and `arg_at(i: i64) -> str` — the words the program was
+  started with, without its own name. `nava run prog.nv -- a b` gives it `a`
+  and `b`; everything after `--` is the program's, word for word.
 
 ## Operators
 
@@ -166,6 +169,9 @@ fn main() {
   `fs::stem`, `fs::is_absolute` (text, `pure: yes`) and `fs::exists`,
   `fs::size`, `fs::entries` (filesystem questions, `pure: no`, needing
   `--allow-read`).
+- `args` — `args::flag_in` and `args::value_in` over an array of words
+  (`pure: yes`), and `args::count`, `args::get`, `args::flag`, `args::value`
+  over the real command line (`pure: no`). A flag is a whole word.
 
 Two aligned columns, without a format language to learn:
 
@@ -207,6 +213,25 @@ fn main() {
     print(fs::path_join(fs::dirname("a/b.txt"), fs::stem("a/b.txt")))
 }
 ```
+
+A program with a command line of its own:
+
+```nava
+edition 2;
+
+import args;
+
+fn main() -> i64 {
+    if args::flag("--help") {
+        print("usage: prog [--count N] NAME")
+        return 0
+    }
+    print(args::value("--count", "1"))
+    return 0
+}
+```
+
+Run as `nava run prog.nv -- --count 3`, this prints `3`.
 
 For a single-file answer, do not write imports; use the built-ins above.
 

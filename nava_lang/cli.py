@@ -229,6 +229,13 @@ def make_parser() -> argparse.ArgumentParser:
     add_project_options(run)
     run.add_argument("--workdir", help="directory the program may write to and run in "
                                        "(default: a temporary directory)")
+    # `nargs="*"` rather than REMAINDER: with REMAINDER, `nava run f.nv --timeout 2`
+    # would hand `--timeout 2` to the program instead of to `nava`, which is a
+    # trap. argparse strips the `--` fence itself, so what arrives here is
+    # exactly the words after it.
+    run.add_argument("program_args", nargs="*", metavar="-- ARG …",
+                     help="everything after `--` is passed to the program, word for "
+                          "word, and is what `arg_count`/`arg_at` see")
     return parser
 
 
@@ -304,6 +311,12 @@ def main(argv: list[str] | None = None) -> int:
             if not candidate.is_dir():
                 raise make("E0507", f"--workdir is not a directory: {args.workdir}")
             workdir = candidate.resolve()
+        # Everything after `--` belongs to the program, word for word. argparse
+        # keeps the `--` itself in a REMAINDER, so it goes first; an argument
+        # that begins with `-` is kept, because the program may well want one.
+        program_args = list(getattr(args, "program_args", []) or [])
+        if program_args[:1] == ["--"]:
+            program_args = program_args[1:]
         capabilities = {"read": [], "write": []}
         if getattr(args, "allow_read", None):
             capabilities["read"] = capability_roots(args.allow_read, "--allow-read", workdir)
@@ -382,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
                     memory_bytes=max(1, args.memory) * 1024 * 1024,
                 )
                 try:
-                    outcome = sandbox.run([str(binary)], limits=sandbox_limits,
+                    outcome = sandbox.run([str(binary), *program_args], limits=sandbox_limits,
                                           mode=args.isolation,
                                           workdir=workdir or Path(temp), capture=False)
                 except sandbox.SandboxUnavailable as exc:

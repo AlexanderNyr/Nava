@@ -49,10 +49,10 @@ moment the language has to express a compiler.
 
 ## 2. What the compiler needs from the language — a measured audit
 
-The requirement list below is not a wish list: it is an audit of the 10 586 lines,
+The requirement list below is not a wish list: it is an audit of the 10 631 lines,
 14 modules and 329 functions under `nava_lang/`, which is the program Nava must be
 able to express. Counts are of AST nodes in the current tree, re-measured at the
-last delivery (N12f) with `python3 tools/audit_compiler_needs.py`, which prints
+last delivery (N12g) with `python3 tools/audit_compiler_needs.py`, which prints
 this table and states its own definitions; `tests/test_plan.py` recomputes the
 size and the function count so this paragraph cannot drift from the code.
 
@@ -311,6 +311,40 @@ library and the package work of N12 rather than with the memory model. The move
 is recorded here so that "N11 delivered" does not quietly mean "N11 minus a
 collection type".
 
+
+#### Delivery record N12g (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A program can read its command line | `nava_lang/cgen.py` (`arg_count`, `arg_at`), `nava_lang/checker.py` (`FS_SIGNATURES`), `LANGUAGE.md` (`## Program arguments`) | `arg_count() -> i64` and `arg_at(i64) -> str`; the generated `main` is now `int main(int argc, char **argv)` and keeps `argv` for them, with `argv[0]` — the program itself — excluded |
+| The words arrive unchanged | `tests/test_args.py: ArgumentTests` (6 tests) | `alpha`, `two words`, an empty argument and `-x` all arrive byte for byte; the program name is not an argument; `arg_count`/`arg_at` answer exactly what `args::count`/`args::get` answer |
+| Reading past the end stops the program, and the message is readable | `ArgumentTests.test_a_position_past_the_end_stops_the_program`, `test_a_negative_position_stops_the_program`, `test_the_message_uses_the_singular_for_one_argument` | `argument index 2 is out of bounds for 2 arguments`, `… for 1 argument` (singular spelled out, asserted), and `… index -1 …` for a negative position; nothing afterwards runs |
+| The module has two layers, and the pure one is testable | `nava_lang/stdlib/args.nv`, `contracts.check_program`, `tests/fixtures/positive/self_test.nv` | `flag_in`/`value_in` take an array of words and are `pure: yes` — they have self-test bodies — while `count`/`get`/`flag`/`value` read the command line and are `pure: no`: the same call answers differently in a run started differently |
+| The two layers cannot drift apart | `FlagAndValueTests.test_the_two_layers_agree` | for the same words, `flag` answers what `flag_in` answers and `value` what `value_in` answers, for a present flag, an absent one and a fallback — a claim about two pieces of code that could disagree, so it is checked |
+| A flag with nothing after it has no value | `test_a_flag_with_nothing_after_it_has_no_value`, `test_the_first_occurrence_wins` | `value("--count", "fallback")` on `["--count"]` answers `fallback`, not `""`, so a missing argument cannot be mistaken for an empty one; the first occurrence wins |
+| The fence is the fence | `CommandLineTests` (4 tests) | `nava run prog.nv -- --name nava extra` gives the program three words and `--name` itself; a word that looks like an option of `nava` (`--timeout 5`) arrives as an argument; no fence means no arguments |
+| **A regression the change caused, found and fixed** | `test_an_option_of_nava_after_the_source_belongs_to_nava`, `tests/test_modules.py` | the first parser used `nargs=REMAINDER`, so `nava run prog.nv --timeout 0.1` handed `--timeout 0.1` **to the program**: `test_cli_build_check_emit_and_timeout` hung for its ten-second limit and `SandboxTests` failed with it. The positional is `nargs="*"`, which lets argparse parse options wherever they appear and strips the `--` itself; the regression test runs a bounded loop and asserts exit `124` |
+| `main` still has one entry point | `tests/test_modules.py` (two assertions updated) | the two guards that counted `int main(void)` now count `int main(`, because the signature changed; the property they check — one translation unit, exactly one entry point — is unchanged |
+| The contract examples can demonstrate a command line | `tests/test_contracts.py`: `EXAMPLE_ARGS` | every example program is now started with `--count 3 name`, which is how `args`' contracts are executable at all; the other modules ignore it, and `LANGUAGE.md` states the convention beside the module |
+| The library still tests itself | `tests/fixtures/positive/self_test.nv` | 33 bodies (two new: `args::flag_in`, `args::value_in`), 34 lines of `ok`, 665 bytes recorded; `TESTED_ELSEWHERE` grows the four command-line accessors with the two meta-tests that keep the list honest |
+| The specification, the guide and the records moved with the code | `LANGUAGE.md` (`## Program arguments`, `### args`, the packaged-module list), `guides/nava-1.md`, `guides/manifest.json` | the builtins, the `--` fence, the effect rule and the two layers are normative; the guide lists the module, the two builtins and a program with a command line of its own, and is re-pinned at 31 263 bytes, 31 179 characters, 896 lines, sha256 `35a3c2d6…` |
+| The overhead record is re-measured, not estimated | `python3 eval/overhead.py --encoding cl100k_base --require measured` and `--encoding o200k_base` | the prompt is 103 970 tokens (`cl100k_base`) and 104 388 (`o200k_base`) summed over the eleven tasks, of which the guide alone is 103 334 / 103 752 |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 10 631 lines, 14 modules, 329 functions (10 586 / 14 / 329 at N12f): the lines grew with the argument plumbed through the runtime and the command line, the count of functions did not |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify`, `bash /tmp/ci-sim.sh` | registry `OK: 751 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 147 diagnostic codes`; suite **821 tests OK** (1 398 subtests); eight packaged modules in the contract list; release checks OK; the guide digest verifies; the CI simulation passes |
+
+Negative controls: the out-of-range refusals (past the end, negative, and the
+singular/plural of the message), the refusal to treat a prefix as a flag
+(`--verb` is not `--verbose`), the fallback for a flag with no value, the CLI
+fence test with an option-looking word, and the regression test for the parser
+that had eaten `--timeout`.
+
+Deliberately not done in N12g: `collections` and `time`, and any flag syntax
+beyond "a whole word and the word after it". `--count=3`, `-abc` clustering and
+abbreviation are conventions, not language: a program that wants them spells them
+out with `str_starts_with`, and the module says so rather than guessing which
+convention the caller meant. `time` is the last module in the phase and it is not
+deterministic by construction, so it needs its own decision about what a clock
+may do to a `pure:` claim.
 
 #### Delivery record N12f (2026-10-29)
 
@@ -997,7 +1031,8 @@ self-testing facility.
 | N12d | **`fmt`**: `repeat`, `pad_left`, `pad_right`, `pad_center`, `clip`, `i64_aligned` and `f64_fixed` — a column width in bytes, the side to align to and a number of decimal places, over `i64`, `f64` and `str`, which is the audit's f-string row (519) closed with a module instead of a format language | **Delivered** (record below) |
 | N12e | **`io`**: lines of text — `count_lines`, `first_line`, `join_lines`, `lines_of` — and the files they come from: `read_lines`, `write_lines`, `append_line`, on the capability model N6 established, with the file half tested against grants and the text half in the self-test | **Delivered** (record below) |
 | N12f | **`fs`**: six pure path functions (`basename`, `dirname`, `path_join`, `extension`, `stem`, `is_absolute`) and three filesystem questions (`exists`, `size`, `entries`) over three new builtins — `path_exists`, `file_size`, `list_dir` — on the read-grant model, with the listing ordered by bytes | **Delivered** (record below) |
-| N12g–N12x | the remaining `args`/`collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
+| N12g | **`args`**: the words a program was started with — the builtins `arg_count`/`arg_at`, the `--` fence on the command line, six module functions of which two are pure over an array of words and four read the real command line | **Delivered** (record below) |
+| N12h–N12x | the remaining `collections`/`time` modules, and determinism **across backends**, which stays open until N14 gives Nava a second backend | Not started |
 
 The two collections come first because every later module in the list needs one —
 `fmt` a table of formats, `args` a map of flags — and because N11 moved them here
@@ -1235,7 +1270,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 10 586 Python lines and 329 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 10 631 Python lines and 329 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

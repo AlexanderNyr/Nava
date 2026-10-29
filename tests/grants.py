@@ -47,8 +47,12 @@ def build(code: str, directory: pathlib.Path, *, sanitizers: bool = False) -> pa
 
 
 def run(source: str, *, files=None, stdin: str = "", capabilities=None,
-        timeout: int = 60, sanitizers: bool = False):
-    """Compile and run `source` in a directory that holds `files`."""
+        timeout: int = 60, sanitizers: bool = False, arguments=()):
+    """Compile and run `source` in a directory that holds `files`.
+
+    `arguments` are the words the program is started with, which is what its
+    `arg_count`/`arg_at` see.
+    """
     with tempfile.TemporaryDirectory() as temp:
         root = pathlib.Path(temp)
         work = root / "work"
@@ -64,8 +68,8 @@ def run(source: str, *, files=None, stdin: str = "", capabilities=None,
         entry.write_text(source, encoding="utf-8")
         binary = build(emit(source, capabilities=capabilities, path=entry), root,
                        sanitizers=sanitizers)
-        return subprocess.run([str(binary)], input=stdin, capture_output=True, text=True,
-                              timeout=timeout, cwd=work)
+        return subprocess.run([str(binary), *arguments], input=stdin, capture_output=True,
+                              text=True, timeout=timeout, cwd=work)
 
 
 @contextlib.contextmanager

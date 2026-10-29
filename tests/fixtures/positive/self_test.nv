@@ -5,6 +5,7 @@ edition 2;
 # checks that this file names every public function of every module — a public
 # name with no test here fails the guard.
 
+import args;
 import fmt;
 import fs;
 import io;
@@ -340,6 +341,32 @@ fn is_absolute_tests() -> i64 {
     return failures
 }
 
+fn flag_in_tests() -> i64 {
+    let failures = 0
+    let words: [str] = ["--count", "7", "--verbose"]
+    failures = failures + test::expect_true(args::flag_in(words, "--verbose"),
+                                            "the flag is one of the words")
+    failures = failures + test::expect_true(!args::flag_in(words, "--verb"),
+                                            "a prefix of a flag is not the flag itself")
+    let none: [str] = []
+    failures = failures + test::expect_true(!args::flag_in(none, "--verbose"),
+                                            "no words, no flags")
+    return failures
+}
+
+fn value_in_tests() -> i64 {
+    let failures = 0
+    let words: [str] = ["--count", "7", "--verbose"]
+    failures = failures + test::expect_str(args::value_in(words, "--count", "1"), "7",
+                                           "the word after the flag")
+    failures = failures + test::expect_str(args::value_in(words, "--absent", "1"), "1",
+                                           "a flag that is not there has no value")
+    let alone: [str] = ["--count"]
+    failures = failures + test::expect_str(args::value_in(alone, "--count", "d"), "d",
+                                           "a flag with nothing after it has no value")
+    return failures
+}
+
 fn main() -> i64 {
     let failed = 0
     failed = failed + test::run("math::abs", abs_tests)
@@ -373,5 +400,7 @@ fn main() -> i64 {
     failed = failed + test::run("fs::extension", extension_tests)
     failed = failed + test::run("fs::stem", stem_tests)
     failed = failed + test::run("fs::is_absolute", is_absolute_tests)
+    failed = failed + test::run("args::flag_in", flag_in_tests)
+    failed = failed + test::run("args::value_in", value_in_tests)
     return test::summary("standard library", failed)
 }

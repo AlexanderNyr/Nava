@@ -139,6 +139,29 @@ REGISTERED_TESTS = {
     "IsolationTests": {
         "test_asking_about_a_path_outside_the_grant_is_refused_by_the_cli",
     },
+    #: N12g: `args` — the pure pair runs in the self-test, the four accessors need
+    #: a command line and run here (`TESTED_ELSEWHERE`).
+    "ArgumentTests": {
+        "test_the_words_arrive_unchanged",
+        "test_the_program_name_is_not_an_argument",
+        "test_the_builtins_answer_the_same_as_the_module",
+        "test_a_position_past_the_end_stops_the_program",
+        "test_a_negative_position_stops_the_program",
+        "test_the_message_uses_the_singular_for_one_argument",
+    },
+    "FlagAndValueTests": {
+        "test_flag_finds_a_whole_word_and_nothing_shorter",
+        "test_value_returns_the_next_word_or_the_fallback",
+        "test_a_flag_with_nothing_after_it_has_no_value",
+        "test_the_two_layers_agree",
+        "test_the_first_occurrence_wins",
+    },
+    "CommandLineTests": {
+        "test_the_program_receives_what_follows_the_double_dash",
+        "test_a_word_that_looks_like_an_option_is_still_an_argument",
+        "test_an_option_of_nava_after_the_source_belongs_to_nava",
+        "test_no_double_dash_means_no_arguments",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1156,6 +1179,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_tables  # noqa: PLC0415
     import test_io  # noqa: PLC0415
     import test_fs  # noqa: PLC0415
+    import test_args  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1164,7 +1188,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_local_model_server,
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
-                   test_io, test_fs,
+                   test_io, test_fs, test_args,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1236,7 +1260,11 @@ def check_skip_state() -> list[str]:
     import test_tables  # noqa: PLC0415
     import test_io  # noqa: PLC0415
     import test_fs  # noqa: PLC0415
-    for module, class_name in ((test_fs, "ExistenceTests"),
+    import test_args  # noqa: PLC0415
+    for module, class_name in ((test_args, "ArgumentTests"),
+                               (test_args, "FlagAndValueTests"),
+                               (test_args, "CommandLineTests"),
+                               (test_fs, "ExistenceTests"),
                                (test_fs, "SizeTests"),
                                (test_fs, "ListingTests"),
                                (test_fs, "PathTextTests"),

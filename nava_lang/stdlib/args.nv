@@ -1,0 +1,160 @@
+edition 2;
+
+# Nava standard library: the words the program was started with.  Version 1.
+#
+# A program sees its arguments as a sequence of `str` — the words after its own
+# name, exactly as the process received them: no splitting, no globbing, no
+# quoting rules left to interpret.  `args::count()` is how many there are and
+# `args::get(i)` is one of them, over the two builtins `arg_count` and
+# `arg_at`.
+#
+# There are two layers here, and the split is what makes the module testable:
+#
+#   * `flag_in(values, word)` and `value_in(values, word, fallback)` work on an
+#     array of words the caller passes.  Nothing outside the arguments is read,
+#     so they are `pure: yes` — and they are the one part of this module a test
+#     can exercise without a command line.
+#   * `flag(word)` and `value(word, fallback)` ask the same questions of the real
+#     command line, and `count`/`get` are the raw accessors.  These are
+#     `pure: no`: the same call may answer differently in another run, because
+#     the answer depends on how the program was started.
+#
+# A flag is matched as a whole word — `flag("--verbose")` looks for exactly
+# `--verbose` — and nothing here invents abbreviations, `=` forms or clustering:
+# a program that wants those spells them out with `value` and `str_starts_with`.
+#
+# A program that uses the module:
+#
+#     import args;
+#
+#     fn main() -> i64 {
+#         if args::flag("--help") {
+#             print("usage: prog [--count N] NAME")
+#             return 0
+#         }
+#         let times = args::value("--count", "1")
+#         print(times)
+#         return 0
+#     }
+
+fn module_version() -> i64 {
+    return 1
+}
+
+/// `flag_in(values, word)` — does this word appear in these arguments?
+///
+/// pre: none
+/// post: true exactly when some element of `values` is equal to `word`, compared
+/// byte for byte; `false` for an empty array, for an empty `word` that no element
+/// is, and no element is skipped
+/// cost: O(len(values) × bytes_len(word))
+/// pure: yes
+/// example: args::flag_in(["--verbose", "a"], "--verbose")
+/// example: !args::flag_in(["--verbose", "a"], "verbose")
+/// example: !args::flag_in([], "--verbose")
+pub fn flag_in(values: [str], word: str) -> bool {
+    let i = 0
+    while i < len(values) {
+        if values[i] == word {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+/// `value_in(values, word, fallback)` — the word after `word`, or the fallback.
+///
+/// pre: none
+/// post: the element that follows the **first** occurrence of `word`, and
+/// `fallback` when `word` is absent or is the last element — a flag with nothing
+/// after it has no value rather than an empty one, so a missing argument cannot
+/// be mistaken for an argument that is empty
+/// cost: O(len(values) × bytes_len(word))
+/// pure: yes
+/// example: args::value_in(["--count", "3"], "--count", "1") == "3"
+/// example: args::value_in(["--count"], "--count", "1") == "1"
+/// example: args::value_in([], "--count", "1") == "1"
+/// example: args::value_in(["--a", "x", "--a", "y"], "--a", "z") == "x"
+pub fn value_in(values: [str], word: str, fallback: str) -> str {
+    let i = 0
+    while i < len(values) {
+        if values[i] == word {
+            if i + 1 < len(values) {
+                return values[i + 1]
+            }
+            return fallback
+        }
+        i = i + 1
+    }
+    return fallback
+}
+
+/// `count()` — how many arguments the program was given.
+///
+/// pre: none
+/// post: the number of words after the program's own name; 0 when it was started
+/// with none. The contract examples run with the command line `--count 3 name`,
+/// because a module about a command line cannot be demonstrated without one
+/// cost: O(1)
+/// pure: no
+/// example: args::count() == 3
+pub fn count() -> i64 {
+    return arg_count()
+}
+
+/// `get(index)` — one argument, by position.
+///
+/// pre: `0 <= index < count()`; a position outside that range stops the program
+/// post: the word at that position, exactly as the process received it
+/// cost: O(1)
+/// pure: no
+/// example: args::get(0) == "--count"
+/// example: args::get(2) == "name"
+/// error: print(args::get(9)) => argument index 9 is out of bounds for 3 arguments
+pub fn get(index: i64) -> str {
+    return arg_at(index)
+}
+
+/// `flag(word)` — does the program's own command line contain this word?
+///
+/// pre: none
+/// post: true exactly when some argument equals `word`, byte for byte; the same
+/// answer `flag_in` gives for the arguments as an array
+/// cost: O(count() × bytes_len(word))
+/// pure: no
+/// example: args::flag("--count")
+/// example: !args::flag("--verbose")
+pub fn flag(word: str) -> bool {
+    let i = 0
+    while i < arg_count() {
+        if arg_at(i) == word {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}
+
+/// `value(word, fallback)` — the argument after this word, or the fallback.
+///
+/// pre: none
+/// post: the first argument that follows `word`, and `fallback` when `word` is
+/// absent or last; the same answer `value_in` gives for the arguments as an array
+/// cost: O(count() × bytes_len(word))
+/// pure: no
+/// example: args::value("--count", "1") == "3"
+/// example: args::value("--missing", "1") == "1"
+pub fn value(word: str, fallback: str) -> str {
+    let i = 0
+    while i < arg_count() {
+        if arg_at(i) == word {
+            if i + 1 < arg_count() {
+                return arg_at(i + 1)
+            }
+            return fallback
+        }
+        i = i + 1
+    }
+    return fallback
+}

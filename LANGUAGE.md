@@ -610,6 +610,7 @@ nava_lang/stdlib/test.nv      expect_true, expect_i64, expect_str, run, summary
 nava_lang/stdlib/fmt.nv       repeat, pad_left, pad_right, pad_center, clip, ...
 nava_lang/stdlib/io.nv        count_lines, first_line, join_lines, lines_of, read_lines, ...
 nava_lang/stdlib/fs.nv        basename, dirname, path_join, extension, stem, exists, ...
+nava_lang/stdlib/args.nv      flag_in, value_in, count, get, flag, value
 ```
 
 `python3 nava run examples/modules/main.nv` prints the sorted values, the sum,
@@ -789,6 +790,47 @@ fn main() {
 ```
 
 This prints `b.txt`, `txt` and `a/b`.
+
+### `args`
+
+The words a program was started with. A flag is matched as a whole word, and
+nothing here invents abbreviations, `=` forms or clustering.
+
+| Function | Result |
+|---|---|
+| `args::module_version() -> i64` | the standard library version |
+| `args::flag_in(values: [str], word: str) -> bool` | does this word appear in these words? `pure: yes` |
+| `args::value_in(values: [str], word: str, fallback: str) -> str` | the word after the first `word`, else the fallback; `pure: yes` |
+| `args::count() -> i64` | how many arguments the program was given |
+| `args::get(index: i64) -> str` | one of them; an index outside the range stops the program |
+| `args::flag(word: str) -> bool` | the same question as `flag_in`, asked of the real command line |
+| `args::value(word: str, fallback: str) -> str` | the same question as `value_in`, asked of the real command line |
+
+The two `_in` functions take the words as an array and are `pure: yes`; the four
+that read the command line are `pure: no`, for the reason above. `value_in` —
+and so `value` — treats a flag with nothing after it as having **no** value
+rather than an empty one, so a missing argument cannot be mistaken for an
+argument that happens to be empty.
+
+```nava
+import args;
+
+fn main() -> i64 {
+    if args::flag("--help") {
+        print("usage: prog [--count N] NAME")
+        return 0
+    }
+    let times = args::value("--count", "1")
+    print(times)
+    return 0
+}
+```
+
+Run as `nava run prog.nv -- --count 3`, this prints `3`.
+
+The contract examples of `args` are executed with a fixed command line,
+`--count 3 name`, because a module about a command line cannot be demonstrated
+without one; every other module's examples ignore it.
 
 ## Doc blocks and `nava doc`
 
@@ -1015,6 +1057,44 @@ nava run   prog.nv --workdir sandbox --allow-read . --allow-write .
   `..`, refuses a file where a directory was expected and stops above
   4096 entries; the order is part of the result, so two runs on one directory
   agree.
+
+## Program arguments
+
+A program can read the words it was started with:
+
+| Builtin | Result |
+|---|---|
+| `arg_count() -> i64` | how many words follow the program's own name |
+| `arg_at(index: i64) -> str` | one of them, exactly as the process received it |
+
+`nava run prog.nv -- a "two words" -x` starts the program with three
+arguments: `a`, `two words` and `-x`. Everything after `--` belongs to the
+program, word for word — nothing is split, expanded or interpreted, and an
+argument that looks like an option of `nava` is still an argument because it
+sits behind the fence. A program built with `nava build` and started directly
+receives the words its shell gives it, which is the same thing. The program's
+own name is **not** an argument.
+
+`arg_count` is 0 for a program started with none, and `arg_at` stops the
+program when the index is negative or at least `arg_count()`, naming the index
+and the count:
+
+```nava
+fn main() {
+    print(arg_count())
+    print(arg_at(0))
+}
+```
+
+Started with `nava run prog.nv -- hello`, this prints `1` and `hello`; started
+with no arguments it stops with
+`nava runtime error: argument index 0 is out of bounds for 0 arguments`.
+
+Reading the command line is an **effect**: `arg_count` and `arg_at` are not
+pure, and neither is any function that calls them, because the same call
+answers differently in a run that was started differently. Nothing is cached:
+a program that asks twice gets the same answer within one run, and a different
+one in the next.
 
 ## Checked arithmetic
 

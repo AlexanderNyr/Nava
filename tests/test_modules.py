@@ -229,7 +229,9 @@ class ModuleFrontendTests(unittest.TestCase):
             compilation = compile_source((root / "main.nv").read_text(encoding="utf-8"),
                                          path=root / "main.nv")
         self.assertEqual(compilation.warnings, [])
-        self.assertEqual(compilation.code.count("int main(void)"), 1)
+        # `int main(int argc, char **argv)` since N12g: the program may read
+        # its arguments. One entry point, still exactly one.
+        self.assertEqual(compilation.code.count("int main("), 1)
 
     def test_the_project_root_can_be_moved(self):
         files = {
@@ -279,7 +281,7 @@ class ModuleRuntimeTests(unittest.TestCase):
                                     str(output), "-o", str(pathlib.Path(temp) / "program")],
                                    capture_output=True, text=True, timeout=300)
         self.assertEqual(built.returncode, 0, built.stderr)
-        self.assertEqual(code.count("int main(void)"), 1)
+        self.assertEqual(code.count("int main("), 1)
         # Every module function is emitted exactly once, as a static function:
         # the C entry point is the only way into the whole program.
         definitions = [line for line in code.splitlines()

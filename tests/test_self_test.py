@@ -56,6 +56,12 @@ TESTED_ELSEWHERE = {
     "io::read_lines": "tests/test_io.py",
     "io::write_lines": "tests/test_io.py",
     "io::append_line": "tests/test_io.py",
+    # `args` reads the command line, and the self-test is started with none: the
+    # four accessors are tested where a command line exists.
+    "args::count": "tests/test_args.py",
+    "args::get": "tests/test_args.py",
+    "args::flag": "tests/test_args.py",
+    "args::value": "tests/test_args.py",
     "fs::exists": "tests/test_fs.py",
     "fs::size": "tests/test_fs.py",
     "fs::entries": "tests/test_fs.py",

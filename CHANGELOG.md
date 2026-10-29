@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+N12g: **`args`**, and a program's command line. A program can see the words it
+was started with, and nothing about them is interpreted.
+
+- Two builtins: `arg_count() -> i64` and `arg_at(i64) -> str`, over
+  `int main(int argc, char **argv)`. The program's own name is not an argument;
+  an out-of-range position stops the program with
+  `argument index 2 is out of bounds for 2 arguments` (and `1 argument`, singular,
+  when there is one).
+- `nava run prog.nv -- a "two words" -x` passes everything after `--` to the
+  program word for word: no splitting, no expansion, and an argument that looks
+  like an option of `nava` stays an argument because it sits behind the fence.
+- Module `args` in two layers, which is what makes it testable: `flag_in` and
+  `value_in` take an array of words and are `pure: yes` (the self-test runs them);
+  `count`, `get`, `flag` and `value` read the real command line and are `pure: no`.
+  A flag with nothing after it has **no** value, so the fallback answers and a
+  missing argument cannot look like an empty one.
+- Contract examples now start with a fixed command line, `--count 3 name`, since a
+  module about command lines cannot be demonstrated without one.
+- A regression this increment caused and fixed: a `nargs=REMAINDER` parser handed
+  `nava run f.nv --timeout 0.1`'s `--timeout 0.1` to the *program*, which hung the
+  timeout test. The positional is `nargs="*"`, and a regression test runs a
+  bounded loop and asserts exit `124`.
+
 N12f: **`fs`**, and three builtins behind it. Paths are text; the filesystem is
 asked questions, and the questions are gated.
 

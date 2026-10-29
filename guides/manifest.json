@@ -8,10 +8,10 @@
       "language": "nava",
       "version": 1,
       "spec_version": 1,
-      "sha256": "53302225dc4c04e018e44b49b6c2bcf70701baa1c5d13defe9b7a4e4b8c13a3a",
-      "bytes": 30510,
-      "chars": 30430,
-      "lines": 871
+      "sha256": "35a3c2d6e868aaa70bb206aa597ba6b9a6647737521f88df435c896de0207683",
+      "bytes": 31263,
+      "chars": 31179,
+      "lines": 896
     }
   }
 }
