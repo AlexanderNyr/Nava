@@ -109,6 +109,11 @@ CODES_TESTED_ELSEWHERE = {
     "E0806": "tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused",
     "E0807": "tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out",
     "E0808": "tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused",
+    # A module that comes from a package needs a project, a vendor tree and a
+    # lockfile, which tests/test_packages.py builds for each case.
+    "E0810": "tests/test_packages.py: test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810",
+    "E0811": "tests/test_packages.py: test_two_packages_may_not_provide_the_same_module",
+    "E0812": "tests/test_packages.py: test_network_is_refused_with_its_own_code",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

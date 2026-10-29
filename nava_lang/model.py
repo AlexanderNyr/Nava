@@ -593,6 +593,10 @@ class Import:
     name_loc: Location
     #: True when the module comes from the packaged standard library.
     standard: bool = False
+    #: Name of the vendored package that provided the module, or "" for a module
+    #: of the project or of the standard library. A build record lists packages by
+    #: this field, so it is filled by the loader rather than guessed later.
+    package: str = ""
 
 
 @record()
@@ -647,3 +651,6 @@ class Program:
     #: Module name -> the edition its file declares. A module that does not
     #: declare edition 2 exports every function, as it always did.
     module_editions: dict[str, int] = field(default_factory=dict)
+    #: Module name -> the vendored package it came from. Only modules that came
+    #: from `vendor/<package>/` appear here.
+    module_packages: dict[str, str] = field(default_factory=dict)

@@ -305,6 +305,32 @@ REGISTERED_TESTS = {
         "test_the_json_report_carries_every_package",
         "test_checking_without_a_lockfile_says_to_write_one",
     },
+    #: N13c: building against vendored packages. Three claims: a package's module is
+    #: a module and may import another package's module; the lockfile is the
+    #: boundary (an unlocked `vendor/` directory is `E0810`, not a dependency); and a
+    #: name means one thing (local wins, `E0360` for the standard library, `E0811`
+    #: for two packages). Plus the build record and the refused network mode.
+    "PackageModuleTests": {
+        "test_a_module_from_a_locked_package_is_importable_and_runs",
+        "test_a_package_module_may_import_another_package_module",
+        "test_the_build_record_names_the_packages_that_contributed",
+        "test_the_json_build_record_carries_the_packages_and_the_network_mode",
+        "test_a_project_with_no_packages_records_none",
+    },
+    "BoundaryTests": {
+        "test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810",
+        "test_a_module_nobody_provides_lists_where_it_looked",
+        "test_a_tampered_package_fails_the_build_and_not_only_the_lock_check",
+        "test_a_local_module_wins_over_a_package_module",
+        "test_a_package_module_may_not_shadow_a_standard_module",
+        "test_two_packages_may_not_provide_the_same_module",
+        "test_the_loader_reads_the_lockfile_rather_than_the_directory",
+    },
+    "NetworkTests": {
+        "test_network_is_refused_with_its_own_code",
+        "test_network_is_refused_before_anything_is_read",
+        "test_offline_is_accepted_and_recorded",
+    },
     "SelfTestCoverageTests": {
         "test_the_program_names_every_public_function",
         "test_the_program_tests_every_module",
@@ -1281,6 +1307,9 @@ CODES_TESTED_ELSEWHERE = {
     "E0806": "tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused",
     "E0807": "tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out",
     "E0808": "tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused",
+    "E0810": "tests/test_packages.py: test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810",
+    "E0811": "tests/test_packages.py: test_two_packages_may_not_provide_the_same_module",
+    "E0812": "tests/test_packages.py: test_network_is_refused_with_its_own_code",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -1347,6 +1376,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_time  # noqa: PLC0415
     import test_manifest  # noqa: PLC0415
     import test_lockfile  # noqa: PLC0415
+    import test_packages  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1356,7 +1386,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_elements, test_moves, test_modules, test_nava, test_ownership,
                    test_plan,
                    test_io, test_fs, test_args, test_collections, test_time,
-                   test_manifest, test_lockfile,
+                   test_manifest, test_lockfile, test_packages,
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
@@ -1433,7 +1463,11 @@ def check_skip_state() -> list[str]:
     import test_time  # noqa: PLC0415
     import test_manifest  # noqa: PLC0415
     import test_lockfile  # noqa: PLC0415
-    for module, class_name in ((test_lockfile, "DigestTests"),
+    import test_packages  # noqa: PLC0415
+    for module, class_name in ((test_packages, "PackageModuleTests"),
+                               (test_packages, "BoundaryTests"),
+                               (test_packages, "NetworkTests"),
+                               (test_lockfile, "DigestTests"),
                                (test_lockfile, "ResolutionTests"),
                                (test_lockfile, "LockfileFileTests"),
                                (test_lockfile, "CheckTests"),

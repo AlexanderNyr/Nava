@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+N13c: **building against vendored packages**.
+
+- `import name;` searches the project's own files, then `vendor/<package>/name.nv`
+  for every package `nava.lock` names, then the standard library. A package's
+  modules are ordinary modules and may import each other.
+- The lockfile is the boundary: a module provided by a `vendor/` directory the
+  lockfile does not name is `E0810`, naming the package and saying to add the
+  constraint and lock again — *no transitive dependency can appear that the lockfile
+  does not name*, enforced where a program can break it.
+- A name means one thing: a local file wins over a package's file (documented
+  order), a package file may not shadow a standard module (`E0360`), and two locked
+  packages may not provide the same module (`E0811`).
+- The digest check now runs **before** the build: a vendored package whose bytes
+  moved stops `check`, `build`, `emit-c` and `run` with `E0804`. That is where *a
+  tampered package fails the build* becomes true.
+- `nava build --project` prints the packages that contributed a module, and
+  `--format json` carries the same list plus `"network": "offline"`.
+- `--network` is refused with `E0812` (there is no registry to reach); `--offline`
+  is accepted and recorded, because offline is the only mode there is.
+
 N13b: **`nava.lock`** — the resolved graph, by digest.
 
 - Packages are vendored: `vendor/<name>/` holds a `nava.toml` and its `.nv` files.

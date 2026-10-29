@@ -14,8 +14,9 @@ and the arena), N11e (moves, and the arena region a frame gets back), N11f (a `V
 as a field, a payload or a type argument) and N11g (an element that owns storage)
 are delivered; N12 is complete through N12i (every module of the phase, with
 contracts, examples and tests), N13 is in progress: N13a (`nava.toml`) and N13b
-(`nava.lock`, vendored packages and content digests) are delivered, and N13c–N13d
-and N14–N18 are not started.** The
+(`nava.lock`, vendored packages and content digests) and N13c (a build that reads
+its modules out of the lockfile, and the refused network mode) are delivered, and
+N13d and N14–N18 are not started.** The
 document is written so that each phase's gate is a command somebody can run and a
 record somebody can check, in the same discipline as `PLAN.md`: a phase is done
 when its gate has run and its evidence is recorded, and an unmeasured result stays
@@ -133,7 +134,7 @@ the guard, and the two implementations must agree on every entry.
 | N10 | Structures, sum types, errors, generics | N1, N4, N5 | Edition 2 parses, checks and runs; the §2 audit is closed row by row; the Python oracle and the C backend agree | **Delivered** — N10a–N10g; the §2 audit is closed row by row |
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
-| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a and N13b delivered (manifest, vendored packages by digest, lockfile and its tamper checks); `--offline` as a recorded opt-in and byte-identical rebuilds are not |
+| N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Under way** — N13a–N13c delivered: the manifest, vendored packages by digest, the lockfile and its tamper checks, and a build that takes its modules from the lockfile and verifies their bytes before compiling; byte-identical rebuilds are not |
 | N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Specified** |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
@@ -1157,8 +1158,41 @@ reproducibility records.
 |---|---|---|
 | N13a | **`nava.toml`**: the manifest as a strict subset of TOML — `[package]`, `[build]`, `[dependencies]` — with names checked against the standard library, versions and constraints parsed and matched, the edition checked against the entry file, `nava project` to describe it and `--project` on the commands that compile | **Delivered** (record below) |
 | N13b | **The lockfile**: vendored packages identified by a content digest, a resolver that walks the graph and refuses a cycle or a version outside its constraint, `nava lock` to write `nava.lock`, and `nava lock --check` to stop at the first disagreement — the tamper list the phase names, one code per accident | **Delivered** (record below) |
-| N13c | **Vendoring and `--offline`**: packages live in the tree, by digest, and a substituted or corrupted package fails the build with a named error; the dependency graph is printed | Not started |
+| N13c | **Building against packages**: `import name` searches the project, then the packages `nava.lock` names, then the standard library; an unlocked `vendor/` directory is `E0810`, two packages providing one name is `E0811`, a package file shadowing a standard module is `E0360`; the digest check runs before the build; `--network` is refused with `E0812` and `--offline` is recorded | **Delivered** (record below) |
 | N13d | **Reproducible builds**: sorted iteration everywhere it reaches output, `SOURCE_DATE_EPOCH`, recorded toolchain identity, and two checkouts producing one byte-identical binary | Not started |
+
+#### Delivery record N13c (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| A package's module is a module | `nava_lang/modules.py: resolve`, `PackageModuleTests.test_a_module_from_a_locked_package_is_importable_and_runs` | `import json;` in the entry file resolves to `vendor/json/json.nv` because `nava.lock` names `json`; the program prints `"hi"` and `42`. No search path to configure and no build script to write |
+| A package's module may import another package's module | `test_a_package_module_may_import_another_package_module` | `json.nv` does `import util;` and calls `util::twice`, with both packages locked; the same rule applies at any depth because every locked package is on the list the loader searches |
+| **The lockfile is the boundary, not a suggestion** | `BoundaryTests.test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810`, `test_the_loader_reads_the_lockfile_rather_than_the_directory` | with `vendor/json` present and no lockfile, `import json;` is `E0810`: *module 'json' is provided by the package 'json', which nava.lock does not name*, with the hint to add the constraint and run `nava lock`. A stray `vendor/extra` changes nothing about a good build and produces the same named refusal when its module is imported. This is the gate's sentence — *no transitive dependency can appear that the lockfile does not name* — enforced where a program can break it |
+| A name means one thing | `test_a_local_module_wins_over_a_package_module`, `test_a_package_module_may_not_shadow_a_standard_module`, `test_two_packages_may_not_provide_the_same_module` | a local `json.nv` wins over the package's file (the documented order, stated rather than discovered); a package file named `math.nv` is `E0360` *package 'json' provides module 'math', which is a standard module*; two locked packages providing `json` are `E0811` naming both directories. The compiler never decides by directory order |
+| **A tampered package fails the build** | `test_a_tampered_package_fails_the_build_and_not_only_the_lock_check` | one extra byte in `vendor/util/util.nv` stops `nava check --project` **and** `nava build --project` with `E0804`, both digests in the message, before any C is generated. The check moved from `nava lock --check` into the loader (`modules.locked_packages`), which is where the phase's sentence becomes true of a build rather than of a separate command |
+| The build records what it used | `test_the_build_record_names_the_packages_that_contributed`, `test_the_json_build_record_carries_the_packages_and_the_network_mode`, `test_a_project_with_no_packages_records_none` | `nava build --project` prints `Packages: json, util (from nava.lock)` above `Built: …`; `--format json` carries `"packages": ["json", "util"]` and `"network": "offline"`, and every name in the list also appears in `nava.lock`. A project with no dependencies prints no package line, because an empty record is not a record |
+| Offline is the only mode, and asking for the other one is refused | `NetworkTests` (3 tests) | `--network` is `E0812` *--network is not available: this compiler resolves packages from vendor/ and has no registry to reach*, refused before the manifest is even read; `--offline` is accepted and recorded. A flag that pretends to fetch would be worse than no flag |
+| A module nobody provides says where it looked | `test_a_module_nobody_provides_lists_where_it_looked` | `E0352` for `import nosuch;` lists the project path, `vendor/json/nosuch.nv` and the standard library path — every location searched, not only the ones with a file in them |
+| The specification moved with the code | `LANGUAGE.md` (`## Packages: vendor/, nava.lock` — the search order and the build record, the code table) | the three search locations, the four refusal rules and the build record format are normative; the code table grows to **168** entries (165 at N13b), with a row for each of the three new codes |
+| The overhead record was re-measured rather than assumed unchanged | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, the same number as N13b, and for a stated reason: the model-facing guide is unchanged |
+| The audit is re-measured | `python3 tools/audit_compiler_needs.py` | 12 183 lines, 16 modules, 379 functions — 176 lines and 2 functions more than N13b |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 853 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 168 diagnostic codes`; suite **923 tests OK** (1 487 subtests); release checks OK; the guide digest verifies |
+
+Negative controls: the unlocked `vendor/` directory (`E0810`), the two packages
+providing one name (`E0811`), the package file shadowing `math` (`E0360`), the
+tampered package that must fail the build (`E0804`), and `--network` (`E0812`). The
+three boundary cases re-lock after editing a package on purpose: without that the
+digest check would answer first — which it should, and which the tamper test asserts
+separately.
+
+Deliberately not done in N13c, and why: a **package's own `build.entry`** (a package
+is a library today: its `.nv` files are modules and nothing else, and a package that
+also built a program would need a rule about which project's capabilities its
+program runs with); **capability grants declared in a manifest** (that is a security
+decision with its own questions, and the current answer — grants are given on the
+command line — is the one the sandbox tests pin); and **byte-identical rebuilds**,
+which are N13d and are about the C compiler and the linker rather than about
+imports.
 
 #### Delivery record N13b (2026-10-29)
 

@@ -208,6 +208,9 @@ CODES: dict[str, tuple[str, str]] = {
     "E0806": (Severity.ERROR, "a version is outside its constraint"),
     "E0807": (Severity.ERROR, "the dependency graph has a cycle"),
     "E0808": (Severity.ERROR, "a package is not a Nava package"),
+    "E0810": (Severity.ERROR, "a module is provided by a package the lockfile does not name"),
+    "E0811": (Severity.ERROR, "two packages provide the same module"),
+    "E0812": (Severity.ERROR, "network access is not available"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),

@@ -1345,7 +1345,42 @@ package that requires it.
 
 So a tampered package fails the build with a named error, and a lockfile edited by
 hand without a matching digest fails too. Offline is not an option to remember: it
-is the only mode there is.
+is the only mode there is. `--network` exists as the recorded way to ask for the
+other mode, and it is refused with `E0812` — there is no registry to reach.
+
+### A build reads its packages from the lockfile
+
+`import name;` searches three places, in this order:
+
+1. `<project root>/<name>.nv` — the project's own files;
+2. `vendor/<package>/<name>.nv` — for every package `nava.lock` names;
+3. the packaged standard library.
+
+A package's modules are ordinary modules: they can import each other, and
+`json.nv` may `import util;` when both packages are locked. What the lockfile says
+is the boundary, not a suggestion:
+
+| Situation | Code |
+|---|---|
+| a module is provided by a `vendor/` directory the lockfile does not name | `E0810` |
+| two locked packages provide the same module name | `E0811` |
+| a package's file would shadow a standard module | `E0360` |
+| a local file and a package's file share a name | the local file wins — the documented order, not an accident |
+
+The digest check runs **before** the build, not only in `nava lock --check`: a
+vendored package whose bytes have moved since it was locked stops `check`, `build`,
+`emit-c` and `run` with `E0804`. That is where the phase's sentence *a tampered
+package fails the build* becomes true, and it is why a build is worth recording.
+`nava build --project` prints the packages that contributed a module —
+
+```
+Packages: json, util (from nava.lock)
+Built: /tmp/prog
+```
+
+— and `--format json` carries the same list plus `"network": "offline"`, so "what is
+in this binary" is answerable from the build rather than from a reading of the
+sources.
 
 ## The clock
 
@@ -2725,6 +2760,9 @@ never changes meaning; a new condition gets a new code.
 | `E0806` | error | a version is outside its constraint | `tests/test_lockfile.py: test_a_version_outside_the_project_constraint_is_refused` |
 | `E0807` | error | the dependency graph has a cycle | `tests/test_lockfile.py: test_a_cycle_is_refused_with_the_cycle_written_out` |
 | `E0808` | error | a package is not a Nava package | `tests/test_lockfile.py: test_a_directory_that_is_not_a_package_is_refused` |
+| `E0810` | error | a module is provided by a package the lockfile does not name | `tests/test_packages.py: test_a_module_from_a_package_the_lockfile_does_not_name_is_e0810` |
+| `E0811` | error | two packages provide the same module | `tests/test_packages.py: test_two_packages_may_not_provide_the_same_module` |
+| `E0812` | error | network access is not available | `tests/test_packages.py: test_network_is_refused_with_its_own_code` |
 
 **Projects and the manifest**
 

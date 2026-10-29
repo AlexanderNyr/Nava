@@ -41,6 +41,10 @@ class Compilation:
 
     code: str
     warnings: list[Diagnostic] = field(default_factory=list)
+    #: Names of the vendored packages a module came from, sorted. A build record
+    #: lists these, so "which packages are in this binary" is answerable from the
+    #: build rather than from a reading of the sources.
+    packages: list[str] = field(default_factory=list)
 
 
 def compile_source(source: str, path: Path | str | None = None,
@@ -71,7 +75,8 @@ def compile_source(source: str, path: Path | str | None = None,
                                stdlib_root=Path(stdlib_root) if stdlib_root else None,
                                entry_program=program)
     check(program)
-    return Compilation(generate(program, capabilities), list(program.warnings))
+    packages = sorted(set(getattr(program, "module_packages", {}).values()))
+    return Compilation(generate(program, capabilities), list(program.warnings), packages)
 
 
 def compile_file(path: Path | str, root: Path | str | None = None,
@@ -130,6 +135,13 @@ def add_project_options(command: argparse.ArgumentParser) -> None:
     command.add_argument("--project", action="store_true",
                          help="compile the entry named by nava.toml, found above the "
                               "working directory or inside --root")
+    command.add_argument("--offline", action="store_true",
+                         help="resolve packages from vendor/ only; this is the default "
+                              "and the only mode that exists, and the flag is accepted "
+                              "so a build script can say what it means")
+    command.add_argument("--network", action="store_true",
+                         help="ask for network access while resolving packages; refused "
+                              "with E0812, because there is no registry to reach")
     command.add_argument("--allow-read", action="append", metavar="DIR",
                          help="permit read_file inside DIR (repeatable, no access by "
                               "default)")
@@ -423,6 +435,13 @@ def main(argv: list[str] | None = None) -> int:
     # even when the failure is "you did not name a program".
     path = Path(args.source) if args.source else Path(getattr(args, "root", None) or ".")
     try:
+        if getattr(args, "network", False):
+            raise make(
+                "E0812",
+                "--network is not available: this compiler resolves packages from "
+                "vendor/ and has no registry to reach",
+                hint="offline is the only mode; drop --network, or vendor the package",
+            )
         path = resolve_source_argument(args)
         try:
             source = path.read_text(encoding="utf-8")
@@ -461,7 +480,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "check":
             if machine:
                 print(report_json(str(path), "ok", compilation.warnings,
-                                  {"source_bytes": len(source.encode("utf-8"))}))
+                                  {"source_bytes": len(source.encode("utf-8")),
+                                   "packages": compilation.packages,
+                                   "network": "offline"}))
             else:
                 print(f"OK: {path}")
             return 0
@@ -491,11 +512,18 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             if machine:
                 print(report_json(str(path), "ok", compilation.warnings,
-                                  {"output": str(output)}))
+                                  {"output": str(output),
+                                   "packages": compilation.packages,
+                                   "network": "offline"}))
             else:
+                if compilation.packages:
+                    print(f"Packages: {', '.join(compilation.packages)} (from nava.lock)")
                 print(f"Built: {output}")
             return 0
         if args.command == "run":
+            # A run prints the program's own output. The package list goes to
+            # stderr only when the caller asked for JSON, so a program's stdout
+            # stays exactly what the program wrote.
             import shutil
             import tempfile
 
