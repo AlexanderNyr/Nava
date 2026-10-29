@@ -28,7 +28,10 @@ package version, `pyproject.toml` and any released changelog section disagree.
   Python file with `ast.parse(..., feature_version=(3, 10))`, which proves the
   syntax floor — it is not a substitute for running the suite on 3.10.
 - **A C11 compiler** (`cc`, `gcc` or `clang`) for `nava build` and `nava run`.
-  `nava check` and `nava emit-c` work without one. The compiler is not a Python
+  `nava check`, `nava emit-c`, `nava emit-ir` and `nava build --backend native`
+  work without one: the native backend writes the ELF file itself and spawns
+  nothing. It supports a named subset of the language (see `LANGUAGE.md`, *The
+  native backend*), is **Linux x86-64 only**, and refuses the rest with `E0901`. The compiler is not a Python
   dependency, so it cannot be resolved by `pip`; the registry guard
   (`python3 tests/registry.py`) fails instead of skipping the runtime tests when
   it is missing.

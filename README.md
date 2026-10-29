@@ -179,6 +179,14 @@ printf '48 18\n' | ./gcd       # 6
 # Inspect the generated C.
 python3 nava emit-c examples/gcd.nv -o gcd.c
 
+# Write the executable directly, with no C compiler, assembler or linker.
+python3 nava build examples/fibonacci.nv -o ./fib --backend native
+./fib
+
+# Print the IR the native backend consumes: blocks with parameters, one value
+# per instruction, jump/branch/ret terminators.
+python3 nava emit-ir examples/fibonacci.nv
+
 # Generate the standard library reference from its doc blocks (one file per
 # module), or print one module's reference.
 python3 nava doc --out docs/stdlib

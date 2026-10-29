@@ -1252,6 +1252,45 @@ REGISTERED_TESTS = {
         "test_spec_fixtures_are_registered",
         "test_registry_module_guard_passes",
     },
+    #: N14a: the native backend's own gate is a differential — the same program
+    #: through two code generators, compared on stdout, stderr and status — plus the
+    #: shape of the IR it consumes, the shape of the file it writes, and the refusals
+    #: that keep "not implemented" from becoming "wrong answer".
+    "NativeDifferentialTests": {
+        "test_each_program_prints_the_same_through_both_backends",
+        "test_each_trap_is_the_same_message_and_status",
+        "test_the_exit_status_is_the_return_value_modulo_256",
+    },
+    "NativeIRTests": {
+        "test_a_branch_and_a_loop_header_pass_their_values_explicitly",
+        "test_each_jump_passes_one_value_per_block_parameter",
+        "test_every_block_ends_in_exactly_one_terminator",
+        "test_every_value_is_used_only_where_its_definition_dominates",
+        "test_the_dump_is_stable",
+        "test_the_short_circuit_is_a_branch_so_the_right_side_does_not_run",
+    },
+    "NativeRefusalTests": {
+        "test_a_call_with_more_than_six_arguments_is_refused",
+        "test_a_construct_is_refused_by_name",
+        "test_an_unknown_option_is_refused_rather_than_ignored",
+        "test_the_c_backend_compiles_every_program_the_native_one_refuses",
+    },
+    "NativeELFTests": {
+        "test_the_binary_is_marked_executable_and_can_be_run_directly",
+        "test_the_file_is_a_static_x86_64_executable",
+        "test_two_builds_of_one_source_are_the_same_bytes",
+    },
+    "NativeCommandTests": {
+        "test_build_needs_no_c_compiler_on_the_path",
+        "test_emit_ir_refuses_a_construct_it_cannot_represent",
+        "test_emit_ir_writes_the_same_text_to_stdout_and_to_a_file",
+        "test_the_json_report_names_the_backend",
+    },
+    "NativeRuntimeTests": {
+        "test_a_bool_prints_as_true_or_false",
+        "test_a_string_is_written_byte_for_byte_and_then_a_newline",
+        "test_integers_are_written_in_decimal_including_the_extremes",
+    },
 }
 
 #: Registered public tasks and their expected number of cases.  A task that
@@ -1338,6 +1377,11 @@ CODES_TESTED_ELSEWHERE = {
     "E0813": "tests/test_reproducible.py: test_the_environment_variable_is_validated",
     "E0814": "tests/test_reproducible.py: test_a_modified_source_is_named",
     "E0815": "tests/test_reproducible.py: test_a_record_that_is_not_a_record_is_refused",
+    # The native backend is a second code generator, so its refusals are produced by
+    # compiling a *valid* program through it: no source fixture can expect them,
+    # because the same fixture compiles through the C backend.
+    "E0901": "tests/test_native.py: test_a_construct_is_refused_by_name",
+    "E0903": "tests/test_native.py: test_an_unknown_option_is_refused_rather_than_ignored",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 
@@ -1406,6 +1450,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_lockfile  # noqa: PLC0415
     import test_packages  # noqa: PLC0415
     import test_reproducible  # noqa: PLC0415
+    import test_native  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1419,7 +1464,7 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
-                   test_tables, test_text, test_values, test_vec):
+                   test_tables, test_text, test_values, test_vec, test_native):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -1494,7 +1539,10 @@ def check_skip_state() -> list[str]:
     import test_lockfile  # noqa: PLC0415
     import test_packages  # noqa: PLC0415
     import test_reproducible  # noqa: PLC0415
-    for module, class_name in ((test_reproducible, "ReproduceTests"),
+    import test_native  # noqa: PLC0415
+    for module, class_name in ((test_native, "NativeDifferentialTests"),
+                               (test_native, "NativeRuntimeTests"),
+                               (test_reproducible, "ReproduceTests"),
                                (test_reproducible, "DifferenceTests"),
                                (test_reproducible, "CompareTests"),
                                (test_packages, "PackageModuleTests"),

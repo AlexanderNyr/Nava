@@ -215,6 +215,9 @@ CODES: dict[str, tuple[str, str]] = {
     "E0813": (Severity.ERROR, "invalid SOURCE_DATE_EPOCH"),
     "E0814": (Severity.ERROR, "two builds of one source are not identical"),
     "E0815": (Severity.ERROR, "a build record does not describe this build"),
+    # --- the native backend --------------------------------------------------
+    "E0901": (Severity.ERROR, "the native backend does not implement this construct"),
+    "E0903": (Severity.ERROR, "the native backend does not implement this option"),
     # --- isolation ----------------------------------------------------------
     "E0601": (Severity.ERROR, "requested isolation is unavailable"),
     "E0602": (Severity.ERROR, "sandboxed program was stopped"),

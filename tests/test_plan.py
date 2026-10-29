@@ -147,7 +147,10 @@ def tree_audit() -> dict[str, int]:
 
     functions = 0
     lines = 0
-    for path in sorted((ROOT / "nava_lang").glob("*.py")):
+    # The whole package, subdirectories included: the same walk the audit tool does,
+    # so the document and the measurement cannot disagree about what "the compiler"
+    # means.
+    for path in sorted((ROOT / "nava_lang").rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         lines += len(source.splitlines())
         for node in ast.walk(ast.parse(source)):

@@ -3,8 +3,8 @@
 
 The audit table in `INDEPENDENCE.md` is evidence, not a wish list, so its numbers
 have to be reproducible by anyone with the repository. This script is the method:
-it parses every module under `nava_lang/` and counts the Python constructs the
-table lists. The definitions are deliberately literal — a row counts *syntax
+it parses every module under `nava_lang/`, subpackages included, and counts the
+Python constructs the table lists. The definitions are deliberately literal — a row counts *syntax
 nodes*, not opinions about style:
 
 * a **dict literal** is an `ast.Dict`; a **set literal** is an `ast.Set`;
@@ -65,7 +65,11 @@ def count() -> dict[str, int]:
     }
     for name in NOT_NEEDED:
         totals[f"not_needed_{name}"] = 0
-    for path in sorted((ROOT / "nava_lang").glob("*.py")):
+    # `rglob`, because the compiler is a package: a `glob("*.py")` here silently
+    # stopped counting the modules that moved into `nava_lang/native/`, which would
+    # have made every number in the table a claim about a smaller tree than the one
+    # the plan is about.
+    for path in sorted((ROOT / "nava_lang").rglob("*.py")):
         source = path.read_text(encoding="utf-8")
         totals["modules"] += 1
         totals["lines"] += len(source.splitlines())

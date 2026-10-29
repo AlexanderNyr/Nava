@@ -1348,6 +1348,60 @@ panic message is checked still prints the same trace.
 **Deliverable:** the IR, the backend, the encoder, the linker, the runtime and
 the differential records.
 
+| Increment | Scope | State |
+|---|---|---|
+| N14a | **One translation unit**: a linear SSA-shaped IR with block parameters (`nava_lang/native/ir.py`) and its lowering from the checked AST (`lower.py`), an instruction encoder and two-pass assembler written in the project (`x86.py`), x86-64 code generation with checked arithmetic (`x86_64.py`), an ELF writer with two `PT_LOAD` segments (`elf64.py`), a syscall-only runtime, `nava build --backend native` and `nava emit-ir` | **Delivered** (record below) |
+| N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `cgen.py` rewritten as a lowering of the shared IR | specified |
+
+#### Delivery record N14a (2026-10-29)
+
+| Gate item | Probe | Result |
+|---|---|---|
+| **The same program, two code generators, one answer** | `NativeDifferentialTests.test_each_program_prints_the_same_through_both_backends` | six programs, chosen so that every construct the backend claims appears in at least one: `bool` logic and `&&`/`||`, recursion and six-argument calls, labelled `break`/`continue`, signed arithmetic at the `i64` edges, loop-carried values, `bool` parameters, string literals with tabs, newlines, quotes and non-ASCII text. Each is built with `nava build` (C) and `nava build --backend native`, run, and compared on stdout, stderr and exit status. Every one is identical |
+| **A trap is output, not a crash** | `test_each_trap_is_the_same_message_and_status` | seven traps — `+`, `-`, `*` and unary `-` overflow, `/` and `%` by zero, and `INT64_MIN / -1` — print byte-for-byte what the C runtime prints (`i64 overflow in +`, `division by zero`, `i64 overflow in %`, …) and exit with status 1. The `%` case is why the messages are not written from memory: the C runtime says *remainder by zero*, and the first version of the backend said *division by zero*; the differential is what found it |
+| The status is the return value modulo 256 | `test_the_exit_status_is_the_return_value_modulo_256` | `0`, `100`, `300` → 44, `-1` → 255 and `INT64_MIN` → 0, in both backends; `_start` is `call main` then `movzx rdi, al` then `exit` |
+| **No C toolchain in the path** | `NativeCommandTests.test_build_needs_no_c_compiler_on_the_path` | a native build runs with `PATH` pointing at an empty directory and still succeeds, because nothing is spawned: the backend writes the file itself. This is the phase's point stated as a test rather than as a claim |
+| The IR is well-formed on its own | `NativeIRTests.test_every_value_is_used_only_where_its_definition_dominates`, `test_each_jump_passes_one_value_per_block_parameter`, `test_every_block_ends_in_exactly_one_terminator`, `test_the_dump_is_stable` | dominator sets are computed over the CFG and every use must be dominated by its definition or be a parameter of the using block; every `jump`/`branch` edge passes exactly one value per parameter of its target; every block has exactly one terminator, last; the dump is deterministic and line-shaped |
+| A join is a block parameter, not a phi and not a mutation | `test_a_branch_and_a_loop_header_pass_their_values_explicitly`, `test_the_short_circuit_is_a_branch_so_the_right_side_does_not_run` | a `while` header's signature carries the loop's live values; an `if` join carries them too when they were assigned inside; `&&` and `||` lower to a real branch, proven by a program whose right side prints — `say(false) && say(true)` prints `evaluated` once, exactly as the C backend does |
+| **The file is a static executable** | `NativeELFTests.test_the_file_is_a_static_x86_64_executable` | `\x7fELF`, 64-bit, little endian, `ET_EXEC`, `e_machine` 62, `e_phnum` 2, entry `0x4000b0` (the first byte of `.text`), one `PT_LOAD` with flags R\|X and one with R\|W mapped at a page boundary with offset congruent to address, and no `ld-linux` string anywhere: nothing is loaded dynamically |
+| **Repeated builds are byte-identical** | `test_two_builds_of_one_source_are_the_same_bytes` | two builds in two directories are compared as bytes: nothing from the clock, the host or the source path reaches the file. The native backend is deterministic by construction, and this is the test that says so — the second half of N12's determinism gate, *across backends*, is what N14b closes |
+| **What it cannot compile, it refuses by name** | `NativeRefusalTests.test_a_construct_is_refused_by_name` | a floating-point literal, an array, a struct, an enum variant and a `defer` are each `E0901` naming the construct **and** the function (`(in 'main')`) with the hint to use the C backend; a call with more than six arguments is `E0901` too, because the System V stack-argument path is not implemented — refusing is better than passing arguments wrongly |
+| A refusal is a gap in one backend, not a verdict on the program | `test_the_c_backend_compiles_every_program_the_native_one_refuses` | every program in the refusal table is compiled through the C backend and builds cleanly. This is the negative control *"not implemented" must not become "wrong answer"*: the refusal cannot be a hidden way of rejecting valid programs |
+| **An option is honoured or refused, never ignored** | `test_an_unknown_option_is_refused_rather_than_ignored` | `--cc`, `--opt` and `--record` with `--backend native` are `E0903`, the option named, and **no binary is written**. `--cc`/`--opt` are parser-level suppressed defaults, so an option the user actually typed is distinguishable from a default and cannot slip through |
+| The runtime's own code is tested | `NativeRuntimeTests` | decimal conversion at `0`, `±1`, `i64` max, `i64` min, `123456789` and `-9876543210`; a string written byte for byte including an empty one and non-ASCII text; `true`/`false` |
+| The specification moved with the code | `LANGUAGE.md` (`## The native backend`, the code table) | the subset, the refusals, the two commands, the two segments, the runtime's messages and the determinism claim are normative; the code table grows to **173** entries (171 at N13d) with `E0901` and `E0903`; `E0902` was *not* created — the checker requires `fn main()` before a backend runs (`E0303`), so a "the native backend needs a main" code could never be produced, and a code nothing can test is a code that does not exist |
+| The audit now counts what it claims to count | `python3 tools/audit_compiler_needs.py`, `tests/test_plan.py: tree_audit` | **14 297 lines, 23 modules, 498 functions** (12 541 / 17 / 392 at N13d). The jump is not only this increment's code: the audit used `glob("*.py")`, which stopped counting modules that live in a subpackage, and `nava_lang/native/` would have been invisible to it. Both the tool and its guard now walk `rglob`, so "the compiler" means the same tree in the document and in the measurement |
+| The overhead record was re-measured rather than assumed | `python3 eval/overhead.py --encoding cl100k_base --require measured` | 108 832 tokens, unchanged from N13d, because the model-facing guide is unchanged: `--backend native` is a build flag, not a language feature |
+| No skipped tests, and the counts are the ones the tree has | `python3 tests/registry.py`, `python3 -m pytest -q`, `python3 tools/verify_release.py`, `python3 eval/guide.py --verify` | registry `OK: 890 registered tests, 11 tasks with 76 cases, 192 spec fixtures, 173 diagnostic codes`; suite **960 tests OK** (1 544 subtests); release checks OK; the guide digest verifies |
+
+Negative controls: a program that overflows `i64` behaves identically on both
+backends (seven traps, message and status); a program the native backend refuses still
+compiles through C; an option the backend cannot honour is refused and writes no
+binary; and the differential itself caught three real defects while the increment was
+being written — a `while` exit edge that passed no values (the differential printed
+`0` where the C backend printed `21`), a `lea` whose label was recorded without its
+four placeholder bytes (the program segfaulted after its first line), and the audit's
+`glob` that had stopped counting the compiler's own subpackage.
+
+What this increment does **not** claim: that `cgen.py` is a lowering of the shared IR.
+It is not — the IR has one consumer today, and the plan's item *"`cgen.py` becomes one
+lowering of it"* is deferred to N14b. The differential is still a differential between
+two ways of compiling one program, and in one respect it is stricter than the plan
+asked for (two independent lowerings must agree with each other, so a lowering bug on
+either side is visible); in another it is weaker, and the honest statement is that
+nothing yet checks that the C backend can consume the IR.
+
+Also not done in N14a, and why: **the `mmap`-backed arena, `read` and the symbolised
+panic trace** that N14a's task list mentions. Every feature they serve — arrays,
+`String`, `Vec` — is refused by the lowering at this stage, so an arena would be code
+with no client and no test; they land with N14b, where the subset grows. **No `nava
+run --backend native`**: a native binary has to go through the sandbox of N2 before
+`run` may offer it, and `run` therefore still builds through C rather than falling back
+silently. **No speed claim**: there is no register allocator and every value is a stack
+slot, exactly as the plan's risk R2 predicts, and no benchmark number is quoted
+because none was measured. **No change to the support matrix**: the native backend is
+Linux x86-64 only, and macOS and Windows stay *expected, not exercised*.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1500,7 +1554,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 10 631 Python lines and 329 functions (`tools/audit_compiler_needs.py`); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 14 297 Python lines and 498 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

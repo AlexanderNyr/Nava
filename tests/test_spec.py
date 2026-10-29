@@ -120,6 +120,11 @@ CODES_TESTED_ELSEWHERE = {
     "E0813": "tests/test_reproducible.py: test_the_environment_variable_is_validated",
     "E0814": "tests/test_reproducible.py: DifferenceTests",
     "E0815": "tests/test_reproducible.py: test_a_record_that_is_not_a_record_is_refused",
+    # The native backend's diagnostics come from compiling a valid program through a
+    # second code generator, which no single-file fixture can express: the same
+    # fixture compiles cleanly through the C backend.
+    "E0901": "tests/test_native.py: test_a_construct_is_refused_by_name",
+    "E0903": "tests/test_native.py: test_an_unknown_option_is_refused_rather_than_ignored",
     "W0002": "tests/fixtures/modules.json: unused_import",
 }
 

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+N14a: **a second code generator** — Nava to x86-64 ELF, with no C compiler.
+
+- `nava build --backend native` writes a static x86-64 Linux executable itself: no
+  C compiler, no assembler, no linker. The file is `ET_EXEC` with two `PT_LOAD`
+  segments (code read-execute, data read-write), and its runtime is `write` and
+  `exit` — printing an `i64` is a decimal conversion loop in machine code.
+- The subset is named rather than approximated: `i64`, `bool`, string literals,
+  checked `+ - * / %`, comparisons, `!`, `&&`/`||` with short-circuit evaluation,
+  `if`/`while`/`for … in a..b`, `break`/`continue`, labelled jumps, calls (up to six
+  arguments, recursion included) and `print`. Everything else is `E0901`, naming the
+  construct and the function; the same program still compiles through the C backend.
+- `nava emit-ir` prints the IR: blocks with parameters, one value per instruction,
+  `jump`/`branch`/`ret` terminators — a join is a block parameter, not a phi.
+- `--cc`, `--opt` and `--record` with `--backend native` are `E0903`: a record with
+  no toolchain in it would be a provenance claim the build never made.
+- Traps print the same messages as the C runtime (`i64 overflow in +`, `division by
+  zero`, `remainder by zero`, …) and exit with status 1, and the differential test
+  compares stdout, stderr and status of the two backends over a corpus of programs.
+- Two builds of one source produce the same bytes.
+
 N13d: **reproducible builds** — records, and proof that two builds are one build.
 
 - `nava build --record PATH` writes a build record: the digest of every `.nv` file

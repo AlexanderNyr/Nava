@@ -1444,6 +1444,79 @@ The compiler's own output is part of the claim: the generated C for one project 
 two different directories is byte-identical, which `nava emit-c` produces and the
 suite checks.
 
+## The native backend: `--backend native`
+
+The compiler has two code generators. The default one emits portable C11 and calls a C
+compiler; `nava build --backend native` writes a static x86-64 Linux executable itself
+and needs no C toolchain, no assembler and no linker:
+
+```
+nava build prog.nv -o prog --backend native
+nava emit-ir prog.nv
+```
+
+`emit-ir` writes the intermediate representation both backends of the future share:
+
+```
+fn @fact(0: i64) -> i64:
+  ^entry0:
+    %1 = const i64 1
+    %2 = cmp le %0, %1
+    branch %2, ^if_then1(), ^if_else2()
+  ^if_then1:
+    ret %1
+  ^if_else2:
+    ...
+```
+
+A function is a list of blocks; a block has a label, the **values it receives** as
+parameters, and instructions; every instruction defines exactly one value (`%0`, `%1`,
+…); every block ends in `jump`, `branch` or `ret`. A join passes its values as block
+parameters rather than with a phi instruction, which is why a loop header shows the
+loop's carried values in its signature:
+
+```
+^while_head1(9: i64):
+    %12 = cmp lt %9, %11
+    branch %12, ^while_body3(), ^while_exit2(%9)
+```
+
+The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `bool`,
+string literals, `+ - * / %` with the checks below, `== != < <= > >=`, `!`, `&&`, `||`
+with short-circuit evaluation, `if`/`else`, `while`, `for … in a..b`, `break`,
+`continue`, labelled jumps, calls (including recursion, up to six arguments) and
+`print` of an `i64`, a `bool` or a `str`. Everything else — `f64`, arrays, slices,
+`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`, calls
+into modules and every builtin — is refused with `E0901`, **naming the construct and
+the function**:
+
+```
+prog.nv:2:18: error[E0901]: the native backend does not implement a floating-point literal (in 'main')
+  hint: build with the C backend (the default): `nava build` without --backend native
+```
+
+A refusal is a gap in one backend, not a judgement about the program: the same file
+compiles through the C backend, and the suite asserts exactly that for every construct
+the table names. What the backend cannot compile it never compiles *approximately*.
+
+The options that describe a C build do not apply, and none of them is ignored:
+`--cc`, `--opt` and `--record` with `--backend native` are `E0903`, because a record
+that named no toolchain — or a build that reported an optimization level it never ran
+— would be a claim the build did not make. `nava run` still builds through C: running
+a native binary under the sandbox is the next step of the phase, not a flag that
+silently falls back.
+
+The executable is a static `ET_EXEC` file with two `PT_LOAD` segments — the headers
+and code, readable and executable; the data, readable and writable — mapped at fixed
+addresses, so there is no dynamic loader and no relocation at start-up. The runtime is
+`write` and `exit` and nothing else: printing an `i64` is a decimal conversion loop in
+machine code. Checked arithmetic traps through the same messages the C runtime prints,
+including `%`'s own `remainder by zero`, and a trap exits with status 1. The status of
+`main` is its return value modulo 256, as it is for every other build.
+
+Two builds of one source produce the same bytes: nothing in the file comes from the
+clock, the host or the path of the source.
+
 ## The clock
 
 Three builtins read the machine's clocks, and there is no way to set one:
@@ -2847,6 +2920,13 @@ never changes meaning; a new condition gets a new code.
 | `E0707` | error | unusable build entry | `tests/test_manifest.py: test_the_entry_may_not_leave_the_project` |
 | `E0708` | error | a package shadows a standard-library module | `tests/test_manifest.py: test_a_package_may_not_take_a_standard_module_name` |
 | `E0709` | error | invalid package name | `tests/test_manifest.py: test_a_name_is_a_lower_case_identifier` |
+
+**The native backend**
+
+| Code | Severity | Meaning | Triggered by |
+|---|---|---|---|
+| `E0901` | error | the native backend does not implement this construct | `tests/test_native.py: test_a_construct_is_refused_by_name` |
+| `E0903` | error | the native backend does not implement this option | `tests/test_native.py: test_an_unknown_option_is_refused_rather_than_ignored` |
 
 **Sandbox and isolation**
 

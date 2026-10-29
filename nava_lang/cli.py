@@ -50,16 +50,19 @@ class Compilation:
     sources: dict[str, str] = field(default_factory=dict)
 
 
-def compile_source(source: str, path: Path | str | None = None,
-                   root: Path | str | None = None,
-                   stdlib_root: Path | str | None = None,
-                   capabilities: dict | None = None) -> Compilation:
-    """Parse, check and emit C. Raises NavaError with a stable code.
+def load_program(source: str, path: Path | str | None = None,
+                 root: Path | str | None = None,
+                 stdlib_root: Path | str | None = None):
+    """Parse, resolve imports and check; answer the program both backends consume.
 
     Without `path` the source is a single self-contained file: an `import` has
     no directory to resolve against and is reported as an unresolved module.
     With `path` the entry file is the one at that location, so its directory is
     the project root and its imports are loaded from there.
+
+    This is the front end on its own, without `cgen`: the native backend reads the
+    program, and generating C for it just to throw it away would be a way to hide
+    which backend actually compiled the program.
     """
     program = parse(source, path=str(path) if path is not None else None)
     if program.imports:
@@ -78,6 +81,15 @@ def compile_source(source: str, path: Path | str | None = None,
                                stdlib_root=Path(stdlib_root) if stdlib_root else None,
                                entry_program=program)
     check(program)
+    return program
+
+
+def compile_source(source: str, path: Path | str | None = None,
+                   root: Path | str | None = None,
+                   stdlib_root: Path | str | None = None,
+                   capabilities: dict | None = None) -> Compilation:
+    """Parse, check and emit C. Raises NavaError with a stable code."""
+    program = load_program(source, path=path, root=root, stdlib_root=stdlib_root)
     packages = sorted(set(getattr(program, "module_packages", {}).values()))
     sources = dict(getattr(program, "sources", {}) or {})
     if not sources and path is not None:
@@ -246,12 +258,33 @@ def make_parser() -> argparse.ArgumentParser:
                         help="source file; omit it with --project")
     c_cmd.add_argument("-o", "--output", help="output path (default: stdout)")
     add_project_options(c_cmd)
+    ir_cmd = sub.add_parser(
+        "emit-ir",
+        help="emit the native backend's IR (SSA, one block per control-flow node)",
+        description="Write the intermediate representation the native backend "
+                    "consumes. A construct the native backend does not implement "
+                    "is refused with E0901 naming it, because an IR that leaves "
+                    "the construct out would be a wrong answer, not a partial one.",
+    )
+    ir_cmd.add_argument("source", nargs="?",
+                        help="source file; omit it with --project")
+    ir_cmd.add_argument("-o", "--output", help="output path (default: stdout)")
+    add_project_options(ir_cmd)
     build = sub.add_parser("build", help="compile a native executable")
     build.add_argument("source", nargs="?",
                         help="source file; omit it with --project")
     build.add_argument("-o", "--output", required=True, help="executable path")
-    build.add_argument("--cc", help="C compiler command (default: $CC or cc)")
-    build.add_argument("--opt", choices=("0", "2", "3"), default="2", help="optimization level (default: 2)")
+    build.add_argument("--backend", choices=("c", "native"), default="c",
+                       help="code generator: `c` emits C and calls a C compiler "
+                            "(default), `native` writes an x86-64 ELF executable "
+                            "directly and needs no C toolchain")
+    # `--cc` and `--opt` are suppressed defaults, not `None`: `build --backend
+    # native` refuses an option the user actually gave, and a default that cannot be
+    # told apart from an explicit value would make that refusal unobtainable.
+    build.add_argument("--cc", default=argparse.SUPPRESS,
+                       help="C compiler command (default: $CC or cc)")
+    build.add_argument("--opt", choices=("0", "2", "3"), default=argparse.SUPPRESS,
+                       help="optimization level (default: 2)")
     build.add_argument("--record", type=Path, metavar="PATH",
                        help="write a build record (JSON) describing what went into "
                             "this binary: source digests, the generated C, the "
@@ -386,6 +419,49 @@ def report_warnings(warnings: list[Diagnostic], path: Path, machine: bool) -> No
         print(format_human(str(path), warning), file=sys.stderr)
 
 
+def refuse_native_options(args: argparse.Namespace) -> None:
+    """Refuse the build options the native backend cannot honour.
+
+    None of them is ignored. `--cc` and `--opt` describe a C build that does not
+    happen, and `--record` describes the C digest and the toolchain — a record
+    written without them would claim a provenance the build never had. Silently
+    accepting a flag is the failure mode this whole file avoids elsewhere: an
+    option that changes nothing looks exactly like an option that worked.
+    """
+    for option, given in (("--cc", getattr(args, "cc", None)),
+                          ("--opt", getattr(args, "opt", None)),
+                          ("--record", getattr(args, "record", None))):
+        if given is not None:
+            raise make(
+                "E0903",
+                f"the native backend does not implement {option}",
+                hint="drop the option, or build with the C backend (the default): "
+                     "`nava build` without --backend native",
+            )
+
+
+def build_native(program, output: Path, source: Path, warnings, machine: bool) -> int:
+    """Write an executable from the native backend and say what was written."""
+    from . import native
+
+    if output == source.resolve():
+        raise make("E0504", "output must be different from the source file")
+    if not output.parent.is_dir():
+        raise make("E0505", f"output directory does not exist: {output.parent}")
+    image = native.image(program)
+    output.write_bytes(image)
+    # The kernel needs the executable bit to run the file; a backend that replaced
+    # the C compiler has to do what the linker would have done about it.
+    output.chmod(0o755)
+    if machine:
+        print(report_json(str(source), "ok", warnings,
+                          {"output": str(output), "backend": "native",
+                           "binary_bytes": len(image), "network": "offline"}))
+    else:
+        print(f"Built: {output} (native backend, {len(image)} bytes)")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = make_parser().parse_args(argv)
     machine = args.format == "json"
@@ -511,6 +587,31 @@ def main(argv: list[str] | None = None) -> int:
             capabilities["read"] = capability_roots(args.allow_read, "--allow-read", workdir)
         if getattr(args, "allow_write", None):
             capabilities["write"] = capability_roots(args.allow_write, "--allow-write", workdir)
+        if args.command == "build" and getattr(args, "backend", "c") == "native":
+            refuse_native_options(args)
+            program = load_program(source, path=path, root=args.root)
+            return build_native(program, Path(args.output).resolve(), path,
+                                list(program.warnings), machine)
+        if args.command == "emit-ir":
+            from . import native
+
+            program = load_program(source, path=path, root=args.root)
+            text = native.ir.dump(native.lower.lower(program))
+            if not args.output:
+                sys.stdout.write(text)
+                return 0
+            output = Path(args.output)
+            if output.resolve() == path.resolve():
+                raise make("E0504", "output must be different from the source file")
+            if not output.parent.is_dir():
+                raise make("E0505", f"output directory does not exist: {output.parent}")
+            output.write_text(text, encoding="utf-8")
+            if machine:
+                print(report_json(str(path), "ok", list(program.warnings),
+                                  {"output": str(output), "backend": "native"}))
+            else:
+                print(f"Wrote: {output}")
+            return 0
         try:
             compilation = compile_source(source, path=path, root=args.root,
                                          capabilities=capabilities)
@@ -552,13 +653,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise make("E0504", "output must be different from the source file")
             if not output.parent.is_dir():
                 raise make("E0505", f"output directory does not exist: {output.parent}")
-            if not compile_c(code, output, args.cc, args.opt):
+            if not compile_c(code, output, getattr(args, "cc", None),
+                             getattr(args, "opt", "2")):
                 return 2
             build = None
             if getattr(args, "record", None):
                 from . import reproducible
                 build = reproducible.record(compilation.sources, code, output,
-                                            compilation.packages, args.cc)
+                                            compilation.packages,
+                                            getattr(args, "cc", None))
                 args.record.parent.mkdir(parents=True, exist_ok=True)
                 args.record.write_text(reproducible.render(build), encoding="utf-8")
             extra = {"output": str(output), "packages": compilation.packages,
