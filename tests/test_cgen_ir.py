@@ -43,12 +43,12 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "runtime_overflow", "structs_basic", "structs_copy", "strings",
                  "numerical", "fmt_table", "read_i64", "runtime_bad_input",
                  "enums_basic", "enums_state", "defer_labels", "results_basic",
-                 "results_chain", "slices_basic", "struct_arrays")
+                 "results_chain", "slices_basic", "struct_arrays", "floats")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
-#: refusal, and named separately so that neither becomes the other by accident. An
-#: `f64` is one: float arithmetic is `nv_add`'s for the `i64` and `print` of an `f64`
-#: is the runtime's `snprintf`, and neither helper exists in this printer yet.
-LOWERED_NOT_PRINTED = ("floats",)
+#: refusal, and named separately so that neither becomes the other by accident. The
+#: list is empty: every program that lowers is printed from the IR as well, and the
+#: list stays here so that the next gap is named rather than discovered.
+LOWERED_NOT_PRINTED = ()
 #: Programs whose C must still come from the AST walk, because the lowering refuses
 #: them by name (`E0901`). One per family: a `Set` iteration, a map, and a variable
 #: that holds a function.

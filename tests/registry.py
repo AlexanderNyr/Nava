@@ -1374,6 +1374,20 @@ REGISTERED_TESTS = {
         "test_run_refuses_the_c_build_options_with_the_native_backend",
         "test_the_json_report_names_the_backend",
     },
+    #: N14j: `print f64`. The shortest decimal that reads back as the same double is
+    #: found by integer bisection on a base-10^9 bignum — no `strtod`, no `snprintf` —
+    #: and the eight exponents, the padded sign, `-0.0` and the three names are the
+    #: ones the C backend prints.
+    "NativeF64Tests": {
+        "test_a_candidate_exactly_on_the_gap_reads_back",
+        "test_every_power_of_two_and_its_neighbour_read_back",
+        "test_negative_zero_and_the_three_names_are_not_a_conversion",
+        "test_the_conversion_costs_no_c_library_call",
+        "test_the_exponent_is_padded_to_two_digits_and_signed",
+        "test_the_corpus_tool_agrees_on_a_sample",
+        "test_the_floats_fixture_agrees_with_the_c_backend",
+        "test_the_shortest_form_is_not_the_exact_expansion",
+    },
     "NativeRuntimeTests": {
         "test_a_bool_prints_as_true_or_false",
         "test_a_string_is_written_byte_for_byte_and_then_a_newline",
@@ -1718,6 +1732,7 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeTryTests"),
                                (test_native, "NativeSliceTests"),
                                (test_native, "NativeStructArrayTests"),
+                               (test_native, "NativeF64Tests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

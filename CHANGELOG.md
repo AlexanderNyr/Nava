@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+N14j: **`print f64` through one IR** — the shortest decimal that reads back, converted
+with integers only.
+
+- Printing an `f64` is no longer refused: `nv_format_f64` on the native side answers the
+  same question the C runtime asks `snprintf`/`strtod`, and answers it with a base-10^9
+  bignum, one digit at a time. No `strtod`, no `snprintf`, no floating point in the
+  conversion at all — a test reads the linked binary's symbols and asserts both are
+  absent while `nv_bn_mul_small` is present.
+- The rule being reproduced is `nv_format_f64`'s, not "shortest round-tripping decimal",
+  because those differ: for `2**-1017` the nearest sixteen-digit text is the exact
+  midpoint and reads back as the neighbour, so the C backend prints seventeen digits and
+  so does this backend. `tools/f64_corpus.py` is the corpus that says so — 12 330 values
+  (every power of two with both neighbours, the curated edges, random bit patterns and
+  random subnormals) print identically through both backends.
+- What is decided per digit is *where the digit run stops*: the nearest candidate at the
+  current count is the truncation or the truncation plus one, the tie going to an even
+  last digit, and it is printed only if it lies inside the value's rounding interval — a
+  midpoint belongs to the even significand, which is one bit taken before the hidden bit
+  is added. Seventeen digits are always enough, so the loop has a floor as well as a stop.
+- `floats` left the AST walk: **29 of 32** fixtures build and run identically through both
+  backends, and `LOWERED_NOT_PRINTED` in `tests/test_cgen_ir.py` is empty — every program
+  the IR expresses is now printed from the IR as well. Printing an `f64` moved into the C
+  backend's `PRINT_HELPERS` for the same reason: the body comes from the IR.
+- Still refused by name: `Vec`, `String`, `HashMap`, `HashSet`, a function used as a
+  value, and the builtins the runtime does not have (`chars_len`, `str_from_f64`,
+  `read_f64`, the filesystem and the argument functions).
+
 N14i: **slices and arrays of structs through one IR** — a view that owns nothing, and an
 element that is one word.
 

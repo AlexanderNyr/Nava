@@ -901,6 +901,20 @@ class Generator:
             self.code.syscall()
             self.newline_to(1)
             return
+        if instruction.typ == "f64":
+            # The text is the shortest decimal that reads back as this value, which is
+            # what the C runtime computes: see `nv_format_f64`.
+            self.load(instruction.operand, RDI)
+            code = self.code
+            code.lea_rip(RSI, self.f64_buffer())
+            code.call("nv_format_f64")
+            code.mov_reg(RSI, RAX)
+            code.mov_reg(RDX, RDX)
+            code.mov_imm(RDI, 1)
+            code.mov_imm(RAX, 1)
+            code.syscall()
+            self.newline_to(1)
+            return
         raise make(
             "E0901",
             f"the native backend does not implement printing an {instruction.typ}",
@@ -943,9 +957,11 @@ class Generator:
                              ("nv_str_from_i64", self.str_from_i64_helper),
                              ("nv_to_i64", self.to_i64_helper),
                              ("nv_to_f64", self.to_f64_helper),
+                             ("nv_format_f64", self.format_f64_helper),
                              ("nv_getc", self.getc_helper),
                              ("nv_read_i64", self.read_i64_helper)):
             self.runtime_function(symbol, body)
+        self.bn_runtime()
         for typ in self.copy_types():
             # One copier per struct type, because a copy is as deep as the type is
             # nested and the depth is known here rather than at run time.
@@ -1127,6 +1143,16 @@ class Generator:
         code.mov_imm(RAX, 1)
         code.syscall()
         code.ret()
+
+    def f64_buffer(self) -> str:
+        """A 512-byte scratch buffer in the writable segment, answered by its end.
+
+        A number's decimal text is at most 327 characters — sign, `0.`, 324 zeros and a
+        digit — and the conversion writes it backwards from the end, as `nv_format`
+        writes the digits of an `i64`.
+        """
+        self.raw("nv_f64_buffer", bytes(512), DATA)
+        return self.raw("nv_f64_buffer_end", b"", DATA)
 
     def number_buffer(self, index: int) -> str:
         """A 32-byte scratch buffer in the writable segment; answers the end label.
@@ -1686,6 +1712,1092 @@ class Generator:
         code.store(RBP, -40, R10)
         code.jmp(step)
         code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    # -- the decimal text of an `f64` ----------------------------------------
+    #: A decimal bignum in this runtime: a length word and forty-eight base-10^9 limbs,
+    #: little-endian. The widest intermediate of the conversion below is ten to the
+    #: 325th — the whole range of the type — which is thirty-seven limbs, so the
+    #: capacity is that range with room to spare. Base 10^9 keeps a limb product under
+    #: 10^18, inside an `i64`, so the divider does the arithmetic exactly.
+    BN_CAP = 48
+    BN_BASE = 1_000_000_000
+    BN_STRIDE = 8 + 8 * BN_CAP              # a length word, then the limbs
+    #: The frame of the conversion: five bignums, then the text, then the digits.
+    # A bignum's limbs grow upward from its base, so each one owns
+    # [base, base + BN_STRIDE); the offsets leave the slots above -144 alone.
+    BN_R, BN_S, BN_MP, BN_MM, BN_T = -536, -928, -1320, -1712, -2104
+    F64_TEXT, F64_DIGITS = -2664, -3264
+    F64_FRAME = 3264
+    S_END, S_SIGN, S_MANT, S_MEXP, S_SCALE = -8, -16, -24, -32, -40
+    S_LEN, S_FIRST, S_E10, S_DIGIT, S_LOW, S_HIGH = -48, -56, -64, -72, -80, -88
+    S_MAG, S_BITLEN, S_TEMP, S_TEMP2, S_CURSOR = -96, -104, -112, -120, -128
+    S_EVEN = -136
+
+    def bn_runtime(self) -> None:
+        """The bignum routines the decimal conversion needs, and nothing else.
+
+        A `double` is up to 1074 binary exponents away from a decimal digit, so the exact
+        value of the smallest subnormal has 751 significant decimal digits: this
+        conversion cannot be done in machine words, and it does not guess. These are the
+        operations Burger and Dybvig's algorithm asks for — compare, subtract, multiply
+        by a small number, scale by a power of two or ten — with base 10^9 limbs so that
+        a decimal digit costs one division by a constant.
+        """
+        for symbol, body in (("nv_bn_set_u64", self.bn_set_u64_helper),
+                             ("nv_bn_copy", self.bn_copy_helper),
+                             ("nv_bn_cmp", self.bn_cmp_helper),
+                             ("nv_bn_sub", self.bn_sub_helper),
+                             ("nv_bn_mul_small", self.bn_mul_small_helper),
+                             ("nv_bn_mul_pow2", self.bn_mul_pow2_helper),
+                             ("nv_bn_mul_pow10", self.bn_mul_pow10_helper)):
+            self.runtime_function(symbol, body)
+
+    def bn_set_u64_helper(self) -> None:
+        """`nv_bn_set_u64(rdi = bn, rsi = value)`: the bignum holding one machine word."""
+        code = self.code
+        clear, cleared = self.local("bn0_clear"), self.local("bn0_cleared")
+        split, splitted = self.local("bn0_split"), self.local("bn0_splitted")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.xor_reg(RAX, RAX)
+        code.xor_reg(R10, R10)
+        code.label(clear)
+        code.mov_imm(R11, self.BN_CAP + 1)
+        code.cmp_reg(R10, R11)
+        code.jcc("ae", cleared)
+        code.mov_reg(R11, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, RDI)
+        code.store(R11, 0, RAX)                 # what the value does not reach stays 0
+        code.inc(R10)
+        code.jmp(clear)
+        code.label(cleared)
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R8, self.BN_BASE)
+        code.xor_reg(R10, R10)
+        code.label(split)
+        code.test_reg(RAX)
+        code.jcc("e", splitted)
+        code.xor_reg(RDX, RDX)
+        code.div(R8)                            # rax = the quotient, rdx = the limb
+        code.load(RDI, RBP, -8)
+        code.mov_reg(R11, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, RDI)
+        code.store(R11, 8, RDX)                 # the limbs follow the length word
+        code.inc(R10)
+        code.jmp(split)
+        code.label(splitted)
+        code.load(RDI, RBP, -8)
+        code.store(RDI, 0, R10)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_copy_helper(self) -> None:
+        """`nv_bn_copy(rdi = destination, rsi = source)`: every word, length included."""
+        code = self.code
+        loop, done = self.local("bnc_loop"), self.local("bnc_done")
+        code.mov_reg(R8, RDI)
+        code.mov_reg(R9, RSI)
+        code.xor_reg(R10, R10)
+        code.mov_imm(R11, self.BN_CAP + 1)
+        code.label(loop)
+        code.cmp_reg(R10, R11)
+        code.jcc("ae", done)
+        code.load(RDX, R9, 0)
+        code.store(R8, 0, RDX)
+        code.mov_imm(RCX, 8)
+        code.add_reg(R8, RCX)
+        code.add_reg(R9, RCX)
+        code.inc(R10)
+        code.jmp(loop)
+        code.label(done)
+        code.ret()
+
+    def bn_cmp_helper(self) -> None:
+        """`nv_bn_cmp(rdi = a, rsi = b)` -> `-1`, `0` or `1`.
+
+        The length is part of the value: every routine here keeps the limbs above it
+        zero, so the length decides first and the limbs decide after it.
+        """
+        code = self.code
+        loop, equal = self.local("bncmp_loop"), self.local("bncmp_equal")
+        less, greater = self.local("bncmp_less"), self.local("bncmp_greater")
+        code.load(R8, RDI, 0)
+        code.load(R9, RSI, 0)
+        code.cmp_reg(R8, R9)
+        code.jcc("b", less)
+        code.jcc("a", greater)
+        code.mov_reg(R10, R8)
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", equal)
+        code.dec(R10)
+        code.mov_reg(R11, R10)
+        code.mov_imm(RCX, 8)
+        code.imul_reg(R11, RCX)
+        code.mov_reg(RDX, RDI)
+        code.add_reg(RDX, R11)
+        code.load(RDX, RDX, 8)
+        code.mov_reg(RAX, RSI)
+        code.add_reg(RAX, R11)
+        code.load(RAX, RAX, 8)
+        code.cmp_reg(RDX, RAX)
+        code.jcc("b", less)
+        code.jcc("a", greater)
+        code.jmp(loop)
+        code.label(equal)
+        code.xor_reg(RAX, RAX)
+        code.ret()
+        code.label(less)
+        code.mov_imm(RAX, -1)
+        code.ret()
+        code.label(greater)
+        code.mov_imm(RAX, 1)
+        code.ret()
+
+    def bn_sub_helper(self) -> None:
+        """`nv_bn_sub(rdi = a, rsi = b)`: `a -= b`, for `a >= b`, its length trimmed."""
+        code = self.code
+        loop, absent, borrow = (self.local("bns_loop"), self.local("bns_absent"),
+                                self.local("bns_borrow"))
+        borrowed, strip, strip_loop, stripped = (
+            self.local("bns_borrowed"), self.local("bns_strip"),
+            self.local("bns_strip_loop"), self.local("bns_stripped"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)                # a
+        code.store(RBP, -16, RSI)               # b
+        code.load(R8, RDI, 0)
+        code.store(RBP, -24, R8)                # the length of a
+        code.load(R9, RSI, 0)
+        code.store(RBP, -32, R9)                # the length of b
+        code.xor_reg(R10, R10)                  # i
+        code.xor_reg(R11, R11)                  # the borrow
+        code.label(loop)
+        code.load(R8, RBP, -24)
+        code.cmp_reg(R10, R8)
+        code.jcc("ae", strip)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RDI, RCX)
+        code.load(RAX, RDI, 8)                  # a[i]
+        code.load(RSI, RBP, -32)
+        code.cmp_reg(R10, RSI)
+        code.jcc("ae", absent)
+        code.load(RSI, RBP, -16)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RSI, RCX)
+        code.load(RCX, RSI, 8)                  # b[i]
+        code.jmp(borrow)
+        code.label(absent)
+        code.xor_reg(RCX, RCX)                  # a limb b does not have is zero
+        code.label(borrow)
+        code.add_reg(RCX, R11)
+        code.xor_reg(R11, R11)
+        code.cmp_reg(RAX, RCX)
+        code.jcc("ae", borrowed)
+        code.mov_imm(R8, self.BN_BASE)
+        code.add_reg(RAX, R8)                   # borrow one limb
+        code.mov_imm(R11, 1)
+        code.label(borrowed)
+        code.sub_reg(RAX, RCX)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RDI, RCX)
+        code.store(RDI, 8, RAX)
+        code.inc(R10)
+        code.jmp(loop)
+        code.label(strip)
+        code.load(R8, RBP, -24)
+        code.load(RDI, RBP, -8)
+        code.label(strip_loop)
+        code.test_reg(R8)
+        code.jcc("e", stripped)
+        code.mov_reg(RCX, R8)
+        code.dec(RCX)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.mov_reg(R9, RDI)
+        code.add_reg(R9, RCX)
+        code.load(R9, R9, 8)
+        code.test_reg(R9)
+        code.jcc("ne", stripped)
+        code.dec(R8)
+        code.jmp(strip_loop)
+        code.label(stripped)
+        code.store(RDI, 0, R8)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_mul_small_helper(self) -> None:
+        """`nv_bn_mul_small(rdi = a, rsi = k)`: `a *= k`, for `k` below the base."""
+        code = self.code
+        loop, carry, done = (self.local("bnm_loop"), self.local("bnm_carry"),
+                             self.local("bnm_done"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R8, RDI, 0)
+        code.store(RBP, -24, R8)                # the length
+        code.xor_reg(R10, R10)                  # i
+        code.xor_reg(R11, R11)                  # the carry
+        code.label(loop)
+        code.load(R8, RBP, -24)
+        code.cmp_reg(R10, R8)
+        code.jcc("ae", carry)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RDI, RCX)
+        code.load(RAX, RDI, 8)
+        code.imul_reg(RAX, RSI)                 # below 10^18, so inside an i64
+        code.add_reg(RAX, R11)
+        code.mov_imm(R8, self.BN_BASE)
+        code.xor_reg(RDX, RDX)
+        code.div(R8)
+        code.mov_reg(R11, RAX)                  # the carry
+        code.store(RDI, 8, RDX)                 # the limb
+        code.inc(R10)
+        code.jmp(loop)
+        code.label(carry)
+        code.test_reg(R11)
+        code.jcc("e", done)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RDI, RCX)
+        code.mov_reg(RAX, R11)
+        code.mov_imm(R8, self.BN_BASE)
+        code.xor_reg(RDX, RDX)
+        code.div(R8)
+        code.mov_reg(R11, RAX)
+        code.store(RDI, 8, RDX)
+        code.inc(R10)
+        code.jmp(carry)
+        code.label(done)
+        code.load(RDI, RBP, -8)
+        code.store(RDI, 0, R10)                 # the length grew with the carries
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_mul_power_helper(self, hint: str, factor: int) -> None:
+        """`a *= factor**n`, one step at a time: the scaling the conversion asks for."""
+        code = self.code
+        loop, done = self.local(f"{hint}_loop"), self.local(f"{hint}_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.label(loop)
+        code.load(RAX, RBP, -16)
+        code.test_reg(RAX)
+        code.jcc("e", done)
+        code.load(RDI, RBP, -8)
+        code.mov_imm(RSI, factor)
+        code.call("nv_bn_mul_small")
+        code.load(RAX, RBP, -16)
+        code.dec(RAX)
+        code.store(RBP, -16, RAX)
+        code.jmp(loop)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_mul_pow2_helper(self) -> None:
+        """`nv_bn_mul_pow2(rdi = a, rsi = n)`: `a *= 2**n`."""
+        self.bn_mul_power_helper("bnp2", 2)
+
+    def bn_mul_pow10_helper(self) -> None:
+        """`nv_bn_mul_pow10(rdi = a, rsi = n)`: `a *= 10**n`."""
+        self.bn_mul_power_helper("bnp10", 10)
+
+
+    def format_f64_helper(self) -> None:
+        """`nv_format_f64(rdi = bits, rsi = end of a buffer)` -> `(rax = start, rdx = len)`.
+
+        The shortest decimal that reads back as this `f64`, which is what the C runtime's
+        `nv_format_f64` produces: fixed notation when the decimal exponent is in
+        `[-4, 15]`, exponent notation outside it, the mantissa's trailing zeros dropped,
+        and `.0` added so a float never looks like an integer. `nan`, `inf`, `-inf`,
+        `0.0` and `-0.0` are the five names the language gives them.
+
+        The digits come from Burger and Dybvig's algorithm: the value, its upper gap and
+        its lower gap are exact integers once scaled by a power of two, a digit is one
+        subtraction loop, and the loop stops at the first count whose nearest candidate
+        lies inside the gap. The gap ends halfway to each neighbour, and a value that
+        sits exactly on such a midpoint reads back only when it is the even of the two —
+        one bit of the significand decides that, so this conversion and `strtod` agree
+        digit for digit rather than merely closely.
+
+        "Nearest candidate at the first count that reads back" is the rule the C runtime's
+        `%.*e`/`%.*f` loop follows, and it is *not* the same question as "the shortest
+        decimal that reads back": `2**-1017` has no fifteen-digit text that reads back and
+        its nearest sixteen-digit text is an exact midpoint that rounds to the neighbour
+        (an odd significand), so both backends print seventeen digits there. A loop that
+        stops at the first count *containing* a round-tripping text answers `7.12023e-307`
+        where this one answers `7.120236347223044e-307`, which is why the stop condition
+        is stated in terms of the nearest candidate. Seventeen digits are always enough,
+        so the loop has that floor as well as the gap as its end.
+        """
+        code = self.code
+        (not_finite, infinite_negative, not_number, zero_text, zero_negative,
+         special_done, finish) = (
+            self.local("f64_not_finite"), self.local("f64_inf_neg"), self.local("f64_nan"),
+            self.local("f64_zero"), self.local("f64_zero_neg"),
+            self.local("f64_special"), self.local("f64_finish"))
+        (subnormal, sub_shift, sub_done, ready) = (
+            self.local("f64_subnormal"), self.local("f64_sub_shift"),
+            self.local("f64_sub_done"), self.local("f64_ready"))
+        (negative_bitlen, scaled_bitlen) = (self.local("f64_bitlen_neg"),
+                                            self.local("f64_bitlen_done"))
+        (pad_ready, pad_done, mm_shift) = (
+            self.local("f64_pad_ready"), self.local("f64_pad_done"),
+            self.local("f64_mm_shift"))
+        (fix_high, fix_low, fix_done) = (
+            self.local("f64_fix_high"), self.local("f64_fix_low"),
+            self.local("f64_fix_done"))
+        (digit_loop, subtract, sub_end) = (
+            self.local("f64_digit"), self.local("f64_subtract"),
+            self.local("f64_sub_end"))
+        (round_up_flag, round_down_flag) = (self.local("f64_round_flag_up"),
+                                          self.local("f64_round_flag_down"))
+        (nearest_up, nearest_down, gap_test, inside, outside, force_nearest) = (
+            self.local("f64_nearest_up"), self.local("f64_nearest_down"),
+            self.local("f64_gap_test"), self.local("f64_inside"),
+            self.local("f64_outside"), self.local("f64_force"))
+        (round_up, round_plain, round_carry, round_nine, round_first,
+         shift_loop, shift_done, round_done) = (
+            self.local("f64_round"), self.local("f64_round_plain"),
+            self.local("f64_round_carry"), self.local("f64_round_nine"),
+            self.local("f64_round_first"), self.local("f64_shift"),
+            self.local("f64_shift_done"), self.local("f64_round_done"))
+        (first_loop, first_done, choose, fixed_positive, fixed_short, fixed_negative,
+         exponential, mantissa_done, exponent_negative) = (
+            self.local("f64_first_loop"), self.local("f64_first_done"),
+            self.local("f64_choose"), self.local("f64_fixed_pos"),
+            self.local("f64_fixed_short"), self.local("f64_fixed_neg"),
+            self.local("f64_exp"), self.local("f64_mantissa_done"),
+            self.local("f64_exp_neg"))
+        (copy_loop, copy_done) = (self.local("f64_copy"), self.local("f64_copy_done"))
+        (scale_negative, scale_done) = (self.local("f64_scale_neg"),
+                                        self.local("f64_scale_done"))
+        exponent_positive = self.local("f64_exp_pos")
+        exponent_digits = self.local("f64_exp_digits")
+        exponent_last_two = self.local("f64_exp_last")
+        gaps_done = self.local("f64_gaps_done")
+        def at(register: int, offset: int) -> None:
+            """`register` = the address of the frame slot or buffer at `offset`."""
+            code.lea(register, RBP, offset)
+
+        def slot(name: int, register: int) -> None:
+            code.load(register, RBP, name)
+
+        def put(name: int, register: int) -> None:
+            code.store(RBP, name, register)
+
+        def put_char(char: str) -> None:
+            """Append one constant character to the text the cursor points into."""
+            slot(self.S_CURSOR, R9)
+            code.mov_imm(RAX, ord(char))
+            code.store_byte(R9, 0, RAX)
+            code.inc(R9)
+            put(self.S_CURSOR, R9)
+
+        def put_byte(register: int) -> None:
+            """Append the character in `register` to the text."""
+            slot(self.S_CURSOR, R9)
+            code.store_byte(R9, 0, register)
+            code.inc(R9)
+            put(self.S_CURSOR, R9)
+
+        def put_zeros() -> None:
+            """Append `self.S_TEMP2` zeroes; the count is spent."""
+            loop, done = self.local("f64_zeros"), self.local("f64_zeros_done")
+            zeros_loop, zeros_done = loop, done
+            code.label(zeros_loop)
+            slot(self.S_TEMP2, R11)
+            code.test_reg(R11)
+            code.jcc("e", zeros_done)
+            put_char("0")
+            slot(self.S_TEMP2, R11)
+            code.dec(R11)
+            put(self.S_TEMP2, R11)
+            code.jmp(zeros_loop)
+            code.label(zeros_done)
+
+        def put_digits() -> None:
+            """Append `self.S_TEMP2` digits from the index `self.S_TEMP`; both are spent."""
+            loop, done = self.local("f64_run"), self.local("f64_run_done")
+            run_loop, run_done = loop, done
+            code.label(run_loop)
+            slot(self.S_TEMP2, R11)
+            code.test_reg(R11)
+            code.jcc("e", run_done)
+            slot(self.S_TEMP, R10)
+            at(R11, self.F64_DIGITS)
+            code.add_reg(R11, R10)
+            code.load_byte(RAX, R11, 0)
+            put_byte(RAX)
+            slot(self.S_TEMP, R10)
+            code.inc(R10)
+            put(self.S_TEMP, R10)
+            slot(self.S_TEMP2, R11)
+            code.dec(R11)
+            put(self.S_TEMP2, R11)
+            code.jmp(run_loop)
+            code.label(run_done)
+
+        # -- decode the bits ---------------------------------------------------
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(self.F64_FRAME)
+        put(self.S_END, RSI)
+        code.mov_reg(RAX, RDI)
+        code.mov_reg(R10, RAX)
+        code.shr_imm(R10, 63)
+        put(self.S_SIGN, R10)
+        code.shl_imm(RAX, 1)
+        code.shr_imm(RAX, 1)                        # the magnitude
+        put(self.S_MAG, RAX)
+        code.mov_imm(R11, 0x7FF0000000000000)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ae", not_finite)
+        code.test_reg(RAX)
+        code.jcc("e", zero_text)
+        code.mov_reg(R11, RAX)
+        code.shr_imm(R11, 52)                       # the biased exponent
+        put(self.S_TEMP, R11)
+        code.mov_reg(R10, RAX)
+        code.shl_imm(R10, 12)
+        code.shr_imm(R10, 12)                       # the fifty-two fraction bits
+        put(self.S_MANT, R10)
+        # The rounding interval ends exactly halfway to each neighbour, and a value
+        # that sits on such a midpoint reads back only if it is the even of the two:
+        # one bit of the significand decides that, and it has to be read before the
+        # hidden bit is added or a subnormal is shifted.
+        code.mov_reg(RAX, R10)
+        code.inc(RAX)
+        code.and_imm32(RAX, 1)                      # one when the significand is even
+        put(self.S_EVEN, RAX)
+        code.test_reg(R11)
+        code.jcc("e", subnormal)
+        code.mov_imm(R9, 1)
+        code.shl_imm(R9, 52)
+        code.add_reg(R10, R9)                       # the hidden bit, added in
+        put(self.S_MANT, R10)
+        slot(self.S_TEMP, R11)
+        code.mov_imm(R9, 1075)
+        code.sub_reg(R11, R9)
+        put(self.S_MEXP, R11)                       # value = mantissa * 2**this
+        code.mov_imm(R9, 53)
+        code.add_reg(R11, R9)
+        put(self.S_BITLEN, R11)                     # one more than floor(log2(value))
+        code.jmp(ready)
+        # A subnormal keeps its fraction as it stands: the spacing beside it is
+        # uniform, so shifting it up would give it the gaps of a normal number that
+        # it is not — and the gaps are what the whole conversion rests on.
+        code.label(subnormal)
+        code.mov_imm(R11, -1074)
+        put(self.S_MEXP, R11)
+        code.mov_reg(R9, R10)
+        code.xor_reg(R8, R8)
+        code.label(sub_shift)
+        code.mov_imm(RAX, 1)
+        code.shl_imm(RAX, 52)
+        code.cmp_reg(R9, RAX)
+        code.jcc("ae", sub_done)
+        code.add_reg(R9, R9)
+        code.inc(R8)
+        code.jmp(sub_shift)
+        code.label(sub_done)
+        code.mov_imm(R11, 53 - 1074)                # its bits, counted down to the low end
+        code.sub_reg(R11, R8)
+        put(self.S_BITLEN, R11)
+        code.label(ready)
+        # -- the decimal scale -------------------------------------------------
+        # s = floor(bitlen * log10(2)) + 1, so that the scaled value is below one and the
+        # digit loop never has to answer a leading digit above nine.
+        slot(self.S_BITLEN, R11)
+        code.test_reg(R11)
+        code.jcc("s", negative_bitlen)
+        code.mov_imm(R9, 1233)
+        code.imul_reg(R11, R9)
+        code.shr_imm(R11, 12)                       # 1233 / 4096 is log10(2)
+        code.jmp(scaled_bitlen)
+        code.label(negative_bitlen)
+        code.neg(R11)
+        code.mov_imm(R9, 1233)
+        code.imul_reg(R11, R9)
+        code.mov_imm(R9, 4095)
+        code.add_reg(R11, R9)
+        code.shr_imm(R11, 12)                       # rounding up, so the floor holds
+        code.neg(R11)
+        code.label(scaled_bitlen)
+        code.inc(R11)
+        put(self.S_SCALE, R11)
+        # -- R, S, and the two gaps --------------------------------------------
+        # In the frame of 2**(m-2) every one of them is an integer: pad clears the
+        # fraction, and the gaps are one or two of those units, halved below a power
+        # of two because its lower neighbour is one binade closer.
+        slot(self.S_MEXP, R11)
+        code.mov_imm(R9, 2)
+        code.cmp_reg(R11, R9)
+        code.jcc("ge", pad_ready)
+        code.mov_imm(R9, 2)
+        code.sub_reg(R9, R11)                       # pad = 2 - m
+        code.jmp(pad_done)
+        code.label(pad_ready)
+        code.xor_reg(R9, R9)
+        code.label(pad_done)
+        put(self.S_TEMP, R9)
+        slot(self.S_MEXP, R10)
+        code.add_reg(R10, R9)
+        put(self.S_TEMP2, R10)                      # shift = m + pad
+        at(RDI, self.BN_S)
+        code.mov_imm(RSI, 1)
+        code.call("nv_bn_set_u64")
+        at(RDI, self.BN_S)
+        slot(self.S_TEMP, RSI)
+        code.call("nv_bn_mul_pow2")
+        at(RDI, self.BN_R)
+        slot(self.S_MANT, RSI)
+        code.call("nv_bn_set_u64")
+        at(RDI, self.BN_R)
+        slot(self.S_TEMP2, RSI)
+        code.call("nv_bn_mul_pow2")
+        at(RDI, self.BN_MP)
+        code.mov_imm(RSI, 1)
+        code.call("nv_bn_set_u64")
+        at(RDI, self.BN_MP)
+        slot(self.S_TEMP2, RSI)
+        code.dec(RSI)                               # half of the upper gap
+        code.call("nv_bn_mul_pow2")
+        at(RDI, self.BN_MM)
+        code.mov_imm(RSI, 1)
+        code.call("nv_bn_set_u64")
+        at(RDI, self.BN_MM)
+        slot(self.S_TEMP2, RSI)
+        code.dec(RSI)
+        slot(self.S_MANT, R10)
+        code.mov_imm(R9, 1)
+        code.shl_imm(R9, 52)
+        code.cmp_reg(R10, R9)
+        code.jcc("ne", mm_shift)
+        code.dec(RSI)                               # a power of two: half of the lower gap
+        code.label(mm_shift)
+        code.call("nv_bn_mul_pow2")
+
+        # -- the decimal scaling -----------------------------------------------
+        code.label(gaps_done)
+        slot(self.S_SCALE, R11)
+        code.test_reg(R11)
+        code.jcc("s", scale_negative)
+        at(RDI, self.BN_S)
+        code.mov_reg(RSI, R11)
+        code.call("nv_bn_mul_pow10")
+        code.jmp(scale_done)
+        code.label(scale_negative)
+        code.neg(R11)
+        put(self.S_TEMP, R11)
+        for offset in (self.BN_R, self.BN_MP, self.BN_MM):
+            at(RDI, offset)
+            slot(self.S_TEMP, RSI)
+            code.call("nv_bn_mul_pow10")
+        code.label(scale_done)
+        # -- the scale lands between a tenth and one ---------------------------
+        # The estimate above only has to be close: these two loops make the first
+        # digit a significant one, which is what lets seventeen digits be enough.
+        code.label(fix_high)
+        at(RDI, self.BN_R)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_cmp")
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RAX, R10)
+        code.jcc("l", fix_low)
+        at(RDI, self.BN_S)
+        code.mov_imm(RSI, 10)
+        code.call("nv_bn_mul_small")
+        slot(self.S_SCALE, R11)
+        code.inc(R11)
+        put(self.S_SCALE, R11)
+        code.jmp(fix_high)
+        code.label(fix_low)
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_R)
+        code.call("nv_bn_copy")
+        at(RDI, self.BN_T)
+        code.mov_imm(RSI, 10)
+        code.call("nv_bn_mul_small")
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_cmp")
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RAX, R10)
+        code.jcc("ge", fix_done)
+        for offset in (self.BN_R, self.BN_MP, self.BN_MM):
+            at(RDI, offset)
+            code.mov_imm(RSI, 10)
+            code.call("nv_bn_mul_small")
+        slot(self.S_SCALE, R11)
+        code.dec(R11)
+        put(self.S_SCALE, R11)
+        code.jmp(fix_low)
+        code.label(fix_done)
+        # -- the digits ---------------------------------------------------------
+        code.xor_reg(RAX, RAX)
+        put(self.S_LEN, RAX)
+        code.label(digit_loop)
+        # One place finer every turn: the remainder is measured in the units of the
+        # digit being written, so the two gaps are multiplied by ten beside it.
+        for offset in (self.BN_R, self.BN_MP, self.BN_MM):
+            at(RDI, offset)
+            code.mov_imm(RSI, 10)
+            code.call("nv_bn_mul_small")
+        code.xor_reg(RAX, RAX)
+        put(self.S_DIGIT, RAX)
+        code.label(subtract)
+        at(RDI, self.BN_R)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_cmp")
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RAX, R10)
+        code.jcc("l", sub_end)
+        at(RDI, self.BN_R)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_sub")
+        slot(self.S_DIGIT, RAX)
+        code.inc(RAX)
+        put(self.S_DIGIT, RAX)
+        code.jmp(subtract)
+        code.label(sub_end)
+        slot(self.S_DIGIT, RAX)
+        code.add_byte_imm(RAX, ord("0"))
+        slot(self.S_LEN, R11)
+        at(R10, self.F64_DIGITS)
+        code.add_reg(R10, R11)
+        code.store_byte(R10, 0, RAX)
+        slot(self.S_LEN, RAX)
+        code.inc(RAX)
+        put(self.S_LEN, RAX)
+        # -- which way the digit reads ------------------------------------------
+        # Twice what is left against the scale picks the nearer candidate, and an
+        # exact halfway point goes to the even digit — the way a correct reader
+        # rounds it back.
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_R)
+        code.call("nv_bn_copy")
+        at(RDI, self.BN_T)
+        code.mov_imm(RSI, 2)
+        code.call("nv_bn_mul_small")
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_cmp")
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RAX, R10)
+        code.jcc("g", round_up_flag)
+        code.jcc("l", round_down_flag)
+        slot(self.S_DIGIT, RAX)
+        code.and_imm32(RAX, 1)                      # exactly halfway: the even digit wins
+        code.test_reg(RAX)
+        code.jcc("e", round_down_flag)
+        code.label(round_up_flag)
+        code.mov_imm(RAX, 1)
+        put(self.S_TEMP, RAX)                       # one: the candidate above is the nearer
+        code.jmp(nearest_up)
+        code.label(round_down_flag)
+        code.xor_reg(RAX, RAX)
+        put(self.S_TEMP, RAX)                       # zero: the digits as they stand are nearer
+        code.jmp(nearest_down)
+        # Up: what is left to the scale is the distance, and the upper gap bounds it.
+        code.label(nearest_up)
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_S)
+        code.call("nv_bn_copy")
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_R)
+        code.call("nv_bn_sub")
+        at(RDI, self.BN_T)
+        at(RSI, self.BN_MP)
+        code.call("nv_bn_cmp")
+        code.jmp(gap_test)
+        # Down: what is left is the distance already, and the lower gap bounds it.
+        code.label(nearest_down)
+        at(RDI, self.BN_R)
+        at(RSI, self.BN_MM)
+        code.call("nv_bn_cmp")
+        code.label(gap_test)                        # -1 inside, 0 on the edge, 1 outside
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RAX, R10)
+        code.jcc("l", inside)
+        code.jcc("g", outside)
+        slot(self.S_EVEN, RAX)
+        code.test_reg(RAX)
+        code.jcc("ne", inside)                      # a midpoint belongs to the even value
+        code.jmp(outside)
+        code.label(inside)
+        slot(self.S_TEMP, RAX)
+        code.test_reg(RAX)
+        code.jcc("ne", round_up)
+        code.jmp(round_done)
+        code.label(outside)
+        slot(self.S_LEN, RAX)
+        code.mov_imm(R9, 17)
+        code.cmp_reg(RAX, R9)
+        code.jcc("ae", force_nearest)
+        code.jmp(digit_loop)
+        code.label(force_nearest)                   # seventeen digits always read back
+        slot(self.S_TEMP, RAX)
+        code.test_reg(RAX)
+        code.jcc("ne", round_up)
+        code.jmp(round_done)
+
+        # -- the carry a round-up may need --------------------------------------
+        code.label(round_up)
+        slot(self.S_DIGIT, RAX)
+        code.mov_imm(R11, 9)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", round_plain)
+        slot(self.S_LEN, R11)
+        code.dec(R11)                           # the digit just written becomes a zero
+        at(R10, self.F64_DIGITS)
+        code.add_reg(R10, R11)
+        code.mov_imm(RAX, ord("0"))
+        code.store_byte(R10, 0, RAX)
+        code.label(round_carry)
+        code.test_reg(R11)
+        code.jcc("e", round_first)
+        code.dec(R11)
+        at(R10, self.F64_DIGITS)
+        code.add_reg(R10, R11)
+        code.load_byte(RAX, R10, 0)
+        code.mov_imm(RCX, ord("9"))
+        code.cmp_reg(RAX, RCX)
+        code.jcc("e", round_nine)
+        code.add_byte_imm(RAX, 1)
+        code.store_byte(R10, 0, RAX)
+        code.jmp(round_done)
+        code.label(round_nine)
+        code.mov_imm(RAX, ord("0"))
+        code.store_byte(R10, 0, RAX)
+        code.jmp(round_carry)
+        code.label(round_first)
+        # Every digit carried: the answer is one decade up, and one digit longer.
+        slot(self.S_LEN, R11)
+        code.label(shift_loop)
+        code.test_reg(R11)
+        code.jcc("e", shift_done)
+        code.dec(R11)
+        at(R10, self.F64_DIGITS)
+        code.add_reg(R10, R11)
+        code.load_byte(RAX, R10, 0)
+        code.inc(R10)
+        code.store_byte(R10, 0, RAX)
+        code.jmp(shift_loop)
+        code.label(shift_done)
+        at(R10, self.F64_DIGITS)
+        code.mov_imm(RAX, ord("1"))
+        code.store_byte(R10, 0, RAX)
+        slot(self.S_LEN, RAX)
+        code.inc(RAX)
+        put(self.S_LEN, RAX)
+        slot(self.S_SCALE, RAX)
+        code.inc(RAX)
+        put(self.S_SCALE, RAX)
+        code.jmp(round_done)
+        code.label(round_plain)
+        code.inc(RAX)
+        code.add_byte_imm(RAX, ord("0"))
+        slot(self.S_LEN, R11)
+        code.dec(R11)
+        at(R10, self.F64_DIGITS)
+        code.add_reg(R10, R11)
+        code.store_byte(R10, 0, RAX)
+        code.label(round_done)
+        # -- where the digits start, and the decimal exponent --------------------
+        code.xor_reg(R11, R11)                  # j
+        slot(self.S_LEN, R9)
+        at(R10, self.F64_DIGITS)
+        code.label(first_loop)
+        code.cmp_reg(R11, R9)
+        code.jcc("ae", first_done)
+        code.mov_reg(RAX, R10)
+        code.add_reg(RAX, R11)
+        code.load_byte(RAX, RAX, 0)
+        code.mov_imm(RCX, ord("0"))
+        code.cmp_reg(RAX, RCX)
+        code.jcc("ne", first_done)
+        code.inc(R11)
+        code.jmp(first_loop)
+        code.label(first_done)
+        put(self.S_FIRST, R11)
+        slot(self.S_SCALE, RAX)                      # e10 = s - 1 - j
+        code.dec(RAX)
+        code.sub_reg(RAX, R11)
+        put(self.S_E10, RAX)
+
+        # -- the notation -------------------------------------------------------
+        at(R10, self.F64_TEXT)
+        put(self.S_CURSOR, R10)
+        slot(self.S_SIGN, RAX)
+        code.test_reg(RAX)
+        code.jcc("e", choose)
+        put_char("-")
+        code.label(choose)
+        slot(self.S_E10, RAX)
+        code.mov_imm(R11, -4)
+        code.cmp_reg(RAX, R11)
+        code.jcc("l", exponential)
+        code.mov_imm(R11, 16)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ge", exponential)
+        # The text is built forward in the frame and copied into the caller's buffer at
+        # the end, so that every branch above writes its characters in its own order.
+        def start_first() -> None:
+            """The digit run starts at the first significant digit."""
+            slot(self.S_FIRST, RAX)
+            put(self.S_TEMP, RAX)
+
+        def start_after_places() -> None:
+            """The digit run starts at the first digit right of the decimal point."""
+            slot(self.S_FIRST, RAX)
+            slot(self.S_E10, R11)
+            code.inc(R11)
+            code.add_reg(RAX, R11)
+            put(self.S_TEMP, RAX)
+
+        def count_digits() -> None:
+            slot(self.S_LEN, RAX)
+            slot(self.S_FIRST, R11)
+            code.sub_reg(RAX, R11)
+            put(self.S_TEMP2, RAX)
+
+        def count_places() -> None:
+            slot(self.S_E10, RAX)
+            code.inc(RAX)
+            put(self.S_TEMP2, RAX)
+
+        def count_rest() -> None:
+            slot(self.S_LEN, RAX)
+            slot(self.S_FIRST, R11)
+            code.sub_reg(RAX, R11)
+            slot(self.S_E10, R11)
+            code.inc(R11)
+            code.sub_reg(RAX, R11)
+            put(self.S_TEMP2, RAX)
+
+        def count_leading_zeros() -> None:
+            """The zeros between `0.` and the first significant digit: one less than -e10."""
+            slot(self.S_E10, RAX)
+            code.neg(RAX)
+            code.dec(RAX)
+            put(self.S_TEMP2, RAX)
+
+        def count_fraction() -> None:
+            """Exponent notation's fraction: every digit but the first, trailing zeros dropped.
+
+            A decimal needs neither the zeros the value does not reach inside its own gap,
+            so `1e+300` where a fixed notation would have written `1.000...`.
+            """
+            loop, done = self.local("f64_fraction"), self.local("f64_fraction_done")
+            slot(self.S_LEN, RAX)
+            slot(self.S_FIRST, R11)
+            code.sub_reg(RAX, R11)
+            code.dec(RAX)                       # the digits after the one before the point
+            code.label(loop)
+            code.test_reg(RAX)
+            code.jcc("e", done)
+            slot(self.S_FIRST, R10)
+            code.add_reg(R10, RAX)
+            at(R11, self.F64_DIGITS)
+            code.add_reg(R11, R10)
+            code.load_byte(R11, R11, 0)
+            code.mov_imm(R10, ord("0"))
+            code.cmp_reg(R11, R10)
+            code.jcc("ne", done)
+            code.dec(RAX)
+            code.jmp(loop)
+            code.label(done)
+            put(self.S_TEMP2, RAX)
+
+        def count_trailing_zeros() -> None:
+            slot(self.S_E10, RAX)
+            code.inc(RAX)
+            slot(self.S_LEN, R11)
+            slot(self.S_FIRST, R10)
+            code.sub_reg(R11, R10)
+            code.sub_reg(RAX, R11)
+            put(self.S_TEMP2, RAX)
+
+        slot(self.S_E10, RAX)
+        code.test_reg(RAX)
+        code.jcc("ns", fixed_positive)
+        # Below one: `0.`, the zeros the exponent names, then every digit.
+        put_char("0")
+        put_char(".")
+        count_leading_zeros()
+        put_zeros()
+        start_first()
+        count_digits()
+        put_digits()
+        code.jmp(mantissa_done)
+        code.label(fixed_positive)
+        slot(self.S_LEN, RAX)
+        slot(self.S_FIRST, R11)
+        code.sub_reg(RAX, R11)
+        put(self.S_HIGH, RAX)                        # how many digits there are
+        slot(self.S_E10, R11)
+        code.inc(R11)
+        put(self.S_LOW, R11)                         # how many places stand left of the point
+        code.cmp_reg(RAX, R11)
+        code.jcc("g", fixed_short)
+        # Fewer digits than places: the zeros the value does not reach are written out,
+        # and `.0` keeps a whole number looking like the float it is.
+        start_first()
+        count_digits()
+        put_digits()
+        count_trailing_zeros()
+        put_zeros()
+        put_char(".")
+        put_char("0")
+        code.jmp(mantissa_done)
+        code.label(fixed_short)
+        start_first()
+        count_places()
+        put_digits()
+        put_char(".")
+        start_after_places()
+        count_rest()
+        put_digits()
+        code.jmp(mantissa_done)
+        # -- exponent notation --------------------------------------------------
+        code.label(exponential)
+        start_first()
+        code.mov_imm(RAX, 1)
+        put(self.S_TEMP2, RAX)
+        put_digits()                            # the digit left of the point
+        count_fraction()
+        slot(self.S_TEMP2, RAX)
+        code.test_reg(RAX)
+        code.jcc("e", exponent_negative)        # no mantissa fraction
+        put_char(".")
+        slot(self.S_FIRST, RAX)
+        code.inc(RAX)
+        put(self.S_TEMP, RAX)
+        put_digits()
+        code.label(exponent_negative)
+        put_char("e")
+        slot(self.S_E10, RAX)
+        code.test_reg(RAX)
+        code.jcc("ns", exponent_positive)
+        put_char("-")
+        slot(self.S_E10, RAX)
+        code.neg(RAX)
+        code.jmp(exponent_digits)
+        code.label(exponent_positive)
+        put_char("+")
+        slot(self.S_E10, RAX)
+        code.label(exponent_digits)
+        put(self.S_TEMP, RAX)
+        code.mov_imm(R11, 100)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", exponent_last_two)        # two digits, as `%e` writes them
+        code.xor_reg(RDX, RDX)
+        code.mov_imm(R8, 100)
+        code.div(R8)                            # rax = hundreds, rdx = the last two
+        code.add_byte_imm(RAX, ord("0"))
+        put_byte(RAX)
+        code.mov_reg(RAX, RDX)
+        code.label(exponent_last_two)
+        code.xor_reg(RDX, RDX)
+        code.mov_imm(R8, 10)
+        code.div(R8)                            # rax = tens, rdx = units
+        code.add_byte_imm(RAX, ord("0"))
+        code.add_byte_imm(RDX, ord("0"))
+        put_byte(RAX)
+        put_byte(RDX)
+        code.label(mantissa_done)
+
+        # -- the text leaves the frame ------------------------------------------
+        slot(self.S_CURSOR, R11)
+        at(R10, self.F64_TEXT)
+        code.sub_reg(R11, R10)                  # how many characters were written
+        put(self.S_TEMP2, R11)
+        slot(self.S_END, RDI)
+        code.sub_reg(RDI, R11)                  # where they belong in the caller's buffer
+        code.mov_reg(R8, R10)
+        put(self.S_TEMP, R11)
+        code.label(copy_loop)
+        slot(self.S_TEMP, R11)
+        code.test_reg(R11)
+        code.jcc("e", copy_done)
+        code.load_byte(RAX, R8, 0)
+        code.store_byte(RDI, 0, RAX)
+        code.inc(R8)
+        code.inc(RDI)
+        slot(self.S_TEMP, R11)
+        code.dec(R11)
+        put(self.S_TEMP, R11)
+        code.jmp(copy_loop)
+        code.label(copy_done)
+        slot(self.S_END, RAX)
+        slot(self.S_TEMP2, RDX)
+        code.sub_reg(RAX, RDX)                  # the start, and the length beside it
+        code.jmp(finish)
+        # -- the five names that are not a conversion ---------------------------
+        code.label(not_finite)
+        slot(self.S_MAG, R10)
+        code.shl_imm(R10, 12)
+        code.shr_imm(R10, 12)                   # any fraction bit means NaN
+        code.test_reg(R10)
+        code.jcc("ne", not_number)
+        slot(self.S_SIGN, R10)
+        code.test_reg(R10)
+        code.jcc("ne", infinite_negative)
+        code.lea_rip(R10, self.string("inf"))
+        code.jmp(special_done)
+        code.label(infinite_negative)
+        code.lea_rip(R10, self.string("-inf"))
+        code.jmp(special_done)
+        code.label(not_number)
+        code.lea_rip(R10, self.string("nan"))
+        code.jmp(special_done)
+        code.label(zero_text)
+        slot(self.S_SIGN, R10)
+        code.test_reg(R10)
+        code.jcc("ne", zero_negative)
+        code.lea_rip(R10, self.string("0.0"))
+        code.jmp(special_done)
+        code.label(zero_negative)
+        code.lea_rip(R10, self.string("-0.0"))
+        code.label(special_done)
+        code.load(RDX, R10, 0)                  # a string here is length-prefixed
+        code.lea(RAX, R10, 8)
+        code.label(finish)
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.ret()

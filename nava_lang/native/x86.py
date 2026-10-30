@@ -173,6 +173,16 @@ class Assembler:
         self.emit(_rex(w=True, b=register) + b"\x83" + _modrm(3, 0, register)
                   + bytes([value & 0xFF]))
 
+    def shl_imm(self, register: int, value: int) -> None:
+        """`shl r64, imm8`: REX.W + C1 /4 ib — the bit fields of an IEEE-754 double."""
+        self.emit(_rex(w=True, b=register) + b"\xC1" + _modrm(3, 4, register)
+                  + bytes([value & 0xFF]))
+
+    def shr_imm(self, register: int, value: int) -> None:
+        """`shr r64, imm8`: REX.W + C1 /5 ib — logical, so the sign bit comes out as 1."""
+        self.emit(_rex(w=True, b=register) + b"\xC1" + _modrm(3, 5, register)
+                  + bytes([value & 0xFF]))
+
     def and_imm32(self, register: int, value: int) -> None:
         """`and r64, imm32`: REX.W + 81 /4 id — sign-extended, so -16 aligns."""
         self.emit(_rex(w=True, b=register) + b"\x81" + _modrm(3, 4, register))

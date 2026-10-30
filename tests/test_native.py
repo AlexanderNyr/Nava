@@ -634,13 +634,6 @@ fn main() -> i64 {
     return 0
 }
 """,
-        "printing an f64": """\
-fn main() -> i64 {
-    let x: f64 = 1.5
-    print(x)
-    return 0
-}
-""",
     }
 
     def test_a_construct_is_refused_by_name(self):
@@ -2690,3 +2683,174 @@ fn main() {
         # compared with is a constant in the IR.
         self.assertIn("= const i64 1", text)
         self.assertIn("ret %", text)
+
+
+class NativeF64Tests(unittest.TestCase):
+    """`f64` is printed as the shortest decimal that reads back as the same double.
+
+    The C runtime says it with `%.*e`/`%.*f` at the first precision whose text `strtod`
+    parses back to the value; the native backend cannot call this, and a seventeen-digit
+    approximation would be a different output for the same program. So the digits are
+    generated on exact integers — Burger and Dybvig's framing, where the value and the
+    two half-gaps are integers once scaled and a digit is one subtraction loop — and the
+    two rules that make it agree with `strtod` digit for digit are tested here where they
+    are visible:
+
+    * the loop stops at the first count whose **nearest** candidate lies inside the gap,
+      which is why `0.03` is `0.03` and not the fifty-digit exact expansion of the double.
+      It is not Dragon4's "shortest that reads back": `2**-1017` has no fifteen-digit text
+      that reads back at all and its nearest sixteen-digit text is an exact midpoint, so
+      the answer there is seventeen digits — the same answer `%.*e` gives;
+    * a candidate that sits exactly halfway to a neighbour is inside only when the value
+      is the **even** of the two, which is why one class of large integers keeps sixteen
+      digits instead of seventeen.
+
+    The oracle is the other backend, over every power of two and over a table of values
+    where an off-by-one digit or an off-by-one exponent is what a mistake would look like.
+    """
+
+    #: Values whose shortest form is shorter than their exact decimal expansion, plus the
+    #: five names the language gives to the values that are not finite, and the ends of
+    #: the range. The expected text is what the C backend prints.
+    TABLE = (
+        ("0.1 + 0.2", ["0.30000000000000004"]),
+        ("0.03", ["0.03"]),
+        ("0.375", ["0.375"]),
+        ("0.1", ["0.1"]),
+        ("1.5", ["1.5"]),
+        ("100.0", ["100.0"]),
+        ("12.5", ["12.5"]),
+        ("0.0001", ["0.0001"]),
+        ("0.00001", ["1e-05"]),
+        ("1.0e300", ["1e+300"]),
+        ("1.0e-7", ["1e-07"]),
+        ("5.0e-324", ["5e-324"]),
+        ("2.2250738585072014e-308", ["2.2250738585072014e-308"]),
+        ("1.7976931348623157e308", ["1.7976931348623157e+308"]),
+        ("3.3201876582270392e+16", ["3.320187658227039e+16"]),
+        ("9007199254740992.0", ["9007199254740992.0"]),
+    )
+
+    def prints(self, expressions: list[str]) -> list[str]:
+        """Build one program with the native backend and return what it prints."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            source = "fn main() {\n" + "".join(
+                f"    print({expression})\n" for expression in expressions) + "}\n"
+            path = write_source(directory, "floats", source)
+            binary = directory / "floats-native"
+            result = run([*NAVA, "build", str(path), "-o", str(binary),
+                          "--backend", "native"])
+            if result.returncode != 0:
+                raise AssertionError(f"the native backend refused: {result.stderr}")
+            out = run_binary(binary)
+        self.assertEqual(out[2], 0)
+        return out[0].splitlines()
+
+    def test_the_floats_fixture_agrees_with_the_c_backend(self):
+        """The fixture covers arithmetic and printing; both backends say the same thing."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "floats", fixture_text("floats"))
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(c_out, native_out)
+        self.assertEqual(native_out[0].splitlines(),
+                         ["1.75", "1.25", "0.375", "6.0", "-1.5", "1.5",
+                          "0.30000000000000004", "1.0", "-0.0", "1e+300", "1e-07",
+                          "inf", "-inf", "nan", "false", "true", "false", "false",
+                          "true", "true", "7.0", "2", "-2", "3.0"])
+
+    def test_the_shortest_form_is_not_the_exact_expansion(self):
+        """Seventeen digits are enough to read back; the digits beyond them are dropped."""
+        expressions = [expression for expression, _ in self.TABLE]
+        expected = [line for _, lines in self.TABLE for line in lines]
+        self.assertEqual(self.prints(expressions), expected)
+
+    def test_a_candidate_exactly_on_the_gap_reads_back(self):
+        """Sixteen digits stand where the exact value is one half-gap away from them.
+
+        These are the values that a loop stopping only strictly inside the gap prints with
+        one digit too many, and the parity of the significand is what decides them: the
+        midpoint belongs to an even value, and every one of these is even.
+        """
+        edges = ["3.3201876582270392e+16", "3.0925352787701443e+18",
+                 "6.4295608915343344e+16", "2.1097935911224992e+16",
+                 "7.1306516825968576e+16", "3.3720108055995768e+16"]
+        self.assertEqual(self.prints(edges),
+                         ["3.320187658227039e+16", "3.092535278770144e+18",
+                          "6.429560891534334e+16", "2.109793591122499e+16",
+                          "7.130651682596858e+16", "3.372010805599577e+16"])
+
+    def test_every_power_of_two_and_its_neighbour_read_back(self):
+        """A power of two has a lower gap of half a binade: 2098 values, both backends."""
+        expressions = []
+        for exponent in range(-1074, 1024):
+            value = 2.0 ** exponent
+            if not 0.0 < value < float("inf"):
+                continue
+            expressions.append(repr(value))
+            if value * 2.0 < float("inf"):
+                expressions.append(repr(value + value / 2.0))
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            source = "fn main() {\n" + "".join(
+                f"    print({expression})\n" for expression in expressions) + "}\n"
+            path = write_source(directory, "powers", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual((c_out[0], c_out[1], c_out[2]),
+                         (native_out[0], native_out[1], native_out[2]))
+        self.assertEqual(len(native_out[0].splitlines()), len(expressions))
+
+    def test_the_exponent_is_padded_to_two_digits_and_signed(self):
+        """`%e` writes `e+300`, `e-07` and never `e-7`: the text is compared, not parsed."""
+        self.assertEqual(self.prints(["1.0e-7", "1.0e-8", "1.0e300", "9.9e-7", "1.0e-5"]),
+                         ["1e-07", "1e-08", "1e+300", "9.9e-07", "1e-05"])
+
+    def test_negative_zero_and_the_three_names_are_not_a_conversion(self):
+        """`-0.0` keeps its sign, and `inf`, `-inf`, `nan` are spelled, not computed."""
+        self.assertEqual(self.prints(["0.0", "-0.0", "1.0 / 0.0", "-1.0 / 0.0",
+                                      "0.0 / 0.0"]),
+                         ["0.0", "-0.0", "inf", "-inf", "nan"])
+
+    def test_the_conversion_costs_no_c_library_call(self):
+        """The digits are computed in the runtime unit: `strtod` is not linked in at all."""
+        names = {symbol.name for unit in units_of("fn main() { print(1.5) }\n")
+                 for symbol in unit.symbols}
+        self.assertIn("nv_format_f64", names)
+        self.assertIn("nv_bn_mul_small", names)
+        self.assertNotIn("strtod", names)
+        self.assertNotIn("snprintf", names)
+
+    def test_the_corpus_tool_agrees_on_a_sample(self):
+        """`tools/f64_corpus.py` is the differential's input, so the suite runs a slice.
+
+        The full corpus is twelve thousand values and two compiler invocations of forty
+        seconds each; a subset is enough here because the tool is deterministic and the
+        fixtures above pin what the subset is drawn from. Running it at all is the point:
+        a corpus generator that stopped emitting the edges would otherwise be found by
+        nobody.
+        """
+        result = run([sys.executable, str(ROOT / "tools" / "f64_corpus.py"),
+                      "--no-powers", "--random", "40", "--subnormal", "6", "--seed", "3"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        tools = ROOT / "tools"
+        if str(tools) not in sys.path:
+            sys.path.insert(0, str(tools))
+        import f64_corpus                                    # noqa: PLC0415
+        lines = result.stdout.count("print(")
+        # three names and thirty-five curated values, then forty 64-bit patterns and six
+        # 52-bit ones (each of which is printed negative too)
+        self.assertEqual(lines, 3 + len(f64_corpus.curated()) + 40 + 2 * 6)
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "corpus", result.stdout)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(len(native_out[0].splitlines()), lines)
+        self.assertEqual((c_out[0], c_out[1], c_out[2]),
+                         (native_out[0], native_out[1], native_out[2]))

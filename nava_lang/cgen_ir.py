@@ -77,7 +77,10 @@ BUILTIN_HELPERS = {
 }
 #: `print` of a value, per type. The three helpers print exactly what the native
 #: backend's three writers print, which is what the differential compares.
-PRINT_HELPERS = {"i64": "nv_print_i64", "bool": "nv_print_bool", "str": "nv_print_str"}
+#: A printed value, by type. An `f64` prints through the same `nv_format_f64` the
+#: AST walk calls: the shortest decimal that reads back as the same double.
+PRINT_HELPERS = {"i64": "nv_print_i64", "bool": "nv_print_bool", "str": "nv_print_str",
+                 "f64": "nv_print_f64"}
 #: What this printer implements. A program that lowers to anything else is printed by
 #: the AST walk instead, and `supports()` is where that decision is made.
 SUPPORTED = (

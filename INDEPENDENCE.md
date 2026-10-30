@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14i delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?`, slices and arrays of structs are compiled natively, while printing an `f64`, the collections, `String`/`Vec`, a function used as a value and the remaining builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14j delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic, comparison *and printing*, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?`, slices and arrays of structs are compiled natively — 29 of the 32 fixtures build and run identically through both backends — while the collections, `String`/`Vec`, a function used as a value and the remaining builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1362,6 +1362,7 @@ the differential records.
 | N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
 | N14h | **Cleanup and early return through one IR**: `defer` lowered at every exit of the block that registered it, `?` as a tag test with an early return of the failure value and one payload read, both fixture families closed, and the two shapes this backend cannot hold refused by name | **Delivered** (record below) |
 | N14i | **Slices and arrays of structs through one IR**: a slice as one instruction that answers a *view* into the parent's elements after the C runtime's two bound checks, and an array of structs as the same six array instructions with a one-word element that is copied as it enters the array | **Delivered** (record below) |
+| N14j | **`print f64` through one IR**: the shortest decimal the C runtime prints for a double, generated on base-10^9 bignums with no `strtod` and no `snprintf`, with the stop condition and the tie-break that make the two backends agree digit for digit, a 12 330-value corpus as the differential's input, and `floats` as the fixture that leaves the AST walk | **Delivered** (record below) |
 | N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
@@ -1837,6 +1838,81 @@ benchmark was run.
 
 ---
 
+#### Delivery record N14j (2026-10-30)
+
+**`print f64` — the shortest decimal that reads back, converted with integers only.** The
+last value of the language that the native backend could not print, and the one conversion
+that cannot be approximated: `nv_format_f64` in the C runtime asks `snprintf` for the
+shortest `%.*e`/`%.*f` text that `strtod` reads back as the same double, so a backend
+without a C library has to reproduce the C library's answer rather than its own idea of
+one. Seventeen digits of the exact expansion would be a *different output for the same
+program*, and a "close enough" conversion here would put the differential on a scale where
+nobody can tell which backend is wrong.
+
+The conversion is Burger and Dybvig's framing on exact integers. The value and its two
+half-gaps become integers once scaled by a power of two — `R/S`, `Mp`, `Mm` — so the digits
+are one subtraction loop per place, and the questions "is this the last digit" and "does
+this digit round up" are integer comparisons of bignums of a few hundred bits. The digits
+themselves live in a base-10^9 bignum, so a place costs one `mul_small` per subtrahend and
+the loop is the same code for `5e-324` (751 digits of exact expansion) and for `1.5`.
+
+What decides *where the loop stops* is the whole correctness argument, and it is the rule
+the C runtime's loop follows, not the shortest-form rule: at count `k` the nearest
+candidate is the truncation (error `R`) or the truncation plus one (error `S - R`), the tie
+going to an even last digit; that candidate reads back iff its error is under the half-gap
+on its side, the boundary belonging to the value only when its significand is even. The two
+rules look interchangeable on the corpus and are not: `2**-1017` has no fifteen-digit text
+that reads back, and its nearest sixteen-digit text is an exact midpoint whose half of the
+gap is *closed* to it (odd significand), so both backends print seventeen digits —
+`7.120236347223044e-307` where a shortest-form search answers `7.120236347223045e-307`,
+which reads back as the neighbour. Here the answer stops there because seventeen digits are
+always enough, and that is the loop's other end.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| The fixture agrees, and it is printed from the IR | `NativeF64Tests.test_the_floats_fixture_agrees_with_the_c_backend` | `floats` — arithmetic, `-0.0`, `1e+300`, `1e-07`, `inf`, `-inf`, `nan`, the `nan` comparisons and three conversions — is 24 lines, identical on stdout, stderr and status; the fixture moved into `IN_THE_SUBSET`, so the C body comes from the IR too |
+| Shortest is not the exact expansion | `test_the_shortest_form_is_not_the_exact_expansion` | sixteen values: `0.1 + 0.2` is `0.30000000000000004`, `0.03` is `0.03`, `5.0e-324` is `5e-324`, `1.0e300` is `1e+300`, `0.00001` is `1e-05`, `3.3201876582270392e+16` is `3.320187658227039e+16` |
+| A candidate on the gap reads back only for an even significand | `test_a_candidate_exactly_on_the_gap_reads_back` | six large integers whose nearest sixteen-digit text is one half-gap away — `3.3720108055995768e+16` prints `3.372010805599577e+16`, sixteen digits, not seventeen |
+| Every power of two and its neighbour | `test_every_power_of_two_and_its_neighbour_read_back` | 2 098 values (`2**-1074` … `2**1023`, and every midpoint above them): the same text from both backends, and the count is asserted, so a truncated loop cannot pass by printing less |
+| The exponent is signed and padded | `test_the_exponent_is_padded_to_two_digits_and_signed` | `1e-07`, `1e-08`, `1e+300`, `9.9e-07`, `1e-05` — never `e-7` |
+| The five names are spelled, not computed | `test_negative_zero_and_the_three_names_are_not_a_conversion` | `0.0`, `-0.0`, `inf`, `-inf`, `nan`; `-0.0` keeps its sign bit, and none of them enters the digit loop |
+| The conversion costs no C library call | `test_the_conversion_costs_no_c_library_call` | the linked binary's symbols contain `nv_format_f64` and `nv_bn_mul_small` and contain neither `strtod` nor `snprintf` — the absence is the claim, so it is asserted, not described |
+| The corpus, not a sample | `test_the_corpus_tool_agrees_on_a_sample` in the suite; the full run by hand | `tools/f64_corpus.py`: **12 330 values** (every power of two with both neighbours and the curated edges, random 64-bit patterns, random subnormals) produce **identical stdout** through both backends — `cmp` of the two 12 330-line outputs is empty |
+| The C backend prints the same program from the IR | `CFromIRTests` (`floats` joined `IN_THE_SUBSET`, and `LOWERED_NOT_PRINTED` is now empty) | the marker is in the artefact, and `PRINT_HELPERS` gained `f64 -> nv_print_f64`: the gap between "the IR expresses it" and "the printer prints it" has no members left |
+| The corpus grows | the fixture sweep | **29 of 32** fixtures build and run identically through both backends (28 at N14i), **0 differ**, 3 refused by name (`map_basics`, `self_test`, `set_basics`) |
+
+Two things went wrong, and both were found by running rather than by reading. **The bignum
+frame overlapped its own slots**: the limbs of a bignum grow *upward* from its base, and a
+base at `-520` therefore covered the fresh slots above `-144`, so `S_EVEN` — the parity bit
+the tie-break reads — was always zero and one class of midpoints printed seventeen digits
+where sixteen suffice. The bases are now five blocks of 392 bytes below the scalars
+(`-536`, `-928`, `-1320`, `-1712`, `-2104`), and the parity came out right without any of
+the four things that had been tried instead of looking at the frame. **The tie-break flag
+cannot be carried in the scratch slot**: it was written to `S_TEMP`, which the digit update
+reuses, so by the time the decision was read the flag was zero — 17 digits where 16 were
+correct, on exactly halfway values. Two locals with the value 1 or 0, written on each side
+of the branch, are what the decision reads now.
+
+The audit is re-measured: **20 173 lines, 27 modules, 716 functions** (19 048 / 27 / 688 at
+N14i) — no new module, 28 functions: the bignum runtime (six routines), the conversion and
+its helpers, and the printer's `f64` branch. The suite is **1 061 tests, 1 631 subtests**,
+`tests/registry.py` reports 991 registered tests with the same 11 tasks, 76 cases, 192 spec
+fixtures and 173 diagnostic codes, and the overhead record is re-measured rather than
+assumed: **108 832 tokens**, unchanged, because the guide describes the language and this
+increment changed which backend converts a double.
+
+What this increment does **not** claim: that the AST walk is gone — 3 of the 32 fixtures
+still need it (`map_basics`, `self_test`, `set_basics`, all three for `HashMap`/`HashSet`,
+`String`/`Vec` and a function used as a value); that `str_from_f64`, `read_f64`,
+`chars_len`, the filesystem or the argument functions exist natively (each is still refused
+by name); that the conversion is fast — it is a base-10^9 bignum loop per digit and per
+place, no benchmark was run, so what it costs against the C library is not stated here at
+all; or that the corpus covers the space — it is 12 330 values
+of some 2^64, chosen for the families that fail differently, and the argument for the rule
+is the rule, not the sample.
+
+---
+
 ### Phase N15 — Self-hosting and bootstrap
 
 **Objective:** Nava compiles Nava.
@@ -1987,7 +2063,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 19 048 lines and 688 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 20 163 lines and 716 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |
