@@ -25,6 +25,12 @@ compile the same program and the only interesting question is whether the two ag
   release — and the differential runs the same array programs through both
   backends, including the traps: a bounds check is a message and a status, so a
   backend that forgot the check fails here instead of in a comment.
+* **A function is a value.** N14l makes a declared function something a program can
+  pass, store, return and call through: one word, the address of its code, and no
+  closure. The differential runs the same programs through both backends, and the
+  structural half of the claim is that a value and a direct call name one symbol —
+  the same address — which is what makes the two ways of reaching a function
+  interchangeable.
 * **No C toolchain is involved.** A native build is run with an empty `PATH`; if
   anything in the path reached for `cc`, that test fails.
 """
@@ -49,7 +55,7 @@ for path in (ROOT, ROOT / "tests"):
 from nava_lang.checker import check  # noqa: E402
 from nava_lang.cli import load_program  # noqa: E402
 from nava_lang.model import NavaError  # noqa: E402
-from nava_lang.native import elf64, ir, linker, lower, reader, x86_64  # noqa: E402
+from nava_lang.native import elf64, ir, linker, lower, reader, x86, x86_64  # noqa: E402
 from nava_lang.native.unit import Relocation, Symbol, Unit  # noqa: E402
 from nava_lang.parser import parse  # noqa: E402
 
@@ -228,6 +234,38 @@ fn main() -> i64 {
     return 0
 }
 """,
+    #: N14l: a function as a value, in the corpus the IR is checked against. The
+    #: well-formedness walk reads it as any other program, so a `funcref` that
+    #: defined no value or a call that did not read its callee would fail here.
+    "function_value": """\
+edition 2;
+fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn triple(x: i64) -> i64 {
+    return x * 3
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+fn main() -> i64 {
+    let f: fn(i64) -> i64 = twice
+    let i = 0
+    let total = 0
+    while i < 5 {
+        if i % 2 == 0 { f = triple } else { f = twice }
+        total = total + f(i)
+        i = i + 1
+    }
+    print(total)
+    print(apply(twice, 21))
+    print(apply(triple, apply(twice, 1)))
+    return 0
+}
+""",
 }
 
 #: Traps: the same message, the same status, from both backends.
@@ -305,6 +343,10 @@ def operands(instruction) -> list[str]:
     if isinstance(instruction, (ir.Neg, ir.Not, ir.Copy, ir.Print)):
         return [instruction.operand]
     if isinstance(instruction, ir.Call):
+        # A call through a value reads the value: it is the last thing the call
+        # needs, after the arguments, and the backend loads it last.
+        if instruction.callee is not None:
+            return [*instruction.args, instruction.callee]
         return list(instruction.args)
     if isinstance(instruction, ir.Jump):
         return list(instruction.args)
@@ -314,6 +356,8 @@ def operands(instruction) -> list[str]:
         return [] if instruction.operand is None else [instruction.operand]
     if isinstance(instruction, (ir.Const, ir.Str)):
         return []
+    if isinstance(instruction, ir.FuncRef):
+        return []                                   # it names a function, not a value
     if isinstance(instruction, ir.ArrayLiteral):
         return list(instruction.items)
     if isinstance(instruction, ir.ArrayZeros):
@@ -347,7 +391,7 @@ def defined(instruction) -> str | None:
     """The value an instruction defines, if it defines one."""
     if isinstance(instruction, (ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.Copy, ir.Str, ir.Const,
                                 ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.Length,
-                                ir.SlotLoad, ir.StructNew, ir.Field)):
+                                ir.SlotLoad, ir.StructNew, ir.Field, ir.FuncRef)):
         return instruction.value
     if isinstance(instruction, ir.Call) and instruction.returns != "void":
         return instruction.value
@@ -3299,3 +3343,318 @@ class NativeF64Tests(unittest.TestCase):
         self.assertEqual(len(native_out[0].splitlines()), lines)
         self.assertEqual((c_out[0], c_out[1], c_out[2]),
                          (native_out[0], native_out[1], native_out[2]))
+
+
+class NativeFunctionValueTests(unittest.TestCase):
+    """A function is a value: one word, the address of its code, and no closure.
+
+    The claim has two halves and both are tested. The first is that the two backends
+    agree about a program that passes a function around — as an argument, in a local,
+    as a returned value, across a module. The second is structural: `funcref` and
+    `call` name the *same* link-time symbol, so a function reached through a value and
+    the same function called by name are one address, and the linker sees one
+    definition of it.
+
+    Negative controls: a generic function has no single address and is refused before
+    either backend sees it; a function the program only ever names as a value is still
+    compiled, which is the bug a `funcref` would otherwise be silent about.
+    """
+
+    EDITION = "edition 2;\n"
+
+    def agrees(self, source: str, name: str = "fnvalue") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def test_a_function_passed_as_an_argument_runs(self):
+        """`apply(twice, 21)`: the callee is a parameter, not a name."""
+        self.assertEqual(self.agrees(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+fn main() -> i64 {
+    print(apply(twice, 21))
+    return 0
+}
+"""), ["42"])
+
+    def test_a_function_held_in_a_local_runs(self):
+        """`let g: fn(i64) -> i64 = twice` — the value outlives the statement."""
+        self.assertEqual(self.agrees(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() -> i64 {
+    let g: fn(i64) -> i64 = twice
+    print(g(5))
+    return 0
+}
+"""), ["10"])
+
+    def test_a_function_returned_from_a_function_runs(self):
+        """`pick` answers a value; both of its answers are called."""
+        self.assertEqual(self.agrees(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn triple(x: i64) -> i64 {
+    return x * 3
+}
+
+fn pick(flag: bool) -> fn(i64) -> i64 {
+    if flag { return twice }
+    return triple
+}
+
+fn main() -> i64 {
+    let f = pick(true)
+    let g = pick(false)
+    print(f(10))
+    print(g(10))
+    return 0
+}
+"""), ["20", "30"])
+
+    def test_a_function_value_survives_a_loop_and_a_branch(self):
+        """A mutable local of function type crosses two joins per iteration.
+
+        The value is a block parameter like any other, which is the whole of the
+        claim: SSA with joins has nothing special to say about a function.
+        """
+        self.assertEqual(self.agrees(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn triple(x: i64) -> i64 {
+    return x * 3
+}
+
+fn main() -> i64 {
+    let f: fn(i64) -> i64 = twice
+    let i = 0
+    let total = 0
+    while i < 5 {
+        if i % 2 == 0 { f = triple } else { f = twice }
+        total = total + f(i)
+        i = i + 1
+    }
+    print(total)
+    return 0
+}
+"""), ["26"])
+
+    def test_a_function_of_six_arguments_called_through_a_value(self):
+        """Every argument register is full before the address is loaded.
+
+        The callee goes into a register the arguments do not use; if it went into a
+        seventh argument register by mistake, this is where it would show.
+        """
+        self.assertEqual(self.agrees(self.EDITION + """fn six(a: i64, b: i64, c: i64, d: i64, e: i64, g: i64) -> i64 {
+    return a + b + c + d + e + g
+}
+
+fn apply6(f: fn(i64, i64, i64, i64, i64, i64) -> i64, n: i64) -> i64 {
+    return f(n, n, n, n, n, n)
+}
+
+fn main() -> i64 {
+    print(apply6(six, 7))
+    return 0
+}
+"""), ["42"])
+
+    def test_a_function_of_no_arguments_called_through_a_value(self):
+        """An empty argument list is a call like any other."""
+        self.assertEqual(self.agrees(self.EDITION + """fn answer() -> i64 {
+    return 5
+}
+
+fn call0(f: fn() -> i64) -> i64 {
+    return f()
+}
+
+fn main() -> i64 {
+    print(call0(answer))
+    return 0
+}
+"""), ["5"])
+
+    def test_indirect_calls_nest(self):
+        """A value called on the answer of a call through another value.
+
+        The callee register is live while the argument is being computed, so a
+        backend that reused it for the inner call would call the wrong function.
+        """
+        self.assertEqual(self.agrees(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn triple(x: i64) -> i64 {
+    return x * 3
+}
+
+fn apply(f: fn(i64) -> i64, x: i64) -> i64 {
+    return f(x)
+}
+
+fn main() -> i64 {
+    let f: fn(i64) -> i64 = triple
+    print(f(apply(twice, 4)))
+    print(apply(twice, apply(triple, apply(twice, 1))))
+    return 0
+}
+"""), ["24", "12"])
+
+    def test_a_function_only_ever_named_as_a_value_is_reachable(self):
+        """A `funcref` is a use of a function, or the linker finds no symbol.
+
+        This is the whole of the reachability claim: the call that will run `body` is
+        a call through a register and names nobody, so a walk that collected callees
+        from `call` alone would leave `body` out of the program entirely.
+        """
+        module = lower_source(self.EDITION + """fn body() -> i64 {
+    return 7
+}
+
+fn run(f: fn() -> i64) -> i64 {
+    return f()
+}
+
+fn main() -> i64 {
+    return run(body)
+}
+""")
+        self.assertEqual([ir.symbol(function) for function in module.functions],
+                         ["nava.entry.body", "nava.entry.run", "nava.entry.main"],
+                         "a function the program never calls by name is compiled "
+                         "all the same")
+
+    def test_a_function_value_crosses_a_module(self):
+        """`harness::run("checked", checked)`: a value from another file's code.
+
+        The two functions are in two units, so the address is a relocation in one and
+        a definition in the other — the linker's job, and the shape the standard
+        library's own test runner has.
+        """
+        sources = {"harness.nv": self.EDITION + """pub fn run(name: str, body: fn() -> i64) -> i64 {
+    let failures = body()
+    if failures == 0 {
+        print("ok")
+        return 0
+    }
+    print("failed")
+    return failures
+}
+"""}
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            for name, text in sources.items():
+                (directory / name).write_text(text, encoding="utf-8")
+            path = write_source(directory, "main", self.EDITION + """import harness;
+
+fn body() -> i64 {
+    print("ran")
+    return 0
+}
+
+fn main() -> i64 {
+    return harness::run("body", body)
+}
+""")
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, ("ran\nok\n", "", 0))
+        self.assertEqual(native_out, c_out,
+                         "the two backends disagree about a function value from "
+                         "another module")
+
+    def test_the_ir_names_the_function_a_value_points_at(self):
+        """`funcref` says which function, in the text a reader and a diff both see."""
+        text = ir.dump(lower_source(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() -> i64 {
+    let g: fn(i64) -> i64 = twice
+    return g(5)
+}
+"""))
+        self.assertIn("%0 = funcref @nava.entry.twice : fn(i64) -> i64", text)
+        self.assertIn("call %0(", text, "the call names no function, only a value")
+
+    def test_a_value_and_a_direct_call_name_one_symbol(self):
+        """The address in the register is the address in the `call`.
+
+        A `funcref` and a direct call are two ways of writing one name, and the
+        linker resolves both to the same definition. If they were two namespaces — a
+        counter for labels, a symbol for calls — this is the test that would fail.
+        """
+        module = lower_source(self.EDITION + """fn twice(x: i64) -> i64 {
+    return x * 2
+}
+
+fn main() -> i64 {
+    let g: fn(i64) -> i64 = twice
+    print(g(5))
+    print(twice(6))
+    return 0
+}
+""")
+        units = x86_64.units(module)
+        entry = units[0]
+        named = [relocation.symbol for relocation in entry.relocations
+                 if relocation.symbol == "nava.entry.twice"]
+        self.assertEqual(len(named), 2,
+                         "one name for the value and one for the direct call")
+        defined = [symbol.name for unit in units for symbol in unit.symbols
+                   if symbol.name == "nava.entry.twice"]
+        self.assertEqual(len(defined), 1, "one definition of the function")
+
+    def test_the_encoding_of_a_call_through_a_register(self):
+        """`call *%r11` is FF /2; `lea rax, [rip+d]` is what fills it."""
+        assembler = x86.Assembler()
+        assembler.call_indirect(x86.R11)
+        self.assertEqual(assembler.buffer.hex(" "), "41 ff d3")
+        assembler = x86.Assembler()
+        assembler.lea_rip(x86.RAX, "nava.entry.twice")
+        self.assertEqual(assembler.buffer.hex(" "), "48 8d 05 00 00 00 00")
+
+    def test_a_generic_function_has_no_value(self):
+        """A template is instantiated by a call; it has no single address to take.
+
+        A negative control, and the reason a function value can be one word: there is
+        nothing to carry but an address, and a generic function has more than one.
+        """
+        source = self.EDITION + """fn id<T>(x: T) -> T {
+    return x
+}
+
+fn main() -> i64 {
+    let f: fn(i64) -> i64 = id
+    return f(7)
+}
+"""
+        with self.assertRaises(NavaError) as caught:
+            checked(source)
+        self.assertEqual(getattr(caught.exception, "code", None), "E0437")
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "generic", source)
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "native"),
+                         "--backend", "native"])
+        self.assertNotEqual(built.returncode, 0,
+                            "a program the checker refused was compiled anyway")
+        self.assertIn("E0437", built.stderr)

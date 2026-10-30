@@ -1,13 +1,15 @@
 """Checked AST → IR (PLAN.md N14a).
 
 This is the lowering the native backend consumes, and it is deliberately narrow:
-`i64`, `bool`, string literals, arrays of `i64`/`bool`/`str`, arithmetic,
+`i64`, `bool`, `f64`, string literals, arrays of `i64`/`bool`/`str`, arithmetic,
 comparisons, `if`, `while`, `for … in a..b`, `for … in array`,
-`break`/`continue`, function calls and `print`. Everything else — `f64`, slices,
-`Vec`, `String`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?`,
-module functions, the clock, the filesystem — is refused with `E0901` **naming the
-construct**, because the one thing a second backend must not do is compile a
-program it does not understand into something that runs.
+`break`/`continue`, function calls, a function taken as a value, `print`, slices,
+`Vec`, `HashMap`, `HashSet`, structs, enums, `match`, `defer`, `?` and module
+functions. Everything else — `String`, the clock, the filesystem and the builtins
+whose only implementation is the C runtime's (`str_split`, `read_f64`, `arg_*`,
+`chars_len`) — is refused with `E0901` **naming the construct**, because the one
+thing a second backend must not do is compile a program it does not understand
+into something that runs.
 
 Arrays arrived with N14c and bring the first thing in this lowering that is not an
 SSA value: **ownership**. An array is a handle, and a handle has one owner; the
@@ -29,6 +31,14 @@ Two properties matter more than the size of the subset:
   back edge — and a `continue`, which is an early back edge — passes the values it
   reached, so the loop needs no special case beyond the parameters.
 
+A **function value** is one word — the address of the function's code — and
+nothing more: there are no closures, so a function's own name is all a value has to
+carry. `funcref` names the function, an indirect `call` runs it, and both name the
+same link-time symbol a direct call does, so a function reached through a value and
+the same function called by name are one address. A function the program only ever
+passes along — never calls by name — is still reachable, because the call that will
+run it is a call through a register, and that call names no one.
+
 The lowering is total over what it accepts: there is no "best effort" path and no
 silently wrong answer.
 """
@@ -42,8 +52,8 @@ from ..model import (
     Unary, Variable, Variant, VariantValue, While,
 )
 from ..checker import BUILTINS
-from ..model import (is_map, is_set, is_string, is_vec, map_parts, set_element,
-                     vec_element)
+from ..model import (is_function_type, is_map, is_set, is_vec, map_parts,
+                     set_element, vec_element)
 from . import ir
 
 #: Types `print` can write in the native backend.
@@ -420,6 +430,8 @@ class Builder:
             if loaded is not None:
                 return loaded[0], loaded[1], block
             if node.name not in env:
+                if node.function is not None:
+                    return self.function_value(node, block)
                 raise Refused(f"the variable '{node.name}'", node.loc)
             value, typ = env[node.name]
             return value, typ, block
@@ -733,6 +745,31 @@ class Builder:
         self.emit(block, ir.Const(value, "bool", payload))
         return value
 
+    def note_function_type(self, typ: str, loc) -> None:
+        """A function value is one word here; a closure would not be.
+
+        The checker has already decided that a call through a value is well typed;
+        this is the lowering's own control, and it is what would have to change
+        first if a value ever came to carry an environment with it.
+        """
+        if not is_function_type(typ):
+            raise Refused(f"a call through a value of type '{typ}'", loc)
+
+    def function_value(self, node: Variable, block: ir.Block):
+        """A declared function named as a value: the address of its code.
+
+        The checker has already decided which function the name means, so this is
+        not a lookup — it is the one instruction that says "the address of that
+        function", which is a thing only a backend can know.
+        """
+        target = node.function
+        if target.type_params or getattr(target, "type_args", None):
+            raise Refused(f"the generic function '{target.qualified}' as a value",
+                          node.loc)
+        value = self.value()
+        self.emit(block, ir.FuncRef(value, ir.symbol(target), node.typ))
+        return value, node.typ, block
+
     def call(self, node: Call, block: ir.Block, env: dict):
         """A call to a declared function, wherever it is declared.
 
@@ -741,7 +778,22 @@ class Builder:
         function named, rather than resolved to something else.
         """
         if node.callee is not None:
-            raise Refused("a call through a function value", node.loc)
+            # A call through a value: the arguments are lowered the same way and
+            # in the same order, and only the callee changes — from a name the
+            # checker resolved to a word the program is holding.
+            if node.callee.name not in env:
+                raise Refused(f"a call through the variable '{node.callee.name}'",
+                              node.loc)
+            callee, callee_type = env[node.callee.name]
+            self.note_function_type(callee_type, node.loc)
+            arguments: list[str] = []
+            for argument in node.args:
+                value, _typ, block = self.expression(argument, block, env)
+                arguments.append(value)
+            result = self.value()
+            self.emit(block, ir.Call(result, "", arguments, node.typ or "void",
+                                     callee=callee))
+            return result, node.typ or "void", block
         if node.target is None:
             if not node.module and node.name == "array_zeros":
                 return self.array_zeros(node, block, env, owned=False)
@@ -1388,6 +1440,13 @@ def calls_in(body) -> list:
         seen.add(id(node))
         if isinstance(node, Call) and node.target is not None:
             found.append(node.target)
+        if isinstance(node, Variable) and node.function is not None:
+            # A function named as a value is reached too: the call that will run it
+            # is a call through a register, which this walk cannot see into. A
+            # function the program hands to `test::run` and never calls by name is
+            # compiled for the same reason a called one is — it is what the program
+            # asked for.
+            found.append(node.function)
         for value in vars(node).values():
             if isinstance(value, (list, tuple)):
                 for item in value:

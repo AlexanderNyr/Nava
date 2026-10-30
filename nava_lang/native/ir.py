@@ -182,12 +182,35 @@ class Copy:
 
 @record()
 class Call:
-    """`%v = call @name(%args)`, or `call @name(...)` when the function is `void`."""
+    """`%v = call @name(%args)`, or `call @name(...)` when the function is `void`.
+
+    `callee` is the other way to call: through a *value* that holds the address of
+    a function the program named. A backend has to be able to call through a
+    register to implement it, and the two are stated apart rather than inferred:
+    one names a function the checker resolved, the other reads a word whose value
+    no backend knows until it has laid the program out.
+    """
 
     value: str
     target: str
     args: list[str]
     returns: str
+    #: The value holding the function's address, when the call goes through one.
+    callee: str | None = None
+
+
+@record()
+class FuncRef:
+    """`%v = funcref @name : fn(T) -> R` — the address of a function, as a value.
+
+    A declared function used as a value is not a call and not a constant: it is
+    the address of code, and only the backend can know it. Stating it as an
+    instruction keeps that where the layout is decided.
+    """
+
+    value: str
+    target: str
+    typ: str
 
 
 @record()
@@ -589,6 +612,8 @@ def value_types(function: Function) -> dict[str, str]:
                     types[instruction.value] = instruction.typ
             elif isinstance(instruction, Copy):
                 types[instruction.value] = types[instruction.operand]
+            elif isinstance(instruction, FuncRef):
+                types[instruction.value] = instruction.typ
             elif isinstance(instruction, Call):
                 if instruction.returns != "void":
                     types[instruction.value] = instruction.returns
@@ -688,7 +713,12 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
     if isinstance(instruction, Call):
         arguments = ", ".join(f"%{item}" for item in instruction.args)
         left = f"%{instruction.value} = " if instruction.returns != "void" else ""
+        if instruction.callee is not None:
+            return f"{left}call %{instruction.callee}({arguments})"
         return f"{left}call @{instruction.target}({arguments})"
+    if isinstance(instruction, FuncRef):
+        return (f"%{instruction.value} = funcref @{instruction.target} "
+                f": {instruction.typ}")
     if isinstance(instruction, Print):
         return f"print {instruction.typ} %{instruction.operand}"
     if isinstance(instruction, ArrayLiteral):

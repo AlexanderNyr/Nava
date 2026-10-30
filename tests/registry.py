@@ -1409,6 +1409,25 @@ REGISTERED_TESTS = {
         "test_a_for_over_a_table_is_slots_live_and_key",
         "test_the_table_states_the_types_it_holds",
     },
+    #: N14l: a function is a value. One word, the address of its code, no closure —
+    #: so the evidence is that the two backends agree on a function passed, held,
+    #: returned and crossed over a module, and that a value and a direct call name
+    #: one symbol.
+    "NativeFunctionValueTests": {
+        "test_a_function_passed_as_an_argument_runs",
+        "test_a_function_held_in_a_local_runs",
+        "test_a_function_returned_from_a_function_runs",
+        "test_a_function_value_survives_a_loop_and_a_branch",
+        "test_a_function_of_six_arguments_called_through_a_value",
+        "test_a_function_of_no_arguments_called_through_a_value",
+        "test_indirect_calls_nest",
+        "test_a_function_only_ever_named_as_a_value_is_reachable",
+        "test_a_function_value_crosses_a_module",
+        "test_the_ir_names_the_function_a_value_points_at",
+        "test_a_value_and_a_direct_call_name_one_symbol",
+        "test_the_encoding_of_a_call_through_a_register",
+        "test_a_generic_function_has_no_value",
+    },
     "NativeRuntimeTests": {
         "test_a_bool_prints_as_true_or_false",
         "test_a_string_is_written_byte_for_byte_and_then_a_newline",
@@ -1467,6 +1486,7 @@ REGISTERED_TESTS = {
         "test_an_enum_is_declared_with_the_name_the_checker_gave_it",
         "test_array_access_goes_through_the_checked_helpers",
         "test_every_function_is_defined_once_under_the_name_the_ast_path_used",
+        "test_every_lowered_program_named_unprintable_says_why",
         "test_every_program_in_the_subset_is_printed_from_the_ir",
         "test_the_body_says_it_came_from_the_ir",
         "test_the_escape_hatch_asks_for_the_old_path",
@@ -1756,6 +1776,7 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeF64Tests"),
                                (test_native, "NativeVectorTests"),
                                (test_native, "NativeTableTests"),
+                               (test_native, "NativeFunctionValueTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

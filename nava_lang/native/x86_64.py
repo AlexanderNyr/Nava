@@ -283,7 +283,7 @@ class Generator:
                                             ir.SlotLoad, ir.StructNew, ir.Field,
                                             ir.Builtin, ir.TextCompare, ir.Variant,
                                             ir.Tag, ir.Payload, ir.Slice, ir.Slots,
-                                            ir.Live, ir.KeyAt)):
+                                            ir.Live, ir.KeyAt, ir.FuncRef)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -351,6 +351,9 @@ class Generator:
         if isinstance(instruction, ir.Copy):
             self.load(instruction.operand, RAX)
             self.store(instruction.value, RAX)
+            return
+        if isinstance(instruction, ir.FuncRef):
+            self.funcref(instruction)
             return
         if isinstance(instruction, ir.Call):
             self.call(function, instruction)
@@ -806,12 +809,31 @@ class Generator:
         self.fail(ZERO_MESSAGES[op])
         self.code.label(done)
 
+    def funcref(self, instruction: ir.FuncRef) -> None:
+        """The address of a function: one `lea` against the symbol it was given.
+
+        It is the same symbol a direct `call` names, and it is a relocation for the
+        same reason — the address of a function is not known until the linker has
+        placed it. So a function taken as a value and the same function called by
+        name are one address, whichever unit either of them is in.
+        """
+        self.code.lea_rip(RAX, instruction.target)
+        self.store(instruction.value, RAX)
+
     def call(self, function: ir.Function, instruction: ir.Call) -> None:
+        """A call: through a name the checker resolved, or through a value.
+
+        The arguments go in the ABI's registers in either case, in the order the
+        IR states them — the order the language evaluates them in. What differs is
+        only how the address is had: a direct call names a symbol the linker
+        resolves, an indirect one reads a word and jumps to it.
+        """
+        named = instruction.target if instruction.callee is None else "a value"
         if len(instruction.args) > MAX_ARGUMENTS:
             raise make(
                 "E0901",
                 f"the native backend does not implement a call with more than "
-                f"{MAX_ARGUMENTS} arguments (calling '{instruction.target}' in "
+                f"{MAX_ARGUMENTS} arguments (calling '{named}' in "
                 f"'{function.name}')",
                 None,
                 hint="build with the C backend (the default): `nava build` without "
@@ -819,7 +841,13 @@ class Generator:
             )
         for index, argument in enumerate(instruction.args):
             self.load(argument, ARGUMENT_REGISTERS[index])
-        self.code.call(instruction.target)
+        if instruction.callee is not None:
+            # The address is loaded last, into a register the arguments do not
+            # use: `r11` is the one this backend keeps as a scratch register.
+            self.load(instruction.callee, R11)
+            self.code.call_indirect(R11)
+        else:
+            self.code.call(instruction.target)
         if instruction.returns != "void":
             self.store(instruction.value, RAX)
 

@@ -1996,6 +1996,96 @@ the type in the message, rather than half-compiled.
 
 ---
 
+#### Delivery record N14l (2026-10-30)
+
+**A function is a value.** Until now the only way to run a function was to name it: a
+call carried the callee's name, the linker resolved the name, and that was the whole
+story. N14l makes a declared function something a program can *hold* — pass to another
+function, keep in a local, return from a function, hand to a function in another module
+— which is what the standard library's own test runner does (`test::run(name, body:
+fn() -> i64)`) and therefore what stood between the IR and the last fixture.
+
+A function value is **one word**: the address of the function's code, and nothing else.
+There are no closures, so there is no environment to carry — which is the decision, and
+the reason it can be one word. Two instructions say it. `funcref` names the function and
+answers its address; a `call` whose `callee` is a value instead of a name runs whatever
+address the value holds. Both name the **same link-time symbol a direct call does**, so
+a function reached through a value and the same function called by name are one address
+and the linker sees one definition — the alternative, a second namespace of labels for
+functions, is what `test_a_value_and_a_direct_call_name_one_symbol` exists to catch.
+
+Three backend facts follow. Native: `funcref` is one `lea rax, [rip + symbol]` whose
+displacement is a `pc32` relocation like any call's, and an indirect call loads the
+address into `r11` — the one register this backend keeps as a scratch, and none of the
+six argument registers — and emits `call *%r11` (`FF /2`), which is the only branch in
+the backend the linker has nothing to say about. C: a function pointer has no type
+expression in C, only a typedef, so the printer was given the program's function-type
+table (`cgen.function_types`, the same table the AST walk uses) and emits the typedef
+block in front of a body printed from the IR. And in the lowering: **a `funcref` is a
+use of a function**, so the reachability walk follows a value as well as a name — the
+bug this increment found first, described below.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A function passed as an argument runs | `NativeFunctionValueTests.test_a_function_passed_as_an_argument_runs` | `apply(twice, 21)` prints `42` on both backends |
+| A function held in a local runs | `test_a_function_held_in_a_local_runs` | `let g: fn(i64) -> i64 = twice; g(5)` → `10` |
+| A function returned from a function runs | `test_a_function_returned_from_a_function_runs` | `pick(true)` and `pick(false)` answer two values, called as `20` and `30` |
+| A function value crosses an SSA join | `test_a_function_value_survives_a_loop_and_a_branch` | a mutable local of function type reassigned in both arms of an `if` inside a `while`: `26`, so the value is a block parameter like any other |
+| Six arguments, then the address | `test_a_function_of_six_arguments_called_through_a_value` | `apply6(six, 7)` → `42`: every argument register is full before the address is loaded |
+| No arguments at all | `test_a_function_of_no_arguments_called_through_a_value` | `call0(answer)` → `5` |
+| Indirect calls nest | `test_indirect_calls_nest` | `f(apply(twice, 4))` → `24` and `apply(twice, apply(triple, apply(twice, 1)))` → `12`: the callee register survives the call that computes its argument |
+| A function only ever named as a value is reachable | `test_a_function_only_ever_named_as_a_value_is_reachable` | the module is `body`, `run`, `main` — `body` is never called by name anywhere in the program |
+| A function value crosses a module | `test_a_function_value_crosses_a_module` | `harness::run("body", body)` prints `ran` then `ok`, exit 0, identical through both backends |
+| The IR names the function a value points at | `test_the_ir_names_the_function_a_value_points_at` | `%0 = funcref @nava.entry.twice : fn(i64) -> i64`, and the call is `call %0(%1)` — it names a value, not a function |
+| A value and a direct call name one symbol | `test_a_value_and_a_direct_call_name_one_symbol` | exactly two relocations on `nava.entry.twice` in the entry unit (the `lea` and the `call`) and exactly one definition of it in the program |
+| The encoding is what the manual says | `test_the_encoding_of_a_call_through_a_register` | `41 ff d3` for `call *%r11`, `48 8d 05 …` for `lea rax, [rip+d]` |
+| A generic function has no value | `test_a_generic_function_has_no_value` | `let f: fn(i64) -> i64 = id` is `E0437` before either backend sees it, and a native build is refused with the same code |
+| The corpus holds | the fixture sweep | **31 of 32** fixtures build and run identically, **0 differ**, 1 refused by name (`self_test`) |
+| The IR is well-formed with a function value in it | `NativeIRTests`, with `function_value` added to `PROGRAMS` | the walk now counts the callee as an operand of an indirect call and a `funcref` as a definition, so the value is dominated like any other — the loop carries it as a block parameter (`^while_head1(3: fn(i64) -> i64, …)`) |
+| The gap is named, not silent | `CFromIRTests` (`self_test` moved to `LOWERED_NOT_PRINTED`, a new `cgen_ir.unprintable`) | `OUTSIDE_THE_SUBSET` is empty — the lowering refuses no fixture now; `self_test` lowers and is declined by the C printer for `str_split` |
+
+One bug came out of running, and it is the reason the reachability walk is in the
+record. **A function the program only ever passed along was not compiled**: `calls_in`
+collected callees from `Call.target`, and a call through a value has no `target` — so
+`twice` in `apply(twice, 21)` was never reached, never emitted, and the build stopped
+with `LinkError: undefined symbol(s): nava.entry.twice`. The linker was right and the
+lowering was wrong; a `funcref` is a use of a function exactly as a `call` is, and the
+walk now follows `Variable.function` as well. It could not have been found by a fixture
+that calls the function by name somewhere, which is the same argument the generated
+sequences made at N14k.
+
+A second decision is worth stating because it was tried the other way first. Making a
+function's assembly label *be* its link-time symbol (rather than a per-module counter)
+looks like the obvious way to let a `funcref` name what a `call` names; it is not,
+because it turns every intra-unit call into a distance the assembler computes instead
+of a name the linker resolves, and the test of that name — every call is a
+relocation — is the invariant that says which of the two the backend chose. The
+`lea` takes a relocation for the same reason the `call` does, so the label can stay a
+local name and both instructions still agree on one symbol.
+
+The audit is re-measured: **21 877 lines, 27 modules, 772 functions** (21 684 / 27 / 766
+at N14k) — no new module, 6 functions: `function_value`, `note_function_type`,
+`funcref`, `call_indirect` and the two halves of `unprintable`. The suite is **1 088
+tests, 1 636 subtests**, `tests/registry.py` reports 1 018 registered tests with the same
+11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic codes, and the overhead record
+is re-measured rather than assumed: **108 832 tokens**, unchanged, because the guide
+describes the language and this increment changed which backend compiles which part of
+it.
+
+What this increment does **not** claim: that the AST walk is gone — 1 of the 32 fixtures
+is still printed from it (`self_test`), now for `String` and the builtins the runtime has
+no native form of (`string_new`, `string_push`, `string_text`, `str_split`, `clock_*`)
+rather than for a function value; that a function value can be stored in an array, a
+struct field or a container (the language has no element type for it — `Vec(fn(i64) ->
+i64)` is `E0203`, and a struct literal holding one is `E0202`); that a call answers
+something callable (`f(x)(y)` is `E0438`: the second paren is read as type arguments, on
+both backends alike); that a function value is ever anything
+but the address of a declared function — there are no closures, and a generic function
+has no single address at all; or that an indirect call is as fast as a direct one (no
+benchmark was run).
+
+---
+
 ### Phase N15 — Self-hosting and bootstrap
 
 **Objective:** Nava compiles Nava.

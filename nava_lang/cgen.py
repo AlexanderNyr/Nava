@@ -3604,7 +3604,9 @@ def ir_module(program: Program):
         if getattr(error, "code", None) == "E0901":
             return None
         raise
-    return module if cgen_ir.supports(module) else None
+    # The function-type table travels with the module: the typedef names are the
+    # program's, and without them a function value has no C type to print.
+    return module if cgen_ir.supports(module, function_types(program)) else None
 
 
 def array_helpers(program: Program) -> str:
@@ -3619,6 +3621,19 @@ def array_helpers(program: Program) -> str:
     generator = CGenerator(program)
     generator.emit_array_types()
     generator.emit_arrays()
+    return "".join(line + "\n" for line in generator.lines)
+
+
+def function_type_helpers(program: Program) -> str:
+    """One typedef per function type the program mentions, in front of the body.
+
+    A function value is a C function pointer, and C has no type expression for a
+    pointer to function: it needs a typedef, declared before the first line that
+    names it. The AST walk emits this block from inside `generate`; a body printed
+    from the IR needs the same block, from the same table, in front of it.
+    """
+    generator = CGenerator(program)
+    generator.emit_function_types()
     return "".join(line + "\n" for line in generator.lines)
 
 
@@ -3645,7 +3660,9 @@ def generate(program: Program, capabilities=None) -> str:
     if module is not None:
         from . import cgen_ir
 
-        helpers = array_helpers(program) + container_helpers(program)
-        return assemble_body(cgen_ir.body(module, c_names(program), helpers),
+        helpers = (function_type_helpers(program) + array_helpers(program)
+                   + container_helpers(program))
+        return assemble_body(cgen_ir.body(module, c_names(program), helpers,
+                                          fnptr=function_types(program)),
                              capabilities)
     return CGenerator(program, capabilities).generate()

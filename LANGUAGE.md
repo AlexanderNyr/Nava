@@ -1478,17 +1478,19 @@ The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `b
 and a slice, `+ - * / %`
 with the checks below, `== != < <= > >=`, `!`, `&&`, `||` with short-circuit
 evaluation, `if`/`else`, `while`, `for … in a..b`, `break`, `continue`, labelled jumps,
-calls (including recursion and calls into modules, up to six arguments), a call that
+calls (including recursion and calls into modules, up to six arguments), a function taken
+as a value — passed to a function, held in a local, returned from one, or handed to a
+function of another module — and a call through such a value, `Vec(T)`,
+`HashMap(K, V)` and `HashSet(T)`, a call that
 returns a `str` (a `str` is a pointer, so it travels like one), struct values —
 a literal, a field read, a field write, a struct parameter and a struct of numbers,
-bools, strings and structs — and `print` of an `i64`, a `bool` or a `str`.
+bools, strings and structs — and `print` of an `i64`, a `bool`, a `str` or an `f64`.
 
-`f64` **arithmetic and comparison** are compiled, and printing one is not: the
-language's printed form is the shortest decimal that reads back as the same value, which
-the C runtime gets from `snprintf` and this backend has to compute itself, so `print` of
-an `f64` is refused by name until that conversion is its own increment. A program can
-therefore observe a float through `if` and `while` on the native backend, and not yet
-through `print`.
+`f64` is compiled end to end, printing included. The language's printed form is the
+shortest decimal that reads back as the same value, which the C runtime gets from
+`snprintf` and this backend computes itself — on base-10^9 bignums, with no `strtod`,
+no `snprintf` and no floating point in the conversion — so a program observes the same
+text from either backend, `if`, `while` and `print` alike.
 
 Enums are values with a tag: `Shape::Circle(2)` is a record whose first word says which
 variant it is, a `match` compares that word, and a pattern binds the fields the variant
@@ -1532,12 +1534,19 @@ array, by literal or by a write into a slot, is **copied** as it enters, so two 
 named from one record stay two; `array_zeros` of a struct element fills the array with a
 zeroed record each.
 
-Everything else — `Vec`, `String`, `HashMap`, `HashSet`, a call through a
-function value, a generic function, an enum payload of struct type, a struct field that
-owns storage (`String`, `Vec`, a map, a set, an array), and the
-builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem and
-argument functions) — is refused with `E0901`, **naming the construct and the
-function**. A
+A function value is **one word** — the address of the function's code — and nothing
+else: there are no closures, so a value carries no environment, and a generic function
+has no single address to take. The representation says it as two instructions: `funcref`
+names the function a value points at, and a `call` whose callee is a value runs whatever
+address it holds. Both name the same link-time symbol a direct call does, so a function
+reached through a value and the same function called by name are one address, and the
+linker sees one definition of it.
+
+Everything else — `String`, a generic function, an enum payload of struct type, a struct
+field that owns storage (`String`, `Vec`, a map, a set, an array), and the
+builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem,
+argument functions and the clock) — is refused with `E0901`, **naming the construct and
+the function**. A
 builtin is refused by the *instruction* rather than by the lowering: the IR says what
 the program means, and the backend says which routine it does not have. So is a generic
 function with more than one instantiation: an instantiation carries no type argument in

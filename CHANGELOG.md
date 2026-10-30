@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+N14l: **a function is a value** — one word, the address of its code, with no closure.
+
+- A declared function can now be passed to a function, kept in a local, returned from
+  one and handed to a function in another module: two instructions say it — `funcref`
+  answers the address, and a `call` whose callee is a value runs it. Both name the same
+  link-time symbol a direct call does, so a function reached through a value and the
+  same function called by name are one address.
+- Native: `funcref` is one `lea rax, [rip + symbol]` with a `pc32` relocation like any
+  call's, and an indirect call loads the address into `r11` and emits `call *%r11` —
+  the one branch in the backend the linker has nothing to say about. C: a function
+  pointer needs a typedef, so the printer takes the program's function-type table and
+  emits the typedef block in front of a body printed from the IR.
+- A `funcref` is a *use* of a function, and the reachability walk now follows a value
+  as well as a name: without it, the only caller of `apply(twice, 21)` names nobody,
+  and the build stopped with an undefined symbol for a function the program had asked
+  for by name.
+- `self_test` moved: the lowering refuses no fixture any more, so `OUTSIDE_THE_SUBSET`
+  in `tests/test_cgen_ir.py` is empty and `self_test` is in `LOWERED_NOT_PRINTED`,
+  declined by the C printer for `String` and `str_split` and named as a reason by the
+  new `cgen_ir.unprintable`. **31 of 32** fixtures still build and run identically.
+- Still refused by name: `String`, `str_from_f64`, `read_f64`, `chars_len`, the
+  filesystem, the argument functions and the clock.
+
 N14j: **`print f64` through one IR** — the shortest decimal that reads back, converted
 with integers only.
 
@@ -48,7 +71,8 @@ N14k: **`Vec(T)`, `HashMap(K, V)` and `HashSet(T)`** — the two containers that
 - `map_basics` and `set_basics` left the AST walk: **31 of 32** fixtures build and
   run identically through both backends, and the only one left is `self_test`.
 - Still refused by name: `String`, a function used as a value, `str_from_f64`,
-  `read_f64`, `chars_len`, the filesystem and the argument functions.
+  `read_f64`, `chars_len`, the filesystem and the argument functions. (N14l took the
+  function value out of this list.)
 
 N14i: **slices and arrays of structs through one IR** — a view that owns nothing, and an
 element that is one word.

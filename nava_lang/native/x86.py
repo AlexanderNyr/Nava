@@ -252,6 +252,15 @@ class Assembler:
         self.emit(b"\x0F" + bytes([0x80 + codes[condition]]))
         self.emit(self._relative(label))
 
+    def call_indirect(self, register: int) -> None:
+        """`call *%reg`: FF /2 — a call through a value the program is holding.
+
+        The one call a backend cannot resolve at link time: the address is in a
+        register, so the relocation table has nothing to say about it and the
+        branch has no label.
+        """
+        self.emit(_rex(b=register) + b"\xFF" + _modrm(3, 2, register))
+
     def call(self, label: str) -> None:
         """`call rel32`: E8 rel32."""
         self.emit(b"\xE8")

@@ -46,14 +46,15 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "results_chain", "slices_basic", "struct_arrays", "floats",
                  "map_basics", "set_basics")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
-#: refusal, and named separately so that neither becomes the other by accident. The
-#: list is empty: every program that lowers is printed from the IR as well, and the
-#: list stays here so that the next gap is named rather than discovered.
-LOWERED_NOT_PRINTED = ()
+#: refusal, and named separately so that neither becomes the other by accident.
+#: `self_test` lowers since a function became a value; what it still needs is the
+#: `String` builder (`string_new`/`string_push`/`string_text`), `str_split` and the
+#: three `clock_*` builtins.
+LOWERED_NOT_PRINTED = ("self_test",)
 #: Programs whose C must still come from the AST walk, because the lowering refuses
-#: them by name (`E0901`). What is left is `String`, a function used as a value and
-#: the builtins the runtime has no native form of.
-OUTSIDE_THE_SUBSET = ("self_test",)
+#: them by name (`E0901`). Empty: the lowering now accepts every fixture, which is
+#: what makes the second list the only gap left.
+OUTSIDE_THE_SUBSET = ()
 MARKER = "A lowering of the shared IR"
 
 
@@ -144,6 +145,20 @@ class CFromIRTests(unittest.TestCase):
                                path=fixture(name))
                 self.assertNotIn(MARKER, text)
 
+    def test_every_lowered_program_named_unprintable_says_why(self):
+        """A gap is a named instruction, not a program that quietly takes one path.
+
+        `LOWERED_NOT_PRINTED` is the plan for this printer; an entry without a
+        reason would be a gap nobody could close.
+        """
+        for name in LOWERED_NOT_PRINTED:
+            with self.subTest(fixture=name):
+                path = fixture(name)
+                program = program_of(path.read_text(encoding="utf-8"), path=path)
+                reason = cgen_ir.unprintable(lower.lower(program),
+                                             cgen.function_types(program))
+                self.assertIsNotNone(reason, f"{name} is printable from the IR now")
+
     def test_a_program_the_ir_expresses_but_this_printer_does_not(self):
         """The gap between the two halves of the boundary is stated, not implied.
 
@@ -156,9 +171,9 @@ class CFromIRTests(unittest.TestCase):
                 self.assertIsNotNone(module, f"{name} no longer lowers")
                 self.assertFalse(cgen_ir.supports(module),
                                  f"{name} is printable now; move it to IN_THE_SUBSET")
-                text = emitted(fixture(name).read_text(encoding="utf-8"))
+                text = emitted(fixture(name).read_text(encoding="utf-8"),
+                               path=fixture(name))
                 self.assertNotIn(MARKER, text)
-                self.assertIn("nv_format_f64", text)
 
     def test_the_names_in_the_artefact_do_not_depend_on_the_path(self):
         """A function's C name is the program's, so a crash report means one thing.

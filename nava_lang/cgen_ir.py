@@ -29,12 +29,20 @@ Four decisions worth stating:
   translation unit as a lowering of the IR, and one comment per function naming the
   link-time symbol, so a reader of the artefact can tell which path produced it without
   reading the compiler.
+* **A function value is printed with the program's own typedefs.** C has no type
+  expression for a pointer to a function, only a typedef, and the names of those
+  typedefs are the checked program's (`cgen.function_types`) — the same table the AST
+  path uses. The table travels with the module into `supports()` and into the printer,
+  so a program that names a function as a value has one C type for it whichever path
+  printed the file, and a program whose function types this printer was not given is
+  declined rather than printed with a guess.
 """
 from __future__ import annotations
 
-from .cgen import c_string, map_tag, set_tag, vec_tag
+from .cgen import c_string, function_types, map_tag, set_tag, vec_tag
 from .checker import mangle
-from .model import is_map, is_set, is_vec, map_parts, set_element, vec_element
+from .model import (is_function_type, is_map, is_set, is_vec, map_parts,
+                    set_element, vec_element)
 from .native import ir
 
 #: The C spelling of a scalar IR type. `void` is here for a function that returns
@@ -105,7 +113,7 @@ SUPPORTED = (
     ir.Print, ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore,
     ir.Length, ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field,
     ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Slice, ir.Jump,
-    ir.Branch, ir.Ret, ir.Unreachable, ir.Slots, ir.Live, ir.KeyAt,
+    ir.Branch, ir.Ret, ir.Unreachable, ir.Slots, ir.Live, ir.KeyAt, ir.FuncRef,
 )
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
@@ -140,7 +148,7 @@ def array_element(typ: str, structs: dict | None = None) -> str | None:
 
 
 def c_type(typ: str, structs: dict | None = None,
-           enums: dict | None = None) -> str:
+           enums: dict | None = None, fnptr: dict | None = None) -> str:
     """The C type of an IR value, or a KeyError naming the type nobody can spell."""
     if typ in SCALAR_TYPES:
         return SCALAR_TYPES[typ]
@@ -159,6 +167,9 @@ def c_type(typ: str, structs: dict | None = None,
         return f"nv_map_{map_tag(typ)} *"
     if is_set(typ):
         return f"nv_set_{set_tag(typ)} *"
+    pointer = fnptr.get(typ) if fnptr else None
+    if pointer is not None:
+        return pointer
     raise KeyError(typ)
 
 
@@ -172,7 +183,7 @@ def is_struct(typ: str, structs: dict | None = None) -> bool:
 
 
 def spellable(typ: str, structs: dict | None = None,
-              enums: dict | None = None) -> bool:
+              enums: dict | None = None, fnptr: dict | None = None) -> bool:
     """Whether `c_type` can name this type."""
     if typ in SCALAR_TYPES or array_element(typ, structs) is not None:
         return True
@@ -184,8 +195,8 @@ def spellable(typ: str, structs: dict | None = None,
         key, value = map_parts(typ)
         return spellable(key, structs, enums) and spellable(value, structs, enums)
     if is_set(typ):
-        return spellable(set_element(typ), structs, enums)
-    return False
+        return spellable(set_element(typ), structs, enums, fnptr)
+    return bool(fnptr and is_function_type(typ) and typ in fnptr)
 
 
 def variable(value: str) -> str:
@@ -252,35 +263,54 @@ def value_types(function: ir.Function) -> dict[str, str]:
     return ir.value_types(function)
 
 
-def supports(module: ir.Module) -> bool:
-    """Whether this printer can print the whole module, and print it correctly."""
+def supports(module: ir.Module, fnptr: dict | None = None) -> bool:
+    """Whether this printer can print the whole module, and print it correctly.
+
+    `fnptr` is the program's function-type table (`cgen.function_types`): the
+    typedef names a function value is printed with. Without it a function value
+    has no C type this printer can spell, and a program that has one is declined
+    rather than printed with a guess at its type.
+    """
+    return unprintable(module, fnptr) is None
+
+
+def unprintable(module: ir.Module, fnptr: dict | None = None) -> str | None:
+    """What this printer cannot print about `module`, or None if it prints it all.
+
+    `supports` answers yes or no; this answers *which thing*, so that a program the
+    lowering accepts but this printer declines has a named reason instead of a
+    silence. The reason is what the next piece of work is.
+    """
     structs = module.structs
     enums = module.enums
     for function in module.functions:
-        if not spellable(function.returns, structs, enums):
-            return False
-        for _name, typ in function.params:
-            if not spellable(typ, structs, enums):
-                return False
+        if not spellable(function.returns, structs, enums, fnptr):
+            return f"the return type of '{function.name}' ({function.returns})"
+        for name, typ in function.params:
+            if not spellable(typ, structs, enums, fnptr):
+                return f"the type of parameter '{name}' of '{function.name}' ({typ})"
         for cell in function.slots:
-            if not spellable(cell.typ, structs, enums):
-                return False
+            if not spellable(cell.typ, structs, enums, fnptr):
+                return f"the type of a cell of '{function.name}' ({cell.typ})"
         types = value_types(function)
-        for typ in types.values():
-            if not spellable(typ, structs, enums):
-                return False
+        for value, typ in types.items():
+            if not spellable(typ, structs, enums, fnptr):
+                return f"the type of {value} in '{function.name}' ({typ})"
         for block in function.blocks:
             for instruction in block.instructions:
                 if not isinstance(instruction, SUPPORTED):
-                    return False
-                if not instruction_supported(instruction, types, structs, enums):
-                    return False
-    return True
+                    return (f"the instruction '{type(instruction).__name__}' in "
+                            f"'{function.name}'")
+                if not instruction_supported(instruction, types, structs, enums, fnptr):
+                    return (f"the instruction '{type(instruction).__name__}' in "
+                            f"'{function.name}' ({instruction})")
+    return None
 
 
 def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
                           structs: dict | None = None,
-                          enums: dict | None = None) -> bool:
+                          enums: dict | None = None,
+                          fnptr: dict | None = None) -> bool:
     """The per-instruction half of `supports()`: types this printer must not guess."""
     if isinstance(instruction, ir.Cmp):
         # Two `str` values compare by pointer in C, so a comparison of strings is never
@@ -330,7 +360,11 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
     if isinstance(instruction, ir.Call):
         # A call answers whatever its callee returns, including a struct: the C type of
         # the value is the callee's return type, and both are spelled the same way.
-        return spellable(instruction.returns, structs, enums)
+        return spellable(instruction.returns, structs, enums, fnptr)
+    if isinstance(instruction, ir.FuncRef):
+        # A function value is a C function pointer, which C can only spell through a
+        # typedef: no typedef for this exact signature, no C type for the variable.
+        return spellable(instruction.typ, structs, enums, fnptr)
     return True
 
 
@@ -338,8 +372,13 @@ class Printer:
     """One program, printed: the names it uses and the functions it emits."""
 
     def __init__(self, module: ir.Module, names: dict[str, str] | None = None,
-                 helpers: str = "") -> None:
+                 helpers: str = "", fnptr: dict[str, str] | None = None) -> None:
         self.module = module
+        #: A function type -> the typedef it is printed as. The names are the
+        #: checked program's (`cgen.function_types`), which is the same table the
+        #: AST path uses, so a function value has one C type either way it is
+        #: printed.
+        self.fnptr = dict(fnptr or {})
         #: The per-array-type helpers, already printed: the IR calls them by name and
         #: the generated family is the same one the AST path uses.
         self.helpers = helpers
@@ -434,7 +473,7 @@ class Printer:
         return lines
 
     def c_type(self, typ: str) -> str:
-        return c_type(typ, self.module.structs, self.module.enums)
+        return c_type(typ, self.module.structs, self.module.enums, self.fnptr)
 
     def signature(self, function: ir.Function) -> str:
         params = ", ".join(f"{self.c_type(typ)} {variable(name)}"
@@ -600,9 +639,20 @@ class Printer:
             if instruction.typ == "void":
                 return [f"    {call};"]
             return [f"    {variable(instruction.value)} = {call};"]
+        if isinstance(instruction, ir.FuncRef):
+            # A function named as a value is the address of its code, and the C name
+            # of that code is the checker's -- the same name a direct call prints, so
+            # the two paths cannot disagree about which function a value names.
+            return [f"    {variable(instruction.value)} = "
+                    f"{self.call_name(instruction.target)};"]
         if isinstance(instruction, ir.Call):
             arguments = ", ".join(variable(argument) for argument in instruction.args)
-            call = f"{self.call_name(instruction.target)}({arguments})"
+            if instruction.callee is not None:
+                # A call through a value: the callee is not named here, it is whatever
+                # function the pointer holds at this point.
+                call = f"(*{variable(instruction.callee)})({arguments})"
+            else:
+                call = f"{self.call_name(instruction.target)}({arguments})"
             if instruction.returns == "void":
                 return [f"    {call};"]
             return [f"    {variable(instruction.value)} = {call};"]
@@ -728,7 +778,7 @@ def array_literal(instruction: ir.ArrayLiteral, structs: dict | None = None) -> 
 
 
 def body(module: ir.Module, names: dict[str, str] | None = None,
-         helpers: str = "") -> str:
+         helpers: str = "", fnptr: dict[str, str] | None = None) -> str:
     """The translated program, without the runtime prelude.
 
     `names` is the C backend's function table, so that the names in the artefact do not
@@ -737,4 +787,4 @@ def body(module: ir.Module, names: dict[str, str] | None = None,
     struct declarations, because a helper that copies an element needs the element's
     `sizeof`, and before the functions, because they are what calls it.
     """
-    return Printer(module, names, helpers).body()
+    return Printer(module, names, helpers, fnptr=fnptr).body()
