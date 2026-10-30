@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from . import limits, runtime
+from .diagnostics import NavaError
 from .model import (
     ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, Defer, Expr, ExprStmt,
     Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
@@ -2599,22 +2600,8 @@ class CGenerator:
         return self.assemble()
 
     def assemble(self) -> str:
-        """Runtime units the program can reach, then the translated program.
-
-        Selecting the runtime is the N8 optimisation: a program that never
-        touches files, `f64` or `[bool]` arrays no longer pays the C compiler
-        for those helpers. The closure is computed from the identifiers the
-        generated body mentions, so nothing that can be called is dropped.
-        """
-        body = "\n".join(self.lines) + "\n"
-        if os.environ.get("NAVA_FULL_RUNTIME") == "1":
-            # Escape hatch for benchmarks and for bisecting a suspected helper
-            # dependency: emit the whole runtime exactly as N7 did.
-            text = RUNTIME
-        else:
-            text = runtime.select(RUNTIME, set(runtime.SYMBOL.findall(body)))
-        text = text.replace("/* NV_CAPABILITIES */", capability_block(self.capabilities))
-        return text + "\n" + body
+        """Runtime units the program can reach, then the translated program."""
+        return assemble_body("\n".join(self.lines) + "\n", self.capabilities)
 
     def frame_exit(self, frame: int) -> None:
         """Leave one block: run its deferred bodies, then release its arrays.
@@ -3557,5 +3544,66 @@ def capability_block(capabilities) -> str:
     return "\n".join(lines)
 
 
+def assemble_body(body: str, capabilities=None) -> str:
+    """A translation unit: the runtime the body can reach, then the body.
+
+    Selecting the runtime is the N8 optimisation: a program that never touches
+    files, `f64` or `[bool]` arrays no longer pays the C compiler for those
+    helpers. The closure is computed from the identifiers the generated body
+    mentions, so nothing that can be called is dropped.  Both ways of producing
+    the body share this, because the prelude is not a property of a lowering.
+    """
+    body = body if body.endswith("\n") else body + "\n"
+    if os.environ.get("NAVA_FULL_RUNTIME") == "1":
+        # Escape hatch for benchmarks and for bisecting a suspected helper
+        # dependency: emit the whole runtime exactly as N7 did.
+        text = RUNTIME
+    else:
+        text = runtime.select(RUNTIME, set(runtime.SYMBOL.findall(body)))
+    text = text.replace("/* NV_CAPABILITIES */", capability_block(dict(capabilities or {})))
+    return text + "\n" + body
+
+
+def c_names(program: Program) -> dict[str, str]:
+    """The C name of every function, keyed by its link-time symbol.
+
+    The checker numbers each function once (`nv_fn_<ordinal>`), and both printers use
+    that table, so the vocabulary of the artefact is a property of the program rather
+    than of the path that printed it.
+    """
+    from .native import ir
+
+    return {ir.symbol(function): function.cname for function in program.functions
+            if not function.type_params and function.cname}
+
+
+def ir_module(program: Program):
+    """The program as the shared IR, or None when the AST walk must print it.
+
+    This is the N14d boundary. `None` means "the IR cannot express this program yet",
+    and it has three causes: the lowering refused a construct by name (`E0901`), the
+    printer cannot spell a value's type, or `NAVA_C_FROM_IR=0` asks for the old path
+    (the escape hatch a bisect needs). Everything else goes through the IR, and the
+    emitted translation unit says so.
+    """
+    if os.environ.get("NAVA_C_FROM_IR") == "0":
+        return None
+    from . import cgen_ir
+    from .native import lower
+
+    try:
+        module = lower.lower(program)
+    except NavaError as error:
+        if getattr(error, "code", None) == "E0901":
+            return None
+        raise
+    return module if cgen_ir.supports(module) else None
+
+
 def generate(program: Program, capabilities=None) -> str:
+    module = ir_module(program)
+    if module is not None:
+        from . import cgen_ir
+
+        return assemble_body(cgen_ir.body(module, c_names(program)), capabilities)
     return CGenerator(program, capabilities).generate()

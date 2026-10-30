@@ -24,6 +24,8 @@ from __future__ import annotations
 #: because only the first four have a low-byte form without a REX prefix.
 RAX, RCX, RDX, RBX, RSP, RBP, RSI, RDI = range(8)
 R8, R9, R10, R11, R12, R13, R14, R15 = range(8, 16)
+#: The two vector registers the backend uses, by encoding number.
+XMM0, XMM1 = 0, 1
 #: The registers the System V ABI passes integer arguments in.
 ARGUMENT_REGISTERS = (RDI, RSI, RDX, RCX, R8, R9)
 #: 64-bit registers a byte of which can be named: `al`, `cl`, `dl`, `bl`, and the
@@ -225,7 +227,8 @@ class Assembler:
     def jcc(self, condition: str, label: str) -> None:
         """`jcc rel32`: 0F 80+cc rel32."""
         codes = {"o": 0, "no": 1, "b": 2, "ae": 3, "e": 4, "ne": 5, "be": 6, "a": 7,
-                 "s": 8, "ns": 9, "l": 0xC, "ge": 0xD, "le": 0xE, "g": 0xF}
+                 "s": 8, "ns": 9, "p": 0xA, "np": 0xB, "l": 0xC, "ge": 0xD, "le": 0xE,
+                 "g": 0xF}
         self.emit(b"\x0F" + bytes([0x80 + codes[condition]]))
         self.emit(self._relative(label))
 
@@ -250,6 +253,53 @@ class Assembler:
         """`xor r64, r64`: REX.W + 31 /r — the cheapest way to make a zero."""
         self.emit(_rex(w=True, r=source, b=destination) + b"\x31"
                   + _modrm(3, source, destination))
+
+    # -- the vector registers ------------------------------------------------
+    def movq_xmm(self, xmm: int, register: int) -> None:
+        """`movq xmm, r64`: 66 REX.W 0F 6E /r — a bit pattern into a vector register.
+
+        The backend keeps every `f64` in a frame slot like every other value, so the
+        move between a general register and a vector one is where arithmetic gets its
+        operands: the slot holds the bits, and the bits are what travels.
+        """
+        self.emit(b"\x66" + _rex(w=True, r=xmm, b=register) + b"\x0f\x6e"
+                  + _modrm(3, xmm, register))
+
+    def movq_xmm_to_reg(self, register: int, xmm: int) -> None:
+        """`movq r64, xmm`: 66 REX.W 0F 7E /r — the bit pattern back out."""
+        self.emit(b"\x66" + _rex(w=True, r=xmm, b=register) + b"\x0f\x7e"
+                  + _modrm(3, xmm, register))
+
+    def _sse(self, opcode: bytes, destination: int, source: int) -> None:
+        """One `F2 0F <opcode> /r` arithmetic instruction: `destination op= source`."""
+        self.emit(b"\xf2" + _rex(r=destination, b=source) + b"\x0f" + opcode
+                  + _modrm(3, destination, source))
+
+    def addsd(self, destination: int, source: int) -> None:
+        """`addsd xmm1, xmm2`: F2 0F 58 /r — one `f64` added, IEEE, no flags checked."""
+        self._sse(b"\x58", destination, source)
+
+    def subsd(self, destination: int, source: int) -> None:
+        """`subsd xmm1, xmm2`: F2 0F 5C /r."""
+        self._sse(b"\x5c", destination, source)
+
+    def mulsd(self, destination: int, source: int) -> None:
+        """`mulsd xmm1, xmm2`: F2 0F 59 /r."""
+        self._sse(b"\x59", destination, source)
+
+    def divsd(self, destination: int, source: int) -> None:
+        """`divsd xmm1, xmm2`: F2 0F 5E /r — `1.0 / 0.0` is `inf`, as in C."""
+        self._sse(b"\x5e", destination, source)
+
+    def ucomisd(self, left: int, right: int) -> None:
+        """`ucomisd xmm1, xmm2`: 66 0F 2E /r — flags for a comparison, `pf` if unordered.
+
+        The unordered case is why every `f64` comparison here tests `pf` first: with a
+        `nan` operand `zf`, `pf` and `cf` are all set, so the signed conditions the
+        integer comparisons use would answer `true` for `nan < 1.0`.
+        """
+        self.emit(b"\x66" + _rex(r=left, b=right) + b"\x0f\x2e"
+                  + _modrm(3, left, right))
 
     # -- resolution ----------------------------------------------------------
     def bytes(self) -> bytes:

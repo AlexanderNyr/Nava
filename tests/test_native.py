@@ -315,19 +315,34 @@ def operands(instruction) -> list[str]:
         return [instruction.count]
     if isinstance(instruction, ir.Index):
         return [instruction.base, instruction.index]
+    if isinstance(instruction, ir.CheckIndex):
+        return [instruction.base, instruction.index]
     if isinstance(instruction, ir.IndexStore):
         return [instruction.base, instruction.index, instruction.value]
     if isinstance(instruction, ir.Length):
         return [instruction.base]
     if isinstance(instruction, ir.Release):
         return [instruction.operand]
+    if isinstance(instruction, ir.SlotLoad):
+        return []
+    if isinstance(instruction, ir.SlotStore):
+        return [instruction.operand]
+    if isinstance(instruction, ir.StructNew):
+        return [value for _name, value in instruction.fields]
+    if isinstance(instruction, ir.Field):
+        return [instruction.base]
+    if isinstance(instruction, ir.FieldStore):
+        return [instruction.operand]
+    if isinstance(instruction, ir.Builtin):
+        return list(instruction.args)
     raise AssertionError(f"unknown IR instruction {instruction!r}")
 
 
 def defined(instruction) -> str | None:
     """The value an instruction defines, if it defines one."""
     if isinstance(instruction, (ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.Copy, ir.Str, ir.Const,
-                                ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.Length)):
+                                ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.Length,
+                                ir.SlotLoad, ir.StructNew, ir.Field)):
         return instruction.value
     if isinstance(instruction, ir.Call) and instruction.returns != "void":
         return instruction.value
@@ -540,31 +555,12 @@ class NativeRefusalTests(unittest.TestCase):
     #: has to use. Each is a whole program that the checker accepts: the refusal has
     #: to come from the backend, not from a syntax error before it.
     CONSTRUCTS = {
-        "a floating-point literal": """\
-fn main() -> i64 {
-    let x: f64 = 1.5
-    return 0
-}
-""",
         "a slice": """\
 edition 2;
 fn main() -> i64 {
     let a: [i64] = [1, 2, 3]
     let part: [i64] = a[0..2]
     print(len(part))
-    return 0
-}
-""",
-        "a struct": """\
-edition 2;
-struct Point {
-    x: i64,
-    y: i64
-}
-
-fn main() -> i64 {
-    let p: Point = Point(x: 1, y: 2)
-    print(1)
     return 0
 }
 """,
@@ -590,6 +586,60 @@ fn main() -> i64 {
     return 0
 }
 """,
+        "'==' on strs": """\
+fn main() -> i64 {
+    print("a" == "a")
+    return 0
+}
+""",
+        "a field 'xs' of type [i64]": """\
+edition 2;
+struct Bag {
+    count: i64,
+    xs: [i64]
+}
+
+fn main() -> i64 {
+    let b: Bag = Bag(count: 1, xs: [1, 2])
+    print(b.count)
+    return 0
+}
+""",
+        "an array of Point": """\
+edition 2;
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() -> i64 {
+    let points: [Point] = [Point(x: 1, y: 2)]
+    print(points[0].x)
+    return 0
+}
+""",
+    }
+
+    #: Programs the IR expresses and this backend refuses at code generation, because
+    #: the builtin is a runtime routine the native runtime does not have yet. The
+    #: refusal is `E0901` with the builtin's own name, from the generator and not from
+    #: the lowering: the IR says what the program means, and the backend says what it
+    #: cannot compile.
+    CODEGEN_REFUSALS = {
+        "builtin 'read_i64'": """\
+fn main() -> i64 {
+    let n: i64 = read_i64()
+    print(n)
+    return 0
+}
+""",
+        "printing an f64": """\
+fn main() -> i64 {
+    let x: f64 = 1.5
+    print(x)
+    return 0
+}
+""",
     }
 
     def test_a_construct_is_refused_by_name(self):
@@ -599,14 +649,36 @@ fn main() -> i64 {
                     lower_source(source)
                 self.assertEqual(caught.exception.code, "E0901")
                 self.assertIn(description, caught.exception.message)
-                self.assertIn("(in 'main')", caught.exception.message)
+                self.assertIn("(in '", caught.exception.message)
                 self.assertIn("--backend native", caught.exception.hint)
+
+    def test_a_routine_the_runtime_lacks_is_refused_at_code_generation(self):
+        """The IR states the program; the generator names what it cannot compile.
+
+        A `Builtin` is an instruction, so a builtin the runtime lacks is not a hole in
+        the lowering: the closing of that gap is the increment that adds the routine.
+        """
+        for description, source in self.CODEGEN_REFUSALS.items():
+            with self.subTest(refusal=description):
+                module = lower_source(source)
+                with self.assertRaises(NavaError) as caught:
+                    x86_64.units(module)
+                self.assertEqual(caught.exception.code, "E0901")
+                self.assertIn(description, caught.exception.message)
+                self.assertIn("--backend native", caught.exception.hint)
+                if description.startswith("builtin "):
+                    names = [instruction.name for function in module.functions
+                             for block in function.blocks
+                             for instruction in block.instructions
+                             if isinstance(instruction, ir.Builtin)]
+                    self.assertEqual(names, [description.split(" ", 1)[1].strip("'")])
 
     def test_the_c_backend_compiles_every_program_the_native_one_refuses(self):
         """A refusal is a gap in one backend, not a claim that the program is wrong."""
+        cases = {**self.CONSTRUCTS, **self.CODEGEN_REFUSALS}
         with tempfile.TemporaryDirectory() as temp:
             directory = pathlib.Path(temp)
-            for index, (description, source) in enumerate(self.CONSTRUCTS.items()):
+            for index, (description, source) in enumerate(cases.items()):
                 with self.subTest(construct=description):
                     path = write_source(directory, f"refused{index}", source)
                     native_result = run([*NAVA, "build", str(path),
@@ -982,13 +1054,36 @@ class NativeCommandTests(unittest.TestCase):
 
     def test_emit_ir_refuses_a_construct_it_cannot_represent(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = write_source(pathlib.Path(temp), "float",
-                                "fn main() -> i64 {\n    let x: f64 = 1.5\n    return 0\n}\n")
+            path = write_source(pathlib.Path(temp), "enum",
+                                "edition 2;\nenum Shape {\n    Dot,\n    Circle(i64)\n}\n\n"
+                                "fn main() -> i64 {\n    let s: Shape = Shape::Circle(2)\n"
+                                "    print(1)\n    return 0\n}\n")
             result = run([*NAVA, "emit-ir", str(path)])
         self.assertEqual(result.returncode, 2)
         self.assertIn("E0901", result.stderr)
-        self.assertIn("a floating-point literal", result.stderr)
+        self.assertIn("an enum variant", result.stderr)
         self.assertEqual(result.stdout, "", "a refusal writes no IR")
+
+    def test_emit_ir_states_a_struct_and_an_f64_rather_than_refusing(self):
+        """The two types N14e adds to the IR: a layout, and an f64 that is not printed."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            structs = write_source(directory, "structs",
+                                   "edition 2;\nstruct Point {\n    x: i64,\n    y: i64\n}\n\n"
+                                   "fn main() -> i64 {\n    let p: Point = Point(x: 1, y: 2)\n"
+                                   "    print(p.x)\n    return 0\n}\n")
+            result = run([*NAVA, "emit-ir", str(structs)])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("struct Point {x: i64, y: i64}", result.stdout)
+            self.assertIn("= struct Point {x: %", result.stdout)
+            self.assertIn("= field Point %", result.stdout)
+            float_path = write_source(directory, "float",
+                                      "fn main() -> i64 {\n    let x: f64 = 1.5\n"
+                                      "    if x > 1.0 { print(1) }\n    return 0\n}\n")
+            result = run([*NAVA, "emit-ir", str(float_path)])
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("= const f64 1.5", result.stdout)
+            self.assertIn("= cmp gt f64 %", result.stdout)
 
     def test_run_compiles_with_the_native_backend_when_asked(self):
         """`run` runs the same program twice, and the two ways must agree."""
@@ -1450,3 +1545,188 @@ class NativeTraceTests(unittest.TestCase):
                                     env={"PATH": "/usr/bin:/bin", "NAVA_TRACE": "1"})
         self.assertEqual(result.stderr.splitlines()[1:],
                          ["  at nava.entry.main (probe.nv:3)"])
+
+
+class NativeStructTests(unittest.TestCase):
+    """A struct is a value with fields at fixed positions (PLAN.md N14e).
+
+    Two claims, both comparisons rather than expectations: the two backends agree on a
+    program that copies a struct and writes through a nested path, and an `f64` in a
+    field or a comparison means what IEEE says it means on either side.
+    """
+
+    #: A struct stored, passed, copied and written into — through a nested path, which
+    #: is the write a record with identity would get wrong.
+    COPY_PROGRAM = """\
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+struct Segment {
+    from: Point,
+    to: Point
+}
+
+fn moved(p: Point) -> i64 {
+    p.x = p.x + 100
+    return p.x
+}
+
+fn main() {
+    let a = Point(x: 1, y: 2)
+    print(a.x)
+    print(moved(a))
+    print(a.x)
+    let s = Segment(from: a, to: Point(x: 3, y: 4))
+    s.to.y = 40
+    print(s.to.y)
+    print(s.from.x)
+    print(a.y)
+}
+"""
+
+    def build(self, source: str, directory: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+        path = write_source(directory, "structs", source)
+        return build_both(path, directory)
+
+    def test_a_struct_is_copied_where_it_is_stored(self):
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(self.COPY_PROGRAM, pathlib.Path(temp))
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # The numbers are the language's, not the backend's: `moved` cannot change the
+        # caller's `a`, and a nested write in `s` cannot change `a` either.
+        self.assertEqual(c_out.stdout, "1\n101\n1\n40\n1\n2\n")
+
+    def test_a_str_field_is_a_string_like_any_other(self):
+        source = """\
+edition 2;
+
+struct Card {
+    title: str,
+    number: i64
+}
+
+fn rename(c: Card) -> str {
+    c.title = "other"
+    return c.title
+}
+
+fn main() {
+    let c = Card(title: "hi", number: 3)
+    print(c.title)
+    print(rename(c))
+    print(c.title)
+    print(c.number)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(source, pathlib.Path(temp))
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "hi\nother\nhi\n3\n")
+
+    def test_the_module_states_every_layout_it_lays_out(self):
+        """A layout is a fact about the program: the IR carries it, the backend reads it."""
+        source = pathlib.Path("tests/fixtures/positive/structs_basic.nv").read_text(encoding="utf-8")
+        module = lower_source(source)
+        self.assertEqual(module.structs["Point"], (("x", "i64"), ("y", "i64")))
+        self.assertEqual(module.structs["Segment"],
+                         (("from", "Point"), ("to", "Point")))
+        # A struct the program declares and never builds is not laid out: a layout the
+        # backend does not need is a layout it should not have to agree about.
+        self.assertEqual(sorted(module.structs), ["Point", "Segment"])
+
+    def test_a_struct_value_lives_in_a_cell_and_nowhere_else(self):
+        module = lower_source(self.COPY_PROGRAM)
+        main = module.function("main")
+        cells = {cell.name: cell.typ for cell in main.slots}
+        self.assertEqual(cells, {"c0": "Point", "c1": "Segment"})
+        instructions = [instruction for block in main.blocks
+                        for instruction in block.instructions]
+        # `a` and `s` are storage, and each is stored into once. A construction that is
+        # only read — `Point(x: 3, y: 4)` — is a value and never becomes a cell.
+        self.assertEqual(sum(isinstance(item, ir.SlotStore) for item in instructions), 2)
+        writes = [item for item in instructions if isinstance(item, ir.FieldStore)]
+        self.assertEqual([item.path for item in writes], [("to", "y")])
+
+
+class NativeFloatTests(unittest.TestCase):
+    """`f64` arithmetic and comparison, which is what the IR can state without printing.
+
+    The decimal form of an `f64` is the C runtime's `snprintf`; the native backend does
+    not have that conversion yet, so it refuses to print one and these programs observe
+    their floats through comparisons instead — which is exactly the half of `f64` the
+    language's `if` and `while` can reach.
+    """
+
+    PROGRAM = """\
+fn main() {
+    let a = 1.5
+    let b = 2.5
+    if a < b { print(1) }
+    if b - a == 1.0 { print(2) }
+    if a * b > 3.0 { print(3) }
+    if -a == 0.0 - 1.5 { print(4) }
+    let nan = 0.0 / 0.0
+    print(nan == nan)
+    print(nan != nan)
+    print(nan < 1.0)
+    print(nan >= 1.0)
+    let inf = 1.0 / 0.0
+    print(inf > 1.0)
+    print(-inf < 0.0)
+}
+"""
+
+    def test_float_arithmetic_and_comparison_agree_with_the_c_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "floats", self.PROGRAM)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # `nan` compares unordered: false for `==`, `<` and `>=`, true for `!=`.
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["1", "2", "3", "4", "false", "true", "false", "false",
+                          "true", "true"])
+
+    def test_an_f64_crosses_a_call_as_its_bits(self):
+        source = """\
+fn mean(a: f64, b: f64) -> f64 {
+    return (a + b) / 2.0
+}
+
+fn main() {
+    if mean(1.0, 2.0) == 1.5 { print(1) }
+    if mean(0.0, 0.0) == 0.0 { print(2) }
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "mean", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "1\n2\n")
+
+    def test_a_float_constant_is_its_bits_and_the_dump_says_so(self):
+        module = lower_source("fn main() -> i64 {\n    let x: f64 = 1.5\n"
+                              "    if x > 1.0 { print(1) }\n    return 0\n}\n")
+        dump = ir.dump(module)
+        self.assertIn("= const f64 1.5", dump)
+        self.assertIn("= cmp gt f64", dump)
+        # The instruction says which unit does the work; an `i64` comparison does not
+        # gain the word, so a reader can tell the two apart in the dump.
+        integer = ir.dump(lower_source("fn main() -> i64 {\n    if 1 < 2 { print(1) }\n"
+                                       "    return 0\n}\n"))
+        self.assertIn("= cmp lt i64", integer)

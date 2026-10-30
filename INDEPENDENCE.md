@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a, N14b and N14c delivered: a working backend for `i64`/`bool`/`str` and arrays of them, whole programs, and a differential that covers every construct the subset admits; `f64`, the collections, structs and enums are still refused by name, and `cgen.py` still walks the AST instead of consuming the IR |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a, N14b, N14c, N14d and N14e delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison and struct values are compiled natively, while printing an `f64`, the collections, enums, slices and the builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1359,7 +1359,9 @@ the differential records.
 | N14a | **One translation unit**: a linear SSA-shaped IR with block parameters (`nava_lang/native/ir.py`) and its lowering from the checked AST (`lower.py`), an instruction encoder and two-pass assembler written in the project (`x86.py`), x86-64 code generation with checked arithmetic (`x86_64.py`), an ELF writer with two `PT_LOAD` segments (`elf64.py`), a syscall-only runtime, `nava build --backend native` and `nava emit-ir` | **Delivered** (record below) |
 | N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
 | N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
-| N14d | **One IR, two backends**: `cgen.py` rewritten as a lowering of the shared IR, which requires the IR to cover the rest of the language — `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins | specified (added by N14c, see its record) |
+| N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
+| N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
+| N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
 
 #### Delivery record N14a (2026-10-29)
 
@@ -1517,6 +1519,113 @@ structs or enums run natively (each is its own increment); and nothing about spe
 every value is still a frame slot and no benchmark number is quoted because none was
 measured.
 
+#### Delivery record N14d (2026-10-29)
+
+**One representation, two backends — and the C backend is now a reader of it.** The
+milestone was recorded when N14b found that `cgen.py` and `native/lower.py` were two
+independent lowerings of the AST, which makes the differential stricter about agreement
+and silent about whether the C backend *could* read the IR at all. It can now: for every
+construct the IR expresses, the C is printed from the IR, and the differential is
+three-way between C-from-IR, C-from-AST and the native backend.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| The subset takes the IR path, and says so in the artefact | `CFromIRTests.test_every_program_in_the_subset_is_printed_from_the_ir` | all **13** fixtures the IR can express carry `/* A lowering of the shared IR: ... */` and one comment per function naming its link-time symbol; `emit-c` shows one local per value, one line per instruction, a label and a `goto` per block |
+| A program outside it keeps the AST walk, and still builds | `test_a_program_outside_the_subset_still_comes_from_the_ast` | `floats`, `structs_basic`, `map_basics`, `strings`, `defer_labels` lower to `E0901` and are printed by the old path; the test fails if one of them starts lowering (it belongs in the other list then), so the boundary cannot drift silently |
+| The three paths agree | `test_the_three_paths_agree_on_output_stderr_and_status` | seven programs — arrays, a sort, a loop, a short circuit, an exit status, a division by zero, an overflow — identical on stdout, stderr and status; the whole fixture corpus is additionally built and run by the suite |
+| The checks survive the new path | `test_array_access_goes_through_the_checked_helpers` | the IR body reads and writes through `nv_arr_i64_get`/`nv_arr_i64_set`, frees through `nv_arr_i64_free`, and contains no `.data[` outside a checked helper |
+| Evaluation order is a property of the IR, not of a printer | `test_the_index_is_checked_before_the_value_is_evaluated`, `test_the_ir_states_the_check_before_the_store` | `a[1] = mark()` does **not** call `mark`: the IR states `check` as its own instruction before the value is evaluated, and all three paths print nothing and stop with `array index 1 is out of bounds for length 1` |
+| A `str` is never compared by pointer | `test_a_str_comparison_is_never_printed_from_the_ir` | the lowering refuses `==` on `str` with `E0901` (naming the operator), and `supports()` refuses it a second time, so the printer cannot emit `v1 == v2` for two strings and call it equality |
+| Two instantiations are refused rather than confused | `test_two_instantiations_are_refused_by_name_rather_than_confused`, `test_a_generic_with_one_instantiation_is_printed_from_the_ir` | an instantiation carries no type argument in its name, so `identity(1)` and `identity(true)` are one symbol: the lowering now refuses that with `E0901` instead of linking one body over another. A generic with one instantiation is compiled and takes the IR path |
+| The C artefact keeps its vocabulary | `test_every_function_is_defined_once_under_the_name_the_ast_path_used` | functions are `nv_fn_<ordinal>`, defined once each, exactly as the AST path named them; `test_the_printer_is_deterministic` and the existing byte-identical-build test keep the output stable |
+
+Two defects this increment found, both in code written in this increment, both caught
+by the suite rather than by review: **the store's evaluation order** — the IR lowered
+the value expression before the index check, so `a[1] = mark()` printed `must not
+print`, which the AST path has always refused to do; the fix is an instruction
+(`check`) rather than a convention, because a convention is what a printer can
+legitimately lose — and **the generic naming collision**, where two instantiations
+shared one `ir.symbol()` and the printer therefore gave both the same C name, which
+`test_the_generated_c_has_one_function_per_instance` caught as a duplicated definition.
+
+The audit is re-measured: **16 867 lines, 27 modules, 610 functions** (16 422 / 26 / 587
+at N14c) — one module (`nava_lang/cgen_ir.py`) and 23 functions, and the module count
+is the point: the second reader of the IR is a file, not a flag inside `cgen.py`. The
+suite is **1 007 tests, 1 598 subtests**, `tests/registry.py` reports 937 registered
+tests with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic codes, and
+the overhead record is re-measured: **108 832 tokens**, unchanged, because the guide
+does not describe the inside of the compiler.
+
+What this increment does **not** claim: that the AST walk is gone — 19 of the 32
+positive fixtures still need it, and the test names one family of each kind (`floats`,
+`structs_basic`, `map_basics`, `strings`, `defer_labels`) and fails if one of them
+starts lowering, so the boundary is measured rather than remembered; that any new
+language construct
+compiles natively; that the emitted C is faster or smaller (it is not measured, and one
+local per value is not an optimisation); or that `NAVA_C_FROM_IR=0` is a supported mode
+— it is a bisect switch, and the tests are what keep both paths honest.
+
+The N14c record above says `cgen.py` does not consume the IR. That was true when it was
+written and is not true now; the remainder it named is **N14e** in §4, and it is not a
+smaller job than N14d was: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`,
+structs, enums, `defer`, `?`, generics and the builtins.
+
+#### Delivery record N14e (2026-10-29)
+
+**The value model in the IR: a float, and a struct with storage.** N14d left the IR
+covering the shapes the native backend already compiled, which meant the representation
+said nothing about two of the language's types. This increment adds both, and the two
+problems turn out to be different ones:
+
+* **An `f64` needs no new instruction, only a type.** `add`, `cmp` and `neg` now carry
+  the type they operate on, so `add f64` and `add i64` are different instructions rather
+  than one instruction a backend has to guess about. A constant is eight IEEE bytes in
+  a frame slot like any other value, arithmetic is the vector unit, and a comparison
+  answers the unordered case itself.
+* **A struct needs storage.** A value of the IR is immutable and named once; a field
+  write needs a cell that outlives the instruction. `slot`, `load` and `store` are that
+  cell, and the module states each struct's layout, so a field name is a position in
+  the program's declaration rather than in a backend's opinion of one.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A float means IEEE on both backends, `nan` included | `NativeFloatTests.test_float_arithmetic_and_comparison_agree_with_the_c_backend` | ten observations — `<`, `-`, `*`, `>`, unary `-`, `nan == nan`, `nan != nan`, `nan < 1.0`, `nan >= 1.0`, `inf > 1.0`, `-inf < 0.0` — identical on stdout, stderr and status; the C compiler's answer is the oracle, so a table cannot drift from it |
+| A float travels through a call as its bits | `test_an_f64_crosses_a_call_as_its_bits` | `mean(1.0, 2.0) == 1.5` is true natively and in C, and `mean(0.0, 0.0) == 0.0` too: two parameters, one return, no conversion |
+| A struct is copied where it is stored, as deep as it is nested | `NativeStructTests.test_a_struct_is_copied_where_it_is_stored` | `moved(a)` cannot change `a`; `s.to.y = 40` reaches `s` and not the `a` inside it; the printed sequence `1 101 1 40 1 2` is the same through both backends |
+| A `str` field is a string like any other | `test_a_str_field_is_a_string_like_any_other` | `Card(title: "hi", ...)`, a rename inside a by-value parameter, and the caller's field unchanged — identical through both backends |
+| A struct variable is a cell and a struct temporary is not | `test_a_struct_value_lives_in_a_cell_and_nowhere_else` | `let a = Point(...)` and `let s = Segment(...)` are the function's two slots (`c0`, `c1`); `Point(x: 3, y: 4)` stays a value; the nested write is one `field % c1.to.y = %v` with the path stated |
+| The layout is the program's, not the backend's | `test_the_module_states_every_layout_it_lays_out` | `structs_basic` states `Point(x: i64, y: i64)` and `Segment(from: Point, to: Point)`; a declared-but-unbuilt struct is not laid out, because a layout nobody reads is one the backends should not have to agree about |
+| The C backend prints the same representation | `CFromIRTests.test_every_program_in_the_subset_is_printed_from_the_ir` | `structs_basic` and `structs_copy` moved into the subset: **15** of the 32 fixtures now carry the marker — the same 15 the native backend compiles — and the struct `typedef`s, the cells, the field paths and a struct-returning call are printed from the IR |
+| The artefact keeps its vocabulary whichever path printed it | `test_the_names_in_the_artefact_do_not_depend_on_the_path` | every `nv_fn_<ordinal>` the IR path defines is one the AST path defines too — the C name comes from the checker's table, not from the printer's position in a list |
+| What it cannot compile, it names | `NativeRefusalTests` | printing an `f64` and `read_i64` are refused at *code generation* with `E0901` naming the routine, because the IR states them and the runtime lacks them; a slice, an enum variant, a `defer`, `==` on two `str`s, an array of structs and a struct field that owns storage are refused by the lowering, each with the construct in the message; the C backend builds every one of those programs |
+| The corpus still agrees | the fixture sweep | **15 of 32** fixtures build and run identically through both backends (13 at N14d — `structs_basic` and `structs_copy` joined), **0 differ**, and 17 are refused by name; the two sets are the same set, so "the IR covers what both backends compile" is a measurement rather than a summary |
+
+Two things went wrong on the way, both caught by running rather than by reading. The
+first comparison implementation used the **signed** conditions (`setl`, `setle`) on
+flags that `ucomisd` sets as a *float* comparison, so `1.5 < 2.5` was false and `-inf <
+0.0` was false: the unordered/`cf`-based pair (`setb`, `setbe`, `seta`, `setae`) is the
+one that reads those flags, and the differential against the C compiler is what said so.
+And a construction whose field is a struct `shared` the record instead of copying it,
+so a write through the segment was visible in the point it was built from; the fix is a
+copier per struct type, and the fixture `structs_copy` is what pins it.
+
+The audit is re-measured: **17 580 lines, 27 modules, 648 functions** (16 867 / 27 / 610
+at N14d) — no new module, 38 functions: the type on three instructions, cells, structs,
+the SSE paths and the copiers. The suite is **1 018 tests, 1 609 subtests**,
+`tests/registry.py` reports 948 registered tests with the same 11 tasks, 76 cases, 192
+spec fixtures and 173 diagnostic codes, and the overhead record is re-measured rather
+than assumed: **108 832 tokens**, unchanged, because the guide describes the language
+and this increment changed which backend compiles which part of it.
+
+What this increment does **not** claim: that the AST walk is gone — 17 of the 32
+fixtures still need it, and printing an `f64` is refused rather than approximated
+because its shortest round-tripping decimal form is a conversion this backend does not
+have; that a struct field may own storage (`String`, `Vec`, a map, a set, an array are
+refused by name, and a struct of words is what this increment says); that an array may
+hold a struct; that the arena reclaims a record (it does not, and `release` is still
+nothing on this backend); or anything about speed — every value is still a frame slot,
+every struct field is a load, and no benchmark was run.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1669,7 +1778,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 16 422 Python lines and 587 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 17 577 Python lines and 648 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

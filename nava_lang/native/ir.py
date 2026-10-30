@@ -61,20 +61,28 @@ class Str:
 
 @record()
 class Bin:
-    """`%v = <op> %a, %b` — checked arithmetic; `op` is add/sub/mul/div/mod."""
+    """`%v = <op> %a, %b` — `op` is add/sub/mul/div/mod.
+
+    `typ` is what the operands are: `i64` arithmetic is checked and traps, `f64`
+    arithmetic is IEEE-754 and does not trap. The instruction is the same statement
+    ("add these two") either way, and the type is part of it rather than something a
+    reader has to look up from elsewhere.
+    """
 
     value: str
     op: str
     left: str
     right: str
+    typ: str = "i64"
 
 
 @record()
 class Neg:
-    """`%v = neg %a` — checked: `-i64_min` stops the program."""
+    """`%v = neg %a` — `i64` is checked (`-i64_min` stops the program), `f64` is not."""
 
     value: str
     operand: str
+    typ: str = "i64"
 
 
 @record()
@@ -87,12 +95,18 @@ class Not:
 
 @record()
 class Cmp:
-    """`%v = cmp <op> %a, %b` — `op` is eq/ne/lt/le/gt/ge; the result is a `bool`."""
+    """`%v = cmp <op> %a, %b` — `op` is eq/ne/lt/le/gt/ge; the result is a `bool`.
+
+    `typ` is what is compared, and it is not cosmetic: an `f64` comparison is
+    unordered — `NaN < x` is false and `NaN == NaN` is false — which the machine's
+    integer compare does not do.
+    """
 
     value: str
     op: str
     left: str
     right: str
+    typ: str = "i64"
 
 
 @record()
@@ -168,6 +182,102 @@ class IndexStore:
     base: str
     index: str
     value: str
+
+
+@record()
+class CheckIndex:
+    """`check %array[%i]` — validate an index and define nothing.
+
+    `index store` is checked too, but the language evaluates the *index* before the
+    value being stored, so a store to an out-of-range position must stop the program
+    before the value expression runs. That order is not expressible with one
+    instruction, and it is not a detail: `a[1] = mark()` must not call `mark`.
+    """
+
+    typ: str
+    base: str
+    index: str
+
+
+@record()
+class Slot:
+    """A function-local cell: the storage of a variable that is assigned through.
+
+    Values are immutable — that is what makes the IR cheap to read — but a struct
+    field assignment writes into storage, and storage has an identity. A slot is
+    that identity: it is declared once per function and read and written by name.
+    """
+
+    name: str
+    typ: str
+
+
+@record()
+class SlotLoad:
+    """`%v = load %slot` — the value the slot holds now."""
+
+    value: str
+    typ: str
+    slot: str
+
+
+@record()
+class SlotStore:
+    """`store %slot, %v` — and the next load sees it. Defines no value."""
+
+    slot: str
+    operand: str
+
+
+@record()
+class StructNew:
+    """`%v = struct <typ> {x: %a, y: %b}` — a struct value with every field set."""
+
+    value: str
+    typ: str
+    fields: list
+
+
+@record()
+class Field:
+    """`%v = field %base.<name>` — a read of one field, by name rather than offset."""
+
+    value: str
+    typ: str
+    base: str
+    name: str
+    #: The struct type `base` has: without it a field name is not a position.
+    base_type: str = ""
+
+
+@record()
+class FieldStore:
+    """`field %slot.a.b = %v` — a write into a struct held in a slot, through a path.
+
+    The path is a tuple because `s.to.y = 40` writes a field of a field: the record
+    `s` holds says where `to` is, and `to`'s own layout says where `y` is. Stating the
+    path keeps both positions a fact about the program's declarations.
+    """
+
+    slot: str
+    path: tuple
+    operand: str
+
+
+@record()
+class Builtin:
+    """`%v = builtin <name>(%args)` — a function the language defines, not the program.
+
+    Naming the builtin here rather than calling a module keeps the three questions
+    apart: what the language says (`len`), which runtime implements it, and what the
+    backend can compile. A backend that does not implement it says so with the same
+    words it used before: `a call to 'read_i64'`.
+    """
+
+    value: str
+    typ: str
+    name: str
+    args: list
 
 
 @record()
@@ -248,6 +358,8 @@ class Function:
     blocks: list[Block] = field(default_factory=list)
     #: The module the function belongs to; "" is the entry file.
     module: str = ""
+    #: The cells the function declares, in the order it declares them.
+    slots: list = field(default_factory=list)
     #: One source line per instruction, in emission order: blocks in order, and the
     #: instructions of a block in order. `dump()` ignores it — the IR is the same IR
     #: whether or not the backend writes a line table.
@@ -283,6 +395,10 @@ class Module:
     functions: list[Function]
     #: The entry function's name; always `main`.
     entry: str = "main"
+    #: Every struct type the program builds or reads, as its fields in declaration
+    #: order: `{"Point": (("x", "i64"), ("y", "i64"))}`. A layout is a fact about the
+    #: program, not about the machine, so it is the module that states it.
+    structs: dict = field(default_factory=dict)
 
     def function(self, name: str) -> Function | None:
         for item in self.functions:
@@ -294,10 +410,19 @@ class Module:
 def dump(module: Module) -> str:
     """A stable textual form of the IR, for `nava emit-ir` and for diffing."""
     lines: list[str] = []
+    for name, fields in sorted(module.structs.items()):
+        declared = ", ".join(f"{field}: {typ}" for field, typ in fields)
+        lines.append(f"struct {name} {{{declared}}}")
+    if module.structs:
+        lines.append("")
     for function in module.functions:
         params = ", ".join(f"{value}: {typ}" for value, typ in function.params)
         name = f"{function.module}.{function.name}" if function.module else function.name
-        lines.append(f"fn @{name}({params}) -> {function.returns}:")
+        header = f"fn @{name}({params}) -> {function.returns}"
+        if function.slots:
+            slots = ", ".join(f"{slot.name}: {slot.typ}" for slot in function.slots)
+            header += f" slots {{{slots}}}"
+        lines.append(header + ":")
         for block in function.blocks:
             arguments = ", ".join(f"{value}: {typ}" for value, typ in block.params)
             header = f"  ^{block.label}"
@@ -319,13 +444,15 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
         escaped = escaped.replace("\n", "\\n")
         return f'%{instruction.value} = str "{escaped}"'
     if isinstance(instruction, Bin):
-        return f"%{instruction.value} = {instruction.op} %{instruction.left}, %{instruction.right}"
+        return (f"%{instruction.value} = {instruction.op} {instruction.typ} "
+                f"%{instruction.left}, %{instruction.right}")
     if isinstance(instruction, Neg):
-        return f"%{instruction.value} = neg %{instruction.operand}"
+        return f"%{instruction.value} = neg {instruction.typ} %{instruction.operand}"
     if isinstance(instruction, Not):
         return f"%{instruction.value} = not %{instruction.operand}"
     if isinstance(instruction, Cmp):
-        return f"%{instruction.value} = cmp {instruction.op} %{instruction.left}, %{instruction.right}"
+        return (f"%{instruction.value} = cmp {instruction.op} {instruction.typ} "
+                f"%{instruction.left}, %{instruction.right}")
     if isinstance(instruction, Copy):
         return f"%{instruction.value} = copy %{instruction.operand}"
     if isinstance(instruction, Call):
@@ -346,10 +473,28 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
     if isinstance(instruction, IndexStore):
         return (f"index %{instruction.base}[%{instruction.index}] = "
                 f"%{instruction.value}")
+    if isinstance(instruction, CheckIndex):
+        return f"check %{instruction.base}[%{instruction.index}]"
     if isinstance(instruction, Length):
         return f"%{instruction.value} = len %{instruction.base}"
     if isinstance(instruction, Release):
         return f"release {instruction.typ} %{instruction.operand}"
+    if isinstance(instruction, SlotLoad):
+        return f"%{instruction.value} = load %{instruction.slot}"
+    if isinstance(instruction, SlotStore):
+        return f"store %{instruction.slot}, %{instruction.operand}"
+    if isinstance(instruction, StructNew):
+        fields = ", ".join(f"{name}: %{value}" for name, value in instruction.fields)
+        return f"%{instruction.value} = struct {instruction.typ} {{{fields}}}"
+    if isinstance(instruction, Field):
+        return (f"%{instruction.value} = field {instruction.base_type} "
+                f"%{instruction.base}.{instruction.name} -> {instruction.typ}")
+    if isinstance(instruction, FieldStore):
+        path = ".".join(instruction.path)
+        return f"field %{instruction.slot}.{path} = %{instruction.operand}"
+    if isinstance(instruction, Builtin):
+        arguments = ", ".join(f"%{item}" for item in instruction.args)
+        return f"%{instruction.value} = builtin {instruction.typ} {instruction.name}({arguments})"
     if isinstance(instruction, Jump):
         return f"jump ^{instruction.target}({_arguments(instruction.args)})"
     if isinstance(instruction, Branch):

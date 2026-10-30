@@ -36,17 +36,38 @@ from __future__ import annotations
 
 from ..diagnostics import make
 from ..model import (
-    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, ExprStmt, For,
-    Function, If, Index, IndexAssign, Let, Number, Program, Range, Return, String,
-    Unary, Variable, While,
+    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, ExprStmt, Float, For,
+    Function, If, Index, IndexAssign, Let, Member, MemberAssign, Number, Program, Range,
+    Return, String, StructLiteral, Unary, Variable, While,
 )
+from ..checker import BUILTINS
 from . import ir
 
 #: Types `print` can write in the native backend.
-PRINTABLE = ("i64", "bool", "str")
+#: What `print` accepts. An `f64` is here because the language prints one and the IR
+#: says so; the native backend refuses it where it would have to write the digits,
+#: which is the shortest round-tripping decimal form and needs a conversion this
+#: backend does not have yet.
+PRINTABLE = ("i64", "bool", "str", "f64")
 #: The element types an array may hold here. A `Vec`, a struct or a slice is a
 #: different representation, and each arrives with its own increment.
 ELEMENT_TYPES = ("i64", "bool", "str")
+
+
+def struct_layouts(program: Program) -> dict[str, tuple]:
+    """Every struct type of the program: its name and its fields in declaration order.
+
+    A generic struct is one declaration per instantiation, and the written type
+    (`Pair(i64)`) is the name a value of it is spelled with, so both the declared name
+    and the written one answer the same layout.
+    """
+    layouts: dict[str, tuple] = {}
+    declarations = list(program.structs) + list(program.struct_instances.values())
+    for struct in declarations:
+        layouts[struct.name] = tuple((item.name, item.typ) for item in struct.fields)
+    for written, struct in program.struct_instances.items():
+        layouts[written] = tuple((item.name, item.typ) for item in struct.fields)
+    return layouts
 
 
 def is_array(typ: object) -> bool:
@@ -105,7 +126,8 @@ def assigned_names(body) -> set[str]:
         elif isinstance(statement, For):
             names |= assigned_names(statement.body)
             names.add(statement.name)
-        elif isinstance(statement, (Break, Continue, Return, ExprStmt, IndexAssign)):
+        elif isinstance(statement, (Break, Continue, Return, ExprStmt, IndexAssign,
+                                    MemberAssign)):
             # Nothing here binds a name: an element write changes storage that some
             # other binding already owns, so there is nothing to carry across a join.
             continue
@@ -128,11 +150,54 @@ class Loop:
         self.frame = frame
 
 
-class Builder:
-    """One function's lowering: its blocks, its values, and the environment."""
+def check_instantiations(functions) -> None:
+    """Refuse a generic function with more than one instantiation, by name.
 
-    def __init__(self, function: Function):
+    An instantiation carries no type argument in its name, so `identity(i64)` and
+    `identity(bool)` are one symbol. Compiling both would either link two bodies into
+    one name or fail at link time for a reason the user did not cause, and a wrong
+    answer is worse than a refusal. A template with a single instantiation is fine and
+    is compiled: there is exactly one body to name.
+    """
+    seen: dict[tuple[str, str], object] = {}
+    for function in functions:
+        key = (function.module, function.name)
+        if key in seen:
+            raise make(
+                "E0901",
+                f"the native backend does not implement more than one instantiation "
+                f"of the generic function '{function.name}' (in '{function.qualified}')",
+                function.loc,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
+        seen[key] = function
+
+
+#: The scalar types the IR names directly. Anything else is an aggregate: an array
+#: (`[T]`), a struct, an enum, a container or a function value.
+SCALARS = ("i64", "bool", "f64", "str")
+#: The field types a struct may hold here. A field that owns storage (`String`, `Vec`,
+#: a map, a set) needs a copy that knows how to copy its storage, which is a different
+#: instruction; a struct of words is the increment that says fields are positions.
+FIELD_TYPES = ("i64", "bool", "f64", "str")
+
+
+class Builder:
+    """One function's lowering: its blocks, its values, its cells, its environment."""
+
+    def __init__(self, function: Function, structs: dict | None = None):
         self.function = function
+        #: The struct types of the program and their fields, in declaration order: a
+        #: variable of one of these lives in a slot, because a field assignment writes
+        #: into storage, and a field name is a position in the layout.
+        self.structs = dict(structs or {})
+        #: The cells this function declares, in declaration order.
+        self.slots: list[ir.Slot] = []
+        #: Variable name -> slot name, for the variables that live in a slot.
+        self.cells: dict[str, str] = {}
+        #: The types of those variables, so a slot can be named in a refusal.
+        self.cell_types: dict[str, str] = {}
         self.blocks: list[ir.Block] = []
         self.params: list[tuple[str, str]] = []
         self.next_value = 0
@@ -169,6 +234,40 @@ class Builder:
         self.next_value += 1
         return name
 
+    def declare_slot(self, name: str, typ: str) -> str:
+        """Give a variable storage: a cell of `typ`, named once per function."""
+        slot = f"c{len(self.slots)}"
+        self.slots.append(ir.Slot(slot, typ))
+        self.cells[name] = slot
+        self.cell_types[name] = typ
+        return slot
+
+    def is_struct(self, typ: object) -> bool:
+        return isinstance(typ, str) and typ in self.structs
+
+    def layout(self, typ: str, loc) -> tuple:
+        """The fields of a struct type, refusing one whose fields are not words."""
+        fields = self.structs.get(typ)
+        if fields is None:
+            raise Refused(f"the type '{typ}'", loc)
+        for name, field_type in fields:
+            if field_type not in FIELD_TYPES and not self.is_struct(field_type):
+                raise Refused(
+                    f"a field '{name}' of type {field_type} in '{typ}': the native "
+                    f"backend holds a struct of numbers, bools, strings and structs",
+                    loc)
+        return fields
+
+    def load_variable(self, name: str, block: ir.Block) -> tuple[str, str] | None:
+        """`a` where `a` lives in a cell: the value it holds now."""
+        slot = self.cells.get(name)
+        if slot is None:
+            return None
+        typ = self.cell_types[name]
+        value = self.value()
+        self.emit(block, ir.SlotLoad(value, typ, slot))
+        return value, typ
+
     def block(self, hint: str, params: list[tuple[str, str]] | None = None) -> ir.Block:
         block = ir.Block(f"{hint}{self.next_block}", params or [])
         self.next_block += 1
@@ -193,18 +292,33 @@ class Builder:
             self.emit(block, ir.Str(value, node.value))
             return value, "str", block
         if isinstance(node, Variable):
+            loaded = self.load_variable(node.name, block)
+            if loaded is not None:
+                return loaded[0], loaded[1], block
             if node.name not in env:
                 raise Refused(f"the variable '{node.name}'", node.loc)
             value, typ = env[node.name]
             return value, typ, block
+        if isinstance(node, Float):
+            value = self.value()
+            self.emit(block, ir.Const(value, "f64", float(node.value)))
+            return value, "f64", block
+        if isinstance(node, StructLiteral):
+            return self.struct_literal(node, block, env)
+        if isinstance(node, Member):
+            base, base_type, block = self.expression(node.base, block, env)
+            self.layout(base_type, node.loc)
+            value = self.value()
+            self.emit(block, ir.Field(value, node.typ, base, node.field, base_type))
+            return value, node.typ, block
         if isinstance(node, Unary):
             operand, typ, block = self.expression(node.operand, block, env)
             if node.op == "-":
-                if typ != "i64":
+                if typ not in ("i64", "f64"):
                     raise Refused(f"unary '-' on a {typ}", node.loc)
                 value = self.value()
-                self.emit(block, ir.Neg(value, operand))
-                return value, "i64", block
+                self.emit(block, ir.Neg(value, operand, typ))
+                return value, typ, block
             if node.op == "!":
                 if typ != "bool":
                     raise Refused(f"'!' on a {typ}", node.loc)
@@ -251,6 +365,17 @@ class Builder:
         self.emit(block, ir.ArrayLiteral(value, typ, items))
         self.take(value, typ, owned)
         return value, typ, block
+
+    def struct_literal(self, node: StructLiteral, block: ir.Block, env: dict):
+        """`Point(x: 1, y: 2)` — every field named, in the order written."""
+        self.layout(node.typ, node.loc)
+        fields: list[tuple[str, str]] = []
+        for name, expression in node.fields:
+            value, _typ, block = self.expression(expression, block, env)
+            fields.append((name, value))
+        value = self.value()
+        self.emit(block, ir.StructNew(value, node.typ, fields))
+        return value, node.typ, block
 
     def array_zeros(self, node: Call, block: ir.Block, env: dict, owned: bool):
         """`array_zeros(n)` — a zeroed array of `n` elements."""
@@ -330,19 +455,19 @@ class Builder:
             raise Refused(f"a '{node.op}' between a {left_type} and a {right_type}",
                           node.loc)
         if node.op in ("+", "-", "*", "/", "%"):
-            if left_type != "i64":
+            if left_type not in ("i64", "f64"):
                 raise Refused(f"'{node.op}' on {left_type}s", node.loc)
             value = self.value()
             opcode = {"+": "add", "-": "sub", "*": "mul", "/": "div", "%": "mod"}[node.op]
-            self.emit(block, ir.Bin(value, opcode, left, right))
-            return value, "i64", block
+            self.emit(block, ir.Bin(value, opcode, left, right, left_type))
+            return value, left_type, block
         if node.op in ("==", "!=", "<", "<=", ">", ">="):
-            if left_type not in ("i64", "bool"):
+            if left_type not in ("i64", "bool", "f64"):
                 raise Refused(f"'{node.op}' on {left_type}s", node.loc)
             value = self.value()
             opcode = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le",
                       ">": "gt", ">=": "ge"}[node.op]
-            self.emit(block, ir.Cmp(value, opcode, left, right))
+            self.emit(block, ir.Cmp(value, opcode, left, right, left_type))
             return value, "bool", block
         raise Refused(f"the operator '{node.op}'", node.loc)
 
@@ -404,14 +529,21 @@ class Builder:
                 return "", "void", block
             if node.module:
                 raise Refused(f"a call into the module '{node.module}'", node.loc)
+            if node.name in BUILTINS:
+                # A builtin is an instruction, not a call: the language defines it,
+                # and which runtime implements it is the backend's business.
+                arguments: list[str] = []
+                for argument in node.args:
+                    value, _typ, block = self.expression(argument, block, env)
+                    arguments.append(value)
+                value = self.value()
+                self.emit(block, ir.Builtin(value, node.typ or "void", node.name,
+                                            arguments))
+                return value, node.typ or "void", block
             raise Refused(f"a call to '{node.name}'", node.loc)
         target = node.target
         if target.type_params or node.type_args is not None:
             raise Refused(f"the generic function '{target.qualified}'", node.loc)
-        if target.returns not in ("i64", "bool", "str", "void"):
-            raise Refused(
-                f"a call to '{target.qualified}', which returns {target.returns}",
-                node.loc)
         arguments: list[str] = []
         for argument in node.args:
             value, _typ, block = self.expression(argument, block, env)
@@ -459,9 +591,20 @@ class Builder:
                 env[statement.name] = (value, typ)
                 return block
             value, typ, block = self.expression(statement.value, block, env)
+            if self.is_struct(typ):
+                # A struct is a value with fields that can be written, so the
+                # variable that holds one is storage rather than a name for a value.
+                slot = self.declare_slot(statement.name, typ)
+                self.emit(block, ir.SlotStore(slot, value))
+                return block
             env[statement.name] = (value, typ)
             return block
         if isinstance(statement, Assign):
+            slot = self.cells.get(statement.name)
+            if slot is not None:
+                value, _typ, block = self.expression(statement.value, block, env)
+                self.emit(block, ir.SlotStore(slot, value))
+                return block
             if statement.name not in env:
                 raise Refused(f"an assignment to '{statement.name}'", statement.loc)
             value, typ, block = self.expression(statement.value, block, env)
@@ -469,6 +612,30 @@ class Builder:
             if typ != old_type:
                 raise Refused(f"an assignment of a {typ} to a {old_type}", statement.loc)
             env[statement.name] = (value, typ)
+            return block
+        if isinstance(statement, MemberAssign):
+            # The root must be a variable in storage: a write to a field of a temporary
+            # is a write nobody could read, and the checker refuses it before this.
+            path: list[str] = []
+            node = statement.target
+            while isinstance(node, Member):
+                path.append(node.field)
+                node = node.base
+            if not isinstance(node, Variable):
+                raise Refused(
+                    "a field assignment to something that is not a variable",
+                    statement.loc)
+            slot = self.cells.get(node.name)
+            if slot is None:
+                raise Refused(f"a field assignment to '{node.name}', which is not held "
+                              f"in storage", statement.loc)
+            path.reverse()
+            typ = self.cell_types[node.name]
+            for step in path:
+                self.layout(typ, statement.loc)
+                typ = dict(self.structs[typ])[step]
+            value, _typ, block = self.expression(statement.value, block, env)
+            self.emit(block, ir.FieldStore(slot, tuple(path), value))
             return block
         if isinstance(statement, IndexAssign):
             if statement.name not in env:
@@ -478,6 +645,11 @@ class Builder:
             index, index_type, block = self.expression(statement.index, block, env)
             if index_type != "i64":
                 raise Refused(f"an index of type {index_type}", statement.loc)
+            # The index is checked before the value is evaluated, which is the
+            # language's order: `a[1] = mark()` must not call `mark` when 1 is out
+            # of range. The store checks again, which costs one compare and keeps
+            # `index store` a checked instruction even when it stands alone.
+            self.emit(block, ir.CheckIndex(base_type, base, index))
             value, value_type, block = self.expression(statement.value, block, env)
             if value_type != element_of(base_type):
                 raise Refused(f"a {value_type} into an array of "
@@ -800,7 +972,10 @@ def reachable(program: Program):
 def lower(program: Program) -> ir.Module:
     """Lower every function `main` can reach, or refuse with `E0901` naming it."""
     functions: list[ir.Function] = []
-    for function in reachable(program):
+    reached = reachable(program)
+    check_instantiations(reached)
+    layouts = struct_layouts(program)
+    for function in reached:
         if function.type_params:
             raise make(
                 "E0901",
@@ -810,32 +985,19 @@ def lower(program: Program) -> ir.Module:
                 hint="build with the C backend (the default): `nava build` without "
                      "--backend native",
             )
-        builder = Builder(function)
+        builder = Builder(function, layouts)
         entry = builder.block("entry")
         env: dict[str, tuple[str, str]] = {}
         for param in function.params:
-            if is_array(param.typ):
-                if element_of(param.typ) not in ELEMENT_TYPES:
-                    raise make(
-                        "E0901",
-                        f"the native backend does not implement a parameter of type "
-                        f"{param.typ} (in '{function.qualified}')",
-                        param.loc,
-                        hint="build with the C backend (the default), or pass an "
-                             "array of i64, bool or str",
-                    )
-            elif param.typ not in ("i64", "bool"):
-                raise make(
-                    "E0901",
-                    f"the native backend does not implement a parameter of type "
-                    f"{param.typ} (in '{function.qualified}')",
-                    param.loc,
-                    hint="build with the C backend (the default), or pass a number "
-                         "or a bool",
-                )
             value = builder.value()
-            env[param.name] = (value, param.typ)
             builder.params.append((value, param.typ))
+            if builder.is_struct(param.typ):
+                # A struct parameter is a copy of the caller's value, and its fields
+                # can be written, so it lives in a cell like a local does.
+                slot = builder.declare_slot(param.name, param.typ)
+                builder.emit(entry, ir.SlotStore(slot, value))
+            else:
+                env[param.name] = (value, param.typ)
         try:
             tail = builder.body(function.body, entry, env)
             if tail.terminator is None:
@@ -855,6 +1017,20 @@ def lower(program: Program) -> ir.Module:
             ) from None
         functions.append(ir.Function(
             function.name, builder.params, function.returns, builder.blocks,
-            module=function.module, lines=builder.lines,
+            module=function.module, slots=builder.slots, lines=builder.lines,
             decl_line=builder.decl_line))
-    return ir.Module(functions)
+    # Only the layouts a lowered instruction named: a struct the program declares and
+    # never builds is a declaration the backend has no reason to lay out.
+    used: dict[str, tuple] = {}
+    for function in functions:
+        for block in function.blocks:
+            for instruction in block.instructions:
+                for name in (getattr(instruction, "typ", None),
+                             getattr(instruction, "base_type", None)):
+                    if name in layouts:
+                        used[name] = layouts[name]
+    for name in list(used):
+        for _field, typ in used[name]:
+            if typ in layouts:
+                used[typ] = layouts[typ]
+    return ir.Module(functions, structs=used)

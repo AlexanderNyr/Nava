@@ -1444,27 +1444,9 @@ The compiler's own output is part of the claim: the generated C for one project 
 two different directories is byte-identical, which `nava emit-c` produces and the
 suite checks.
 
-## The native backend: `--backend native`
+## One representation, two backends
 
-The compiler has two code generators. The default one emits portable C11 and calls a C
-compiler; `nava build --backend native` writes a static x86-64 Linux executable itself
-and needs no C toolchain, no assembler and no linker:
-
-```
-nava build prog.nv -o prog --backend native
-nava run prog.nv --backend native
-nava emit-ir prog.nv
-```
-
-`nava run --backend native` writes the same executable and runs it under the same
-sandbox, with the same isolation policy, limits and timeout as any other run: the
-backend is not a way around the isolation `run` promises. A program may be several
-files; each module becomes its own **unit**, and a call from one module to another is a
-relocation the linker resolves rather than a name the generator hopes exists. Two
-modules may each define `abs`, because a function's link-time name is qualified by its
-module.
-
-`emit-ir` writes the intermediate representation both backends of the future share:
+Both backends read one representation. `emit-ir` prints it:
 
 ```
 fn @fact(0: i64) -> i64:
@@ -1491,21 +1473,108 @@ loop's carried values in its signature:
 ```
 
 The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `bool`,
-string literals, arrays of them — `[i64]`, `[bool]` and `[str]`, with a literal,
+`f64`, string literals, arrays of them — `[i64]`, `[bool]` and `[str]`, with a literal,
 `array_zeros`, a checked read, a checked write, `len` and `for … in array` — `+ - * / %`
 with the checks below, `== != < <= > >=`, `!`, `&&`, `||` with short-circuit
 evaluation, `if`/`else`, `while`, `for … in a..b`, `break`, `continue`, labelled jumps,
 calls (including recursion and calls into modules, up to six arguments), a call that
-returns a `str` (a `str` is a pointer, so it travels like one), and `print` of an `i64`,
-a `bool` or a `str`. Everything else — `f64`, slices, `Vec`, `String`, `HashMap`,
-`HashSet`, structs, enums, `match`, `defer`, `?`, a call through a function value, a
-generic function and every other builtin — is refused with `E0901`, **naming the
-construct and the function**:
+returns a `str` (a `str` is a pointer, so it travels like one), struct values —
+a literal, a field read, a field write, a struct parameter and a struct of numbers,
+bools, strings and structs — and `print` of an `i64`, a `bool` or a `str`.
+
+`f64` **arithmetic and comparison** are compiled, and printing one is not: the
+language's printed form is the shortest decimal that reads back as the same value, which
+the C runtime gets from `snprintf` and this backend has to compute itself, so `print` of
+an `f64` is refused by name until that conversion is its own increment. A program can
+therefore observe a float through `if` and `while` on the native backend, and not yet
+through `print`.
+
+Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, enums, `match`,
+`defer`, `?`, a call through a function value, a generic function, arrays of structs, a
+struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
+builtins (`read_i64`, `read_f64`, `to_i64`, `to_f64`, the text and filesystem
+functions) — is refused with `E0901`, **naming the construct and the function**. A
+builtin is refused by the *instruction* rather than by the lowering: the IR says what
+the program means, and the backend says which routine it does not have. So is a generic
+function with more than one instantiation: an instantiation carries no type argument in
+its name, so two of them would be one symbol, and a refusal now is better than one body
+linked over another.
 
 ```
-prog.nv:2:18: error[E0901]: the native backend does not implement a floating-point literal (in 'main')
+prog.nv:4:23: error[E0901]: the native backend does not implement a slice (in 'main')
   hint: build with the C backend (the default): `nava build` without --backend native
 ```
+
+### The C backend reads the same representation
+
+The C backend used to walk the checker's AST. For everything the representation can
+express it now reads the representation instead, so a program that is lowered once is
+printed twice — once as C, once as machine code — and the two backends agree because
+they read the same program rather than two opinions about one.
+
+`nava emit-c` prints the difference: the translation unit begins with a comment naming
+itself as a lowering of the representation, one C local per IR value, one line per
+instruction, and a label and `goto` per block:
+
+```c
+/* A lowering of the shared IR: 2 function(s), 2 block(s). */
+
+/* nava.entry.double */
+static int64_t nv_fn_0(int64_t v0) {
+    int64_t v1;
+    goto nv_fn_0_entry0;
+nv_fn_0_entry0:
+    v1 = nv_add(v0, v0);
+    return v1;
+}
+```
+
+Two properties of that shape are deliberate. Function names keep the ordinals the AST
+path used (`nv_fn_0`, `nv_fn_1`, …), so a symbol in a crash report means the same thing
+whichever way the file was produced; and every array operation goes through the checked
+runtime helper (`nv_arr_i64_get`, `nv_arr_i64_set`, `nv_arr_i64_free`), so ownership and
+bounds checks do not depend on how the program reached the backend.
+
+The rest of the language is still printed by the AST walk: slices, `String`, `Vec`,
+`HashMap`, `HashSet`, enums, `match`, `defer`, `?`, generics, the builtins, float
+arithmetic (the C runtime's checked helpers are `i64` ones, and a float sum has nothing
+to check) and `print` of an `f64` (`nv_print_f64` is the AST path's) are not printable
+from the representation yet, and a program using them is printed the old way. A struct,
+a cell and an `f64` *comparison* are printable: the struct's `typedef` is emitted from
+the layout the representation carries, a cell is an ordinary C local, and a comparison
+of two `double`s is what IEEE says it is in either printer. Which
+path produced a file is visible in the file. `NAVA_C_FROM_IR=0` asks for the old path
+explicitly, which is what a bisect needs when the two disagree.
+
+A struct and a cell are the increment that made the representation carry *identity*. A
+value of the representation is immutable and named once; a struct's field can be
+written, and a write needs storage that outlives the instruction. `slot` declares a
+cell, `load` reads it and `store` writes it, and a struct-typed variable or parameter is
+a cell while a struct-typed temporary is not. That is why `let p = Point(...)` followed
+by `p.x = 1` is expressible and `Point(x: 1, y: 2).x = 1` is not: the second has no
+storage to write into, and the checker refuses it before either backend sees it.
+
+The native backend below is the second reader of that representation.
+
+## The native backend: `--backend native`
+
+The compiler has two code generators. The default one emits portable C11 and calls a C
+compiler; `nava build --backend native` writes a static x86-64 Linux executable itself
+and needs no C toolchain, no assembler and no linker:
+
+```
+nava build prog.nv -o prog --backend native
+nava run prog.nv --backend native
+nava emit-ir prog.nv
+```
+
+`nava run --backend native` writes the same executable and runs it under the same
+sandbox, with the same isolation policy, limits and timeout as any other run: the
+backend is not a way around the isolation `run` promises. A program may be several
+files; each module becomes its own **unit**, and a call from one module to another is a
+relocation the linker resolves rather than a name the generator hopes exists. Two
+modules may each define `abs`, because a function's link-time name is qualified by its
+module.
 
 Only the functions `main` can reach are compiled, which is why importing a module and
 calling one function of it works even though the module also holds functions this
@@ -1516,6 +1585,25 @@ reachable function that uses something outside the subset is still refused, by n
 A refusal is a gap in one backend, not a judgement about the program: the same file
 compiles through the C backend, and the suite asserts exactly that for every construct
 the table names. What the backend cannot compile it never compiles *approximately*.
+
+**How the two value models meet the machine.** An `f64` lives in a frame slot as its
+eight IEEE bytes and is operated on by the vector unit (`addsd`, `subsd`, `mulsd`,
+`divsd`), so it is read and written like any other value. A comparison uses `ucomisd`
+and answers the unordered case itself, because with a `nan` operand the condition codes
+mean "above", not "true": `nan < 1.0` is false, `nan >= 1.0` is false, `nan != nan` is
+true — IEEE on both backends, asserted against the C compiler's answer rather than
+against a table.
+
+A struct is a record from the arena with its fields one 8-byte word apart, in
+declaration order; a field is therefore a fixed offset, and a nested struct field is a
+pointer to its own record. **A struct is copied where it is stored** — a `store` into a
+cell, a construction whose field is a struct, and a struct parameter all copy, and the
+copy is as deep as the type is nested (one copier per struct type, generated once). That
+is what the language says and what the C backend does with a by-value assignment;
+sharing a record instead would make `let s = Segment(from: origin, ...)` let a write
+through `s.from.x` be visible in `origin`. Strings inside a struct are pointers to the
+program's literals and are shared, which is sound because a string is never written
+through.
 
 The options that describe a C build do not apply, and none of them is ignored:
 `--cc`, `--opt` and `--record` with `--backend native` are `E0903`, because a record

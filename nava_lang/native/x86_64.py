@@ -40,6 +40,8 @@ byte-for-byte what the C backend produces and the differential keeps its meaning
 """
 from __future__ import annotations
 
+import struct as _struct
+import zlib
 from pathlib import Path
 
 from .. import limits
@@ -47,7 +49,8 @@ from ..diagnostics import make
 from . import ir, linker
 from .unit import DATA, RODATA, UnitBuilder
 from .x86 import (
-    ARGUMENT_REGISTERS, R8, R9, R10, R11, RAX, RBP, RCX, RDI, RDX, RSI, RSP, Assembler,
+    ARGUMENT_REGISTERS, R8, R9, R10, R11, RAX, RBP, RCX, RDI, RDX, RSI, RSP, XMM0, XMM1,
+    Assembler,
 )
 
 #: How many arguments a call may pass. Beyond this the System V ABI needs stack
@@ -76,7 +79,15 @@ TRACE_VARIABLE = "NAVA_TRACE="
 #: program that is already failing.
 TRACE_DEPTH = 64
 
+#: How many bytes one word of a struct takes. A struct is a record of words — an
+#: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
+FIELD_SIZE = 8
+
 COMPARISONS = {"eq": "e", "ne": "ne", "lt": "l", "le": "le", "gt": "g", "ge": "ge"}
+#: `ucomisd` sets `cf`, `zf` and `pf`, and says nothing about `sf` or `of`, so the
+#: signed conditions `l`/`le`/`g`/`ge` an integer comparison uses are wrong here: the
+#: unsigned pair `b`/`be`/`a`/`ae` is the one that reads those flags.
+FLOAT_COMPARISONS = {"eq": "e", "ne": "ne", "lt": "b", "le": "be", "gt": "a", "ge": "ae"}
 OVERFLOW_MESSAGES = {"add": "i64 overflow in +", "sub": "i64 overflow in -",
                      "mul": "i64 overflow in *", "div": "i64 overflow in /",
                      "mod": "i64 overflow in %", "neg": "i64 overflow in unary -"}
@@ -221,6 +232,8 @@ class Generator:
         slots: dict[str, int] = {}
         for name, _typ in function.params:
             slots[name] = len(slots)
+        for cell in function.slots:
+            slots[cell.name] = len(slots)
         for block in function.blocks:
             for name, _typ in block.params:
                 slots[name] = len(slots)
@@ -228,7 +241,9 @@ class Generator:
                 value = getattr(instruction, "value", "")
                 if isinstance(instruction, (ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not,
                                             ir.Cmp, ir.Copy, ir.Call, ir.ArrayLiteral,
-                                            ir.ArrayZeros, ir.Index, ir.Length)):
+                                            ir.ArrayZeros, ir.Index, ir.Length,
+                                            ir.SlotLoad, ir.StructNew, ir.Field,
+                                            ir.Builtin)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -237,9 +252,7 @@ class Generator:
     def instruction(self, function: ir.Function, instruction) -> None:
         """Emit one instruction. One branch per IR instruction, no interpretation."""
         if isinstance(instruction, ir.Const):
-            number = (int(instruction.payload) if instruction.typ == "i64"
-                      else (1 if instruction.payload else 0))
-            self.code.mov_imm(RAX, number)
+            self.code.mov_imm(RAX, self.constant(instruction))
             self.store(instruction.value, RAX)
             return
         if isinstance(instruction, ir.Str):
@@ -247,6 +260,9 @@ class Generator:
             self.store(instruction.value, RAX)
             return
         if isinstance(instruction, ir.Bin):
+            if instruction.typ == "f64":
+                self.f64_binary(instruction)
+                return
             self.load(instruction.left, RAX)
             self.load(instruction.right, R11)
             if instruction.op in ("add", "sub", "mul"):
@@ -265,8 +281,14 @@ class Generator:
             return
         if isinstance(instruction, ir.Neg):
             self.load(instruction.operand, RAX)
-            self.code.neg(RAX)
-            self.overflow("neg")
+            if instruction.typ == "f64":
+                # Negating a float is flipping the sign bit: no rounding, and `-0.0`
+                # stays a zero with the other sign, which is what IEEE says.
+                self.code.mov_imm(R11, I64_MIN)
+                self.code.xor_reg(RAX, R11)
+            else:
+                self.code.neg(RAX)
+                self.overflow("neg")
             self.store(instruction.value, RAX)
             return
         if isinstance(instruction, ir.Not):
@@ -276,6 +298,9 @@ class Generator:
             self.store(instruction.value, RAX)
             return
         if isinstance(instruction, ir.Cmp):
+            if instruction.typ == "f64":
+                self.f64_compare(instruction)
+                return
             self.load(instruction.left, RAX)
             self.load(instruction.right, R11)
             self.code.cmp_reg(RAX, R11)
@@ -305,6 +330,8 @@ class Generator:
         if isinstance(instruction, ir.IndexStore):
             self.index_store(instruction)
             return
+        if isinstance(instruction, ir.CheckIndex):
+            return self.check_index(instruction)
         if isinstance(instruction, ir.Length):
             self.length(instruction)
             return
@@ -313,6 +340,38 @@ class Generator:
             # instruction the machine needs. It is not dead code either: it is where
             # the IR says who owns what, and a backend that frees implements it.
             return
+        if isinstance(instruction, ir.SlotLoad):
+            self.code.load(RAX, RBP, self.frame(instruction.slot))
+            self.store(instruction.value, RAX)
+            return
+        if isinstance(instruction, ir.SlotStore):
+            self.load(instruction.operand, RAX)
+            if self.struct_type(instruction.slot):
+                # A struct is a value: storing one copies the record, so that the two
+                # names cannot see each other's writes. The C backend's struct
+                # assignment copies too, which is what makes the two comparable.
+                self.code.mov_reg(RDI, RAX)
+                self.code.call(self.copy_helper(self.slot_type(instruction.slot)))
+            self.code.store(RBP, self.frame(instruction.slot), RAX)
+            return
+        if isinstance(instruction, ir.StructNew):
+            self.struct_new(instruction)
+            return
+        if isinstance(instruction, ir.Field):
+            self.field(instruction)
+            return
+        if isinstance(instruction, ir.FieldStore):
+            self.field_store(instruction)
+            return
+        if isinstance(instruction, ir.Builtin):
+            raise make(
+                "E0901",
+                f"the native backend does not implement the builtin "
+                f"'{instruction.name}'",
+                None,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
         if isinstance(instruction, ir.Jump):
             self.jump(instruction)
             return
@@ -327,6 +386,189 @@ class Generator:
             self.code.ret()
             return
         raise AssertionError(f"unknown IR instruction {instruction!r}")
+
+    # -- constants, cells and the vector unit --------------------------------
+    @staticmethod
+    def constant(instruction) -> int:
+        """The 64-bit word an IR constant names.
+
+        An `f64` constant is its IEEE bit pattern: the value lives in a frame slot like
+        every other, and the only place that knows it is a float is the instruction that
+        operates on it.
+        """
+        if instruction.typ == "f64":
+            return _struct.unpack("<q", _struct.pack("<d", float(instruction.payload)))[0]
+        if instruction.typ == "i64":
+            return int(instruction.payload)
+        return 1 if instruction.payload else 0
+
+    def frame(self, name: str) -> int:
+        """The frame displacement of a cell: `[rbp-8*(slot+1)]`, like a value."""
+        return -8 * (self.slots[name] + 1)
+
+    def slots_of(self) -> dict[str, str]:
+        assert self.current is not None
+        return {cell.name: cell.typ for cell in self.current.slots}
+
+    def slot_type(self, slot: str) -> str:
+        """What a cell holds. A cell's type is the type of the variable it is."""
+        return self.slots_of().get(slot, "")
+
+    def struct_type(self, slot: str) -> bool:
+        """Whether a cell holds a struct, which is the one type that is copied by value."""
+        return self.slot_type(slot) in self.layouts()
+
+    def layouts(self) -> dict:
+        return self.module.structs
+
+    def layout(self, typ: str) -> tuple:
+        """The fields of a struct type in declaration order, or nothing if there is none."""
+        return self.layouts().get(typ, ())
+
+    def field_offset(self, typ: str, name: str) -> int:
+        for index, (field, _field_type) in enumerate(self.layout(typ)):
+            if field == name:
+                return FIELD_SIZE * index
+        raise AssertionError(f"no field {name!r} in {typ!r}")
+
+    def field_type(self, typ: str, name: str) -> str:
+        for field, field_type in self.layout(typ):
+            if field == name:
+                return field_type
+        raise AssertionError(f"no field {name!r} in {typ!r}")
+
+    @staticmethod
+    def copy_helper(typ: str) -> str:
+        """The runtime function that copies a struct value: `nv_copy_<name>`.
+
+        A type name may contain `(` and `)` — an instantiation is written `Pair(i64)` —
+        and a symbol may not, so everything that is not a letter, a digit or an
+        underscore becomes an underscore. Two types could then collide, so the mangled
+        name carries a checksum of the type it came from — a checksum rather than
+        `hash()`, because a symbol has to be the same symbol on the next build.
+        """
+        safe = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in typ)
+        return f"nv_copy_{safe}_{zlib.crc32(typ.encode('utf-8')) % 0x10000:04x}"
+
+    def f64_binary(self, instruction: ir.Bin) -> None:
+        """`add`, `sub`, `mul`, `div` on two `f64` values, in SSE.
+
+        No overflow check: an `f64` that leaves the range becomes `inf` and the language
+        says so, which is exactly what the C backend's `+` on two `double`s does.
+        """
+        code = self.code
+        self.load(instruction.left, RAX)
+        code.movq_xmm(XMM0, RAX)
+        self.load(instruction.right, RAX)
+        code.movq_xmm(XMM1, RAX)
+        {"add": code.addsd, "sub": code.subsd, "mul": code.mulsd,
+         "div": code.divsd}[instruction.op](XMM0, XMM1)
+        code.movq_xmm_to_reg(RAX, XMM0)
+        self.store(instruction.value, RAX)
+
+    def f64_compare(self, instruction: ir.Cmp) -> None:
+        """A comparison of two floats, with `nan` answering the way the language says.
+
+        `ucomisd` sets `pf` when an operand is a `nan`, and in that case every ordered
+        comparison is false while `!=` is true — so the unordered case is answered
+        separately instead of being left to the condition codes, which would call
+        `nan < 1.0` true.
+        """
+        code = self.code
+        self.load(instruction.left, RAX)
+        code.movq_xmm(XMM0, RAX)
+        self.load(instruction.right, RAX)
+        code.movq_xmm(XMM1, RAX)
+        code.xor_reg(RAX, RAX)                  # the answer, before the flags
+        code.ucomisd(XMM0, XMM1)
+        done = self.local("cmp_done")
+        if instruction.op == "ne":
+            unordered = self.local("cmp_unordered")
+            code.jcc("p", unordered)
+            code.setcc("ne", RAX)
+            code.jmp(done)
+            code.label(unordered)
+            code.mov_imm(RAX, 1)                # `nan != x` is true
+        else:
+            code.jcc("p", done)                 # `nan` is not less, equal or greater
+            code.setcc(FLOAT_COMPARISONS[instruction.op], RAX)
+        code.label(done)
+        self.store(instruction.value, RAX)
+
+    # -- structs -------------------------------------------------------------
+    def struct_new(self, instruction: ir.StructNew) -> None:
+        """`Point(x: 1, y: 2)`: one record from the arena, one store per field.
+
+        A field that is itself a struct takes a copy of the value it is given. Without
+        it `Segment(from: origin, ...)` would hold the record `origin` names, and a
+        write through the segment would be visible in `origin` — which is not what the
+        language says a construction does, and not what the C backend does.
+        """
+        code = self.code
+        code.mov_imm(RDI, FIELD_SIZE * max(1, len(self.layout(instruction.typ))))
+        code.call("nv_alloc")
+        self.store(instruction.value, RAX)
+        for name, argument in instruction.fields:
+            self.load(argument, RAX)
+            field_type = self.field_type(instruction.typ, name)
+            if field_type in self.layouts():
+                code.mov_reg(RDI, RAX)
+                code.call(self.copy_helper(field_type))
+            code.mov_reg(R11, RAX)
+            self.load(instruction.value, RAX)
+            code.store(RAX, self.field_offset(instruction.typ, name), R11)
+
+    def field(self, instruction: ir.Field) -> None:
+        """A field read is a load from a fixed offset of the record."""
+        self.load(instruction.base, RAX)
+        self.code.load(RAX, RAX, self.field_offset(instruction.base_type, instruction.name))
+        self.store(instruction.value, RAX)
+
+    def field_store(self, instruction: ir.FieldStore) -> None:
+        """A field write is a store into the record the cell points at.
+
+        Every step of the path but the last is a load of the nested record; the last is
+        the store. The nested records are this value's own — a construction copied them
+        and a cell copies what it is given — so a write here is a write to one place.
+        """
+        code = self.code
+        typ = self.slot_type(instruction.slot)
+        self.load(instruction.operand, R11)
+        code.load(RAX, RBP, self.frame(instruction.slot))
+        for step in instruction.path[:-1]:
+            code.load(RAX, RAX, self.field_offset(typ, step))
+            typ = self.field_type(typ, step)
+        code.store(RAX, self.field_offset(typ, instruction.path[-1]), R11)
+
+    def copy_helper_body(self, typ: str) -> None:
+        """`nv_copy_<T>(rdi = record)` -> a copy of it, fields and nested structs.
+
+        A struct field that is itself a struct is copied by calling its own helper, so a
+        copy is as deep as the type is nested and two names never share a record a write
+        could reach. Strings are shared, and that is sound because a string is never
+        written through.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)                # the source
+        code.mov_imm(RDI, FIELD_SIZE * max(1, len(self.layout(typ))))
+        code.call("nv_alloc")
+        code.store(RBP, -16, RAX)               # the copy
+        for name, field_type in self.layout(typ):
+            offset = self.field_offset(typ, name)
+            code.load(R11, RBP, -8)
+            code.load(RAX, R11, offset)
+            if field_type in self.layouts():
+                code.mov_reg(RDI, RAX)
+                code.call(self.copy_helper(field_type))
+            code.load(R11, RBP, -16)
+            code.store(R11, offset, RAX)
+        code.load(RAX, RBP, -16)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
 
     def load(self, value: str, register: int) -> None:
         self.code.load(register, RBP, -8 * (self.slots[value] + 1))
@@ -430,6 +672,14 @@ class Generator:
         code.add_reg(R11, R10)
         code.store(R11, 0, R9)
 
+    def check_index(self, instruction: ir.CheckIndex) -> None:
+        """`check a[i]`: the bounds check on its own, so an order can be stated."""
+        code = self.code
+        self.load(instruction.base, RAX)
+        code.load(R11, RAX, 0)
+        self.load(instruction.index, R10)
+        self.array_bounds()
+
     def array_bounds(self) -> None:
         """The language's `Index` is checked: `0 <= index < length` or the program stops.
 
@@ -509,7 +759,13 @@ class Generator:
             self.code.syscall()
             self.newline_to(1)
             return
-        raise AssertionError(f"unknown printed type {instruction.typ!r}")
+        raise make(
+            "E0901",
+            f"the native backend does not implement printing an {instruction.typ}",
+            None,
+            hint="build with the C backend (the default): `nava build` without "
+                 "--backend native",
+        )
 
     def newline_to(self, descriptor: int) -> None:
         self.code.lea_rip(RSI, self.raw("nv_newline", b"\n"))
@@ -536,7 +792,26 @@ class Generator:
                              ("nv_array_new", self.array_new_helper),
                              ("nv_fail_pair", self.fail_pair_helper)):
             self.runtime_function(symbol, body)
+        for typ in self.copy_types():
+            # One copier per struct type, because a copy is as deep as the type is
+            # nested and the depth is known here rather than at run time.
+            self.runtime_function(self.copy_helper(typ),
+                                  lambda typ=typ: self.copy_helper_body(typ))
         return self.builder.finalise()
+
+    def copy_types(self) -> list[str]:
+        """Every struct type a copier is emitted for, innermost first."""
+        ordered: list[str] = []
+        def visit(typ: str) -> None:
+            if typ in ordered:
+                return
+            for _name, field_type in self.layout(typ):
+                if field_type in self.layouts():
+                    visit(field_type)
+            ordered.append(typ)
+        for typ in sorted(self.layouts()):
+            visit(typ)
+        return ordered
 
     def runtime_function(self, symbol: str, body) -> None:
         """Emit one runtime function: a label, its body, and a symbol with its size.

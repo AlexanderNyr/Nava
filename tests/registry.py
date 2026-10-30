@@ -1272,8 +1272,24 @@ REGISTERED_TESTS = {
     "NativeRefusalTests": {
         "test_a_call_with_more_than_six_arguments_is_refused",
         "test_a_construct_is_refused_by_name",
+        "test_a_routine_the_runtime_lacks_is_refused_at_code_generation",
         "test_an_unknown_option_is_refused_rather_than_ignored",
         "test_the_c_backend_compiles_every_program_the_native_one_refuses",
+    },
+    #: N14e: `f64` and struct values. Two claims, both comparisons: the backends agree
+    #: on a struct copied through a nested path, and on an `f64` observed through a
+    #: comparison. The forms the backend cannot compile are refused by name rather
+    #: than approximated, so the boundary is a test and not a comment.
+    "NativeStructTests": {
+        "test_a_str_field_is_a_string_like_any_other",
+        "test_a_struct_is_copied_where_it_is_stored",
+        "test_a_struct_value_lives_in_a_cell_and_nowhere_else",
+        "test_the_module_states_every_layout_it_lays_out",
+    },
+    "NativeFloatTests": {
+        "test_a_float_constant_is_its_bits_and_the_dump_says_so",
+        "test_an_f64_crosses_a_call_as_its_bits",
+        "test_float_arithmetic_and_comparison_agree_with_the_c_backend",
     },
     "NativeELFTests": {
         "test_the_binary_is_marked_executable_and_can_be_run_directly",
@@ -1285,6 +1301,7 @@ REGISTERED_TESTS = {
     "NativeCommandTests": {
         "test_build_needs_no_c_compiler_on_the_path",
         "test_emit_ir_refuses_a_construct_it_cannot_represent",
+        "test_emit_ir_states_a_struct_and_an_f64_rather_than_refusing",
         "test_emit_ir_writes_the_same_text_to_stdout_and_to_a_file",
         "test_run_compiles_with_the_native_backend_when_asked",
         "test_run_refuses_the_c_build_options_with_the_native_backend",
@@ -1336,6 +1353,27 @@ REGISTERED_TESTS = {
     #: programs, plus the three traps (a bounds check, a negative length and the
     #: length limit) whose message and status the two backends share, plus the
     #: ownership the IR states and the one regression this increment found.
+    #: N14d: the C backend reads the IR. The gate is three-way — IR path, AST path and
+    #: the native backend on one program — plus the boundary in both directions (a
+    #: fixture in the subset must be printed from the IR; a fixture outside it must
+    #: not be) and the one hole this increment closed, a `str` compared by pointer.
+    "CFromIRTests": {
+        "test_a_generic_with_one_instantiation_is_printed_from_the_ir",
+        "test_a_program_outside_the_subset_still_comes_from_the_ast",
+        "test_a_program_the_ir_expresses_but_this_printer_does_not",
+        "test_a_str_comparison_is_never_printed_from_the_ir",
+        "test_array_access_goes_through_the_checked_helpers",
+        "test_every_function_is_defined_once_under_the_name_the_ast_path_used",
+        "test_every_program_in_the_subset_is_printed_from_the_ir",
+        "test_the_body_says_it_came_from_the_ir",
+        "test_the_escape_hatch_asks_for_the_old_path",
+        "test_the_index_is_checked_before_the_value_is_evaluated",
+        "test_the_names_in_the_artefact_do_not_depend_on_the_path",
+        "test_the_ir_states_the_check_before_the_store",
+        "test_the_printer_is_deterministic",
+        "test_the_three_paths_agree_on_output_stderr_and_status",
+        "test_two_instantiations_are_refused_by_name_rather_than_confused",
+    },
     "NativeArrayTests": {
         "test_a_bounds_trap_traces_like_any_other_trap",
         "test_a_temporary_array_is_released_when_its_statement_ends",
@@ -1506,6 +1544,7 @@ def discovered_tests() -> dict[str, set[str]]:
     import test_packages  # noqa: PLC0415
     import test_reproducible  # noqa: PLC0415
     import test_native  # noqa: PLC0415
+    import test_cgen_ir  # noqa: PLC0415
 
     found: dict[str, set[str]] = {}
     for module in (test_ab, test_arrays, test_contracts, test_control, test_defers, test_enums,
@@ -1519,7 +1558,8 @@ def discovered_tests() -> dict[str, set[str]]:
                    test_registry, test_release, test_results, test_self_test, test_sandbox,
                    test_slices,
                    test_spec, test_storage, test_structs, test_stdlib, test_study,
-                   test_tables, test_text, test_values, test_vec, test_native):
+                   test_tables, test_text, test_values, test_vec, test_native,
+                   test_cgen_ir):
         for name, value in vars(module).items():
             if isinstance(value, type) and issubclass(value, unittest.TestCase) and name != "TestCase":
                 if name in found:
@@ -1595,8 +1635,12 @@ def check_skip_state() -> list[str]:
     import test_packages  # noqa: PLC0415
     import test_reproducible  # noqa: PLC0415
     import test_native  # noqa: PLC0415
-    for module, class_name in ((test_native, "NativeDifferentialTests"),
+    import test_cgen_ir  # noqa: PLC0415
+    for module, class_name in ((test_cgen_ir, "CFromIRTests"),
+                               (test_native, "NativeDifferentialTests"),
                                (test_native, "NativeArrayTests"),
+                               (test_native, "NativeStructTests"),
+                               (test_native, "NativeFloatTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

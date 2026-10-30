@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+N14e: **`f64` and struct values in the IR** — the representation learns the rest of the
+value model, and both readers print it.
+
+- `Bin`, `Neg` and `Cmp` carry the type they operate on, so `add f64` and `add i64` are
+  different instructions rather than one instruction a backend has to guess about.
+- A struct is a value of the IR: `struct` builds one, `field` reads one by name, and a
+  **cell** (`slot`, `load`, `store`) is the storage a field write needs, because a value
+  is immutable and storage has an identity. The module states the layout, so a field
+  name is a position in the program's declaration rather than in a backend's opinion.
+- A builtin is an instruction too (`builtin`) when the language defines it and no module
+  declares it: what it means is the language's business, which runtime implements it is
+  the backend's, and a backend that has no such routine refuses it by name.
+- The native backend gains SSE arithmetic (`addsd`, `subsd`, `mulsd`, `divsd`) and
+  comparisons (`ucomisd`, with `nan` answered separately: unordered is false for
+  `<`, `<=`, `==`, `>` and `>=`, and true for `!=` — the language is IEEE), struct
+  records from the arena with fields one word apart, and a copier per struct type so
+  that a copy is as deep as the type is nested.
+- The C backend prints cells, structs and `f64` comparisons from the same IR, and names
+  every function with the checker's table, so the artefact's vocabulary does not depend
+  on which path printed it.
+- Still refused by name: printing an `f64` (its shortest round-tripping decimal form is
+  a conversion the native backend does not have), the builtins, slices, enums, `match`,
+  `defer`, `?`, `String`/`Vec`/`HashMap`/`HashSet`, arrays of structs and struct fields
+  that own storage.
+
+N14d: **one IR, two backends** — the C backend reads the shared IR.
+
+- For everything the IR can express — arrays of `i64`/`bool`/`str`, checked arithmetic
+  and comparisons, `if`/`while`/`for`, calls, `print` — `cgen.py` no longer walks the
+  AST. A block becomes a label and a `goto`, a value a local, and an instruction the
+  runtime call the language says it is, so the two backends read one lowering instead
+  of writing two. The rest of the language is still printed by the AST walk, and the
+  emitted file says which path produced it.
+- The gate is three-way: C from the IR, C from the AST (`NAVA_C_FROM_IR=0`) and the
+  native backend agree on stdout, stderr and exit status.
+- The index of a store is checked **before** the value is evaluated — `a[1] = mark()`
+  must not call `mark` — and the IR states that as a `check` instruction rather than
+  leaving it to the printer.
+- Two refusals that would otherwise have been silent wrongness: `==` on two `str`s is
+  never printed from the IR (C would compare pointers, the language compares text),
+  and a generic function with more than one instantiation is refused by name (an
+  instantiation carries no type argument in its name, so two would share one symbol).
+
 N14c: **arrays through one IR** — an array is a value of the intermediate
 representation, with its own instructions and its own ownership.
 
