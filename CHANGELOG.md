@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+N14i: **slices and arrays of structs through one IR** — a view that owns nothing, and an
+element that is one word.
+
+- `a[i..j]` is one instruction (`slice`) on both sides of the differential: the native
+  backend answers two words pointing into the parent's elements after `nv_check_slice`'s
+  two questions, and the C backend prints the `nv_arr_T_slice` it always printed. No
+  elements are copied, so a view of a thousand is two words and a write through the
+  parent is visible through the view.
+- An array of structs is the same six instructions as any other array: an element on
+  this backend is the address of its record, so the handle stays one word per element. A
+  struct that enters the array — by a literal or by `a[i] = p` — is copied as it enters,
+  and `array_zeros` of a struct element fills every slot with a zeroed record, because a
+  null there would read a field out of nothing.
+- The C backend prints the family of per-array-type helpers from the IR path too
+  (`array_helpers`), because the IR calls them by name: the body comes from the IR, the
+  helpers are still generated from the program's array types.
+- Two fixtures left the AST walk — `slices_basic` and `struct_arrays` — so **28 of 32**
+  now build and run identically through both backends, and the set the C backend prints
+  from the IR is the same 28.
+- Two shapes stay refused by name: `Vec`, `String`, `HashMap`, `HashSet`, a function used
+  as a value, and an `f64` that is printed.
+
 N14h: **cleanup and early return through one IR** — `defer` and `?`, and the two
 fixtures that needed them.
 

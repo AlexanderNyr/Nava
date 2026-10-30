@@ -1473,8 +1473,9 @@ loop's carried values in its signature:
 ```
 
 The subset the native backend compiles is, at this stage of `PLAN.md`: `i64`, `bool`,
-`f64`, string literals, arrays of them — `[i64]`, `[bool]` and `[str]`, with a literal,
-`array_zeros`, a checked read, a checked write, `len` and `for … in array` — `+ - * / %`
+`f64`, string literals, arrays of them — `[i64]`, `[bool]`, `[str]` and arrays of structs
+— with a literal, `array_zeros`, a checked read, a checked write, `len`, `for … in array`
+and a slice, `+ - * / %`
 with the checks below, `== != < <= > >=`, `!`, `&&`, `||` with short-circuit
 evaluation, `if`/`else`, `while`, `for … in a..b`, `break`, `continue`, labelled jumps,
 calls (including recursion and calls into modules, up to six arguments), a call that
@@ -1521,9 +1522,19 @@ runtime routines, as are the number conversions `to_i64` and `to_f64` and the re
 `read_i64` — with the C runtime's four ways of refusing a number it cannot read, word
 for word and status for status.
 
-Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, a call through a
-function value, a generic function, arrays of structs, an enum payload of struct type, a
-struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
+A slice is a **view and not a copy**, on both backends: `a[i..j]` answers two words — how
+many elements and where the first of them is — pointing into the parent's elements, and
+the bounds are checked against the parent with `nv_check_slice`'s two questions, in its
+order and with its words. The binding that holds a slice owns nothing (the checker calls
+it borrowed), so the parent's release is the only release. An array of structs holds one
+word per element — the address of the element's record — and a struct that enters the
+array, by literal or by a write into a slot, is **copied** as it enters, so two elements
+named from one record stay two; `array_zeros` of a struct element fills the array with a
+zeroed record each.
+
+Everything else — `Vec`, `String`, `HashMap`, `HashSet`, a call through a
+function value, a generic function, an enum payload of struct type, a struct field that
+owns storage (`String`, `Vec`, a map, a set, an array), and the
 builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem and
 argument functions) — is refused with `E0901`, **naming the construct and the
 function**. A

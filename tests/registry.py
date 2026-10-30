@@ -1312,6 +1312,23 @@ REGISTERED_TESTS = {
         "test_the_failure_path_runs_the_defers_it_leaves",
         "test_the_ir_states_the_early_return_and_the_payload_read",
     },
+    #: N14i: slices and arrays of structs. A slice is a view — two words pointing into
+    #: the parent's elements — so the two backends answer with the same header and the
+    #: same two checks; a struct element is one word (the address of its record) that
+    #: is copied as it enters the array, which is what keeps two elements two.
+    "NativeSliceTests": {
+        "test_a_slice_is_a_view_and_not_a_copy",
+        "test_the_bounds_are_checked_and_the_message_is_the_c_one",
+        "test_the_fixture_agrees_with_the_c_backend",
+        "test_the_lowering_states_the_view_once",
+    },
+    "NativeStructArrayTests": {
+        "test_a_zeroed_array_of_structs_holds_a_zeroed_record_each",
+        "test_an_element_is_copied_as_it_enters_the_array",
+        "test_an_element_is_one_word_in_the_lowering",
+        "test_an_element_written_into_the_array_is_copied_too",
+        "test_the_fixture_agrees_with_the_c_backend",
+    },
     "NativeEnumTests": {
         "test_a_match_inside_a_loop_reads_the_value_it_was_given_each_time",
         "test_a_match_through_a_parameter_sees_the_tag_it_was_given",
@@ -1699,6 +1716,8 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeReturnPathTests"),
                                (test_native, "NativeDeferTests"),
                                (test_native, "NativeTryTests"),
+                               (test_native, "NativeSliceTests"),
+                               (test_native, "NativeStructArrayTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

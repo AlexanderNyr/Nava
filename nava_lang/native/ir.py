@@ -240,11 +240,16 @@ class Index:
 
 @record()
 class IndexStore:
-    """`index %array[%i] = %v` — a checked write; it defines no value."""
+    """`index %array[%i] = %v` — a checked write; it defines no value.
+
+    `typ` is the *array* type, because a write into an array of structs has to copy the
+    value as it lands: the element is a record and two elements must not become one.
+    """
 
     base: str
     index: str
     value: str
+    typ: str = ""
 
 
 @record()
@@ -341,6 +346,23 @@ class Builtin:
     typ: str
     name: str
     args: list
+
+
+@record()
+class Slice:
+    """`%v = slice %a[%start..%end] : [T]` — a read-only view of part of an array.
+
+    A slice owns nothing: the array it views stays the owner, and the binding that holds
+    the view is *borrowed*, which is what the checker proved and what lets this
+    instruction be a header pointing into somebody else's elements rather than a copy.
+    Both backends answer with a view, so a slice of a thousand elements is two words.
+    """
+
+    value: str
+    typ: str
+    base: str
+    start: str
+    end: str
 
 
 @record()
@@ -554,6 +576,9 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
                 f"{instruction.typ}")
     if isinstance(instruction, Unreachable):
         return "unreachable"
+    if isinstance(instruction, Slice):
+        return (f"%{instruction.value} = slice %{instruction.base}"
+                f"[%{instruction.start}..%{instruction.end}] : {instruction.typ}")
     if isinstance(instruction, Copy):
         return f"%{instruction.value} = copy %{instruction.operand}"
     if isinstance(instruction, Call):

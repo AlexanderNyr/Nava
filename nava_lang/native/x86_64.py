@@ -259,7 +259,7 @@ class Generator:
                                             ir.ArrayZeros, ir.Index, ir.Length,
                                             ir.SlotLoad, ir.StructNew, ir.Field,
                                             ir.Builtin, ir.TextCompare, ir.Variant,
-                                            ir.Tag, ir.Payload)):
+                                            ir.Tag, ir.Payload, ir.Slice)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -348,6 +348,9 @@ class Generator:
             return
         if isinstance(instruction, ir.CheckIndex):
             return self.check_index(instruction)
+        if isinstance(instruction, ir.Slice):
+            self.slice(instruction)
+            return
         if isinstance(instruction, ir.Length):
             self.length(instruction)
             return
@@ -722,14 +725,52 @@ class Generator:
         code.mov_imm(RDI, len(instruction.items))
         code.call("nv_array_new")
         self.store(instruction.value, RAX)
+        struct = self.struct_type_of(self.element_type(instruction.typ))
         for offset, item in enumerate(instruction.items):
             self.load(item, R11)
+            if struct is not None:
+                # A struct element is copied as it enters the array, exactly as a field
+                # of a construction is: two elements naming one record must stay two.
+                code.mov_reg(RDI, R11)
+                code.call(self.copy_helper(struct))
+                code.mov_reg(R11, RAX)
             self.load(instruction.value, RAX)
             code.store(RAX, 16 + ELEMENT_SIZE * offset, R11)
 
     def array_zeros(self, instruction: ir.ArrayZeros) -> None:
+        code = self.code
         self.load(instruction.count, RDI)
-        self.code.call("nv_array_new")
+        code.call("nv_array_new")
+        self.store(instruction.value, RAX)
+        element = self.element_type(instruction.typ)
+        if self.struct_type_of(element) is not None:
+            # A struct element is an address, so a zeroed array of them needs one zeroed
+            # record each: a null pointer would read its fields out of nothing.
+            self.load(instruction.value, RDI)
+            self.load(instruction.count, RSI)
+            code.mov_imm(RDX, FIELD_SIZE * max(1, len(self.layout(element))))
+            code.call("nv_fill_structs")
+
+    @staticmethod
+    def element_type(typ: str) -> str:
+        """`[T]` -> `T`. An array type is always bracketed; nothing else is."""
+        return typ[1:-1].strip() if typ.startswith("[") and typ.endswith("]") else typ
+
+    def struct_type_of(self, typ: str) -> str | None:
+        """`typ` if it is a struct this module laid out, else None."""
+        return typ if typ in self.layouts() else None
+
+    def slice(self, instruction: ir.Slice) -> None:
+        """`a[i..j]`: a header whose element pointer points into the view's elements.
+
+        A view, not a copy: the parent owns the storage and the binding that holds the
+        slice is borrowed, so nothing releases it. Two words and one check, which is what
+        the C backend does with `nv_arr_T_slice`.
+        """
+        self.load(instruction.base, RDI)
+        self.load(instruction.start, RSI)
+        self.load(instruction.end, RDX)
+        self.code.call("nv_array_view")
         self.store(instruction.value, RAX)
 
     def length(self, instruction: ir.Length) -> None:
@@ -758,8 +799,16 @@ class Generator:
         self.load(instruction.index, R10)
         self.array_bounds()
         self.load(instruction.value, R9)
+        struct = self.struct_type_of(self.element_type(instruction.typ))
+        if struct is not None:
+            code.mov_reg(RDI, R9)
+            code.call(self.copy_helper(struct))
+            code.mov_reg(R9, RAX)
+        # The copy is a call, and a call keeps nothing caller-saved: the base, the index
+        # and the pointer into the elements are all read again afterwards.
         self.load(instruction.base, RAX)
         code.load(R11, RAX, 8)
+        self.load(instruction.index, R10)
         code.mov_imm(R8, ELEMENT_SIZE)
         code.imul_reg(R10, R8)
         code.add_reg(R11, R10)
@@ -884,6 +933,8 @@ class Generator:
                              ("nv_alloc", self.alloc_helper),
                              ("nv_array_new", self.array_new_helper),
                              ("nv_fail_pair", self.fail_pair_helper),
+                             ("nv_array_view", self.array_view_helper),
+                             ("nv_fill_structs", self.fill_structs_helper),
                              ("nv_str_len", self.str_len_helper),
                              ("nv_str_cmp", self.str_cmp_helper),
                              ("nv_byte_at", self.byte_at_helper),
@@ -1507,6 +1558,138 @@ class Generator:
         code.add_reg(RDI, RAX)
 
     # -- text, numbers and input ---------------------------------------------
+    def array_view_helper(self) -> None:
+        """`nv_array_view(rdi = array, rsi = start, rdx = end)` -> a view of the range.
+
+        The checks are the C runtime's two, in its order and with its words: a start that
+        is not inside `[0, length]` first, then an end that is not inside
+        `[start, length]`. The second message names three numbers, because that is what it
+        takes to see which of the two bounds was wrong. Like the C runtime's
+        `nv_check_slice`, a failure exits without a trace.
+        """
+        code = self.code
+        start_ok, end_ok = self.local("view_start"), self.local("view_end")
+        start_bad, end_bad = self.local("view_start_bad"), self.local("view_end_bad")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)                # the array
+        code.store(RBP, -16, RSI)               # start
+        code.store(RBP, -24, RDX)               # end
+        code.load(R11, RDI, 0)                  # the length
+        code.store(RBP, -32, R11)
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RSI, R10)
+        code.jcc("l", start_bad)
+        code.cmp_reg(RSI, R11)
+        code.jcc("le", start_ok)
+        code.label(start_bad)
+        self.write_bytes("nava runtime error: slice start ")
+        self.write_formatted(-16, 1)
+        self.write_bytes(" is out of range for length ")
+        self.write_formatted(-32, 2)
+        self.newline_to(2)
+        self.exit_now()
+        code.label(start_ok)
+        code.load(R11, RBP, -32)
+        code.load(R10, RBP, -16)
+        code.load(RAX, RBP, -24)
+        code.cmp_reg(RAX, R10)
+        code.jcc("l", end_bad)
+        code.cmp_reg(RAX, R11)
+        code.jcc("le", end_ok)
+        code.label(end_bad)
+        self.write_bytes("nava runtime error: slice end ")
+        self.write_formatted(-24, 1)
+        self.write_bytes(" is out of range for start ")
+        self.write_formatted(-16, 2)
+        self.write_bytes(" and length ")
+        self.write_formatted(-32, 3)
+        self.newline_to(2)
+        self.exit_now()
+        code.label(end_ok)
+        # Two words: how many elements, and where the first of them is.
+        code.mov_imm(RDI, FIELD_SIZE * 2)
+        code.call("nv_alloc")
+        code.store(RBP, -40, RAX)
+        code.load(R11, RBP, -24)
+        code.load(R10, RBP, -16)
+        code.sub_reg(R11, R10)                  # end - start
+        code.store(RAX, 0, R11)                 # the length of the view
+        code.load(R11, RBP, -8)
+        code.load(R11, R11, 8)                  # the parent's elements
+        code.load(R10, RBP, -16)
+        code.mov_imm(R9, ELEMENT_SIZE)
+        code.imul_reg(R10, R9)
+        code.add_reg(R11, R10)                  # the first element of the view
+        code.store(RAX, 8, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def write_formatted(self, slot: int, buffer: int) -> None:
+        """Write the number in frame slot `slot` to standard error.
+
+        `nv_format` answers a pointer and a length, so the pointer has to move into `rsi`
+        before the syscall's own number goes into `rax` — the first version of this wrote
+        the buffer's address as the text and the digits came out as whatever the buffer
+        held.
+        """
+        code = self.code
+        code.load(RDI, RBP, slot)
+        code.lea_rip(RSI, self.number_buffer(buffer))
+        code.call("nv_format")                  # rax = the digits, rdx = how many
+        code.mov_reg(RSI, RAX)
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+
+    def exit_now(self) -> None:
+        """`exit(1)` by syscall: what the C runtime's numbered stops do."""
+        self.code.mov_imm(RDI, 1)
+        self.code.mov_imm(RAX, 60)
+        self.code.syscall()
+
+    def fill_structs_helper(self) -> None:
+        """`nv_fill_structs(rdi = array, rsi = count, rdx = bytes)`: a record per element.
+
+        An array of structs holds record addresses, so a zeroed array of them must hold a
+        zeroed record each. The arena hands out zeroed bytes, which is what makes this a
+        fill rather than a loop of field stores.
+        """
+        code = self.code
+        step, done = self.local("fill_step"), self.local("fill_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -16, RSI)               # how many
+        code.store(RBP, -24, RDX)               # the size of one record
+        code.load(R11, RDI, 8)                  # where the elements start
+        code.store(RBP, -32, R11)
+        code.xor_reg(R10, R10)
+        code.store(RBP, -40, R10)               # the index
+        code.label(step)
+        code.load(R10, RBP, -40)
+        code.load(R11, RBP, -16)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", done)
+        code.load(RDI, RBP, -24)
+        code.call("nv_alloc")
+        code.load(R11, RBP, -32)
+        code.load(R10, RBP, -40)
+        code.mov_imm(R9, ELEMENT_SIZE)
+        code.imul_reg(R10, R9)
+        code.add_reg(R11, R10)
+        code.store(R11, 0, RAX)
+        code.load(R10, RBP, -40)
+        code.inc(R10)
+        code.store(RBP, -40, R10)
+        code.jmp(step)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
     def str_len_helper(self) -> None:
         """`nv_str_len(rdi)` -> the byte length a `str` carries in its header.
 

@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14h delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?` are compiled natively, while printing an `f64`, the collections, slices, arrays of structs and the remaining builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14i delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?`, slices and arrays of structs are compiled natively, while printing an `f64`, the collections, `String`/`Vec`, a function used as a value and the remaining builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1361,6 +1361,7 @@ the differential records.
 | N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
 | N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
 | N14h | **Cleanup and early return through one IR**: `defer` lowered at every exit of the block that registered it, `?` as a tag test with an early return of the failure value and one payload read, both fixture families closed, and the two shapes this backend cannot hold refused by name | **Delivered** (record below) |
+| N14i | **Slices and arrays of structs through one IR**: a slice as one instruction that answers a *view* into the parent's elements after the C runtime's two bound checks, and an array of structs as the same six array instructions with a one-word element that is copied as it enters the array | **Delivered** (record below) |
 | N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
@@ -1769,6 +1770,71 @@ between instantiations (refused by name); that a `defer` on this backend release
 anything (the arena does not give memory back, so `release` is still nothing here); or
 anything about speed — every deferred body is a copy, and no benchmark was run.
 
+#### Delivery record N14i (2026-10-30)
+
+**Slices and arrays of structs — a view, and an element that is one word.** Two fixtures
+that had been refused by name since N14c, and the two questions behind them: what a slice
+*is* (a copy of the elements, or a window onto them) and how a struct fits in a slot the
+backend keeps one word wide.
+
+The first question has one answer on both backends, and it is the C one: a slice is two
+words — how many elements, and where the first of them is — that point into the parent's
+elements. The native handle is `{len@0, data@8}` with no capacity word, so a view is a
+*new* two-word header over somebody else's storage, which is exactly what
+`nv_arr_T_slice` returns and why a view of a thousand elements costs nothing. The two
+bounds are checked against the parent by `nv_array_view`, in `nv_check_slice`'s order
+(start inside `[0, len]`, then end inside `[start, len]`) and with its words — including
+the second message's three numbers, because a bound that is wrong is only legible next to
+the other one.
+
+The second question is answered by what a struct already is on this backend: the address
+of its record. An element is therefore one word, and the array keeps the six instructions
+it had. What that costs is *copy on entry* — a struct that enters the array, by a literal
+or by `a[i] = p`, is copied into its slot by the same helper a field write uses — so two
+elements named from one record stay two, which is what C's struct assignment does. And
+`array_zeros` of a struct element has to *fill*, because a zeroed slot would be a null
+pointer and reading a field through it would read nothing; the arena hands out zeroed
+bytes, so the fill is one zeroed record per slot.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A slice is a view, and its bounds are the parent's | `NativeSliceTests.test_a_slice_is_a_view_and_not_a_copy` | `a[1..3]`, an empty `a[2..2]`, the whole `a[0..4]` and a slice of a `[str]` all agree with the C backend: `2 20 0 4 b` |
+| Every refused bound stops the way the C runtime stops | `test_the_bounds_are_checked_and_the_message_is_the_c_one` | all three shapes — end past the length, a negative start, a reversed pair — print the C message word for word and exit 1 |
+| A slice is one instruction, not a lowering trick | `test_the_lowering_states_the_view_once` | exactly one `slice` in the IR of the program, typed `[i64]`, printed as `= slice %4[%5..%6] : [i64]` |
+| The fixture agrees | `test_the_fixture_agrees_with_the_c_backend` (`slices_basic`) | `2 20 30 30 1 9 b` on both, same status |
+| An element is copied as it enters the array | `NativeStructArrayTests.test_an_element_is_copied_as_it_enters_the_array`, `test_an_element_written_into_the_array_is_copied_too` | `1 1 99 0 7` and `1 42 2 2`: changing the record after it entered the array leaves both elements alone, and `a[i] = p` copies too |
+| `array_zeros` fills a record per slot | `test_a_zeroed_array_of_structs_holds_a_zeroed_record_each` | `0 0 5 0` — a zeroed read, a written element, and the neighbour still zero |
+| A struct element is one word in the IR | `test_an_element_is_one_word_in_the_lowering` | the literal is `[Point]`, the read's element type is `Point`, and the array's own `len` is still a `Length` |
+| The C backend prints the same program from the IR | `CFromIRTests` (`slices_basic` and `struct_arrays` joined `IN_THE_SUBSET`) | both carry the marker, and the same programs printed by the old AST walk (`NAVA_C_FROM_IR=0`) produce identical output |
+| The corpus grows | the fixture sweep | **28 of 32** fixtures build and run identically through both backends (26 at N14h), **0 differ**, 4 refused by name (`floats`, `map_basics`, `self_test`, `set_basics`); the C-from-IR set is the same 28 |
+
+Three things went wrong, all of them found by running. **The C-from-IR path had no array
+helpers at all**: the family `nv_arr_<tag>_(new|init|copy|get|set|free|slice)` was
+generated by the AST walk, so a body printed from the IR called functions nobody had
+printed and `cc` refused the file — the fix is `array_helpers`, which generates the same
+family from the checked program's array types and is placed after the struct declarations
+(a helper that copies an element needs its `sizeof`). **`index_store` lost its index and
+its base across the copy**: the copy is a call, and a call keeps nothing caller-saved, so
+the first version stored through a register the call had clobbered (a `-Wimplicit`
+compiles, then a segmentation fault on the second element). And **the check for "a
+struct may be an element" is the layout's**, not a list of scalar names: a struct whose
+fields are not words is refused by `layout`, which is the same rule that refuses it as a
+field, so an array of a struct that owns an array is refused by name rather than
+half-compiled.
+
+The audit is re-measured: **19 048 lines, 27 modules, 688 functions** (18 743 / 27 / 678
+at N14h). The suite is **1 053 tests, 1 633 subtests**, `tests/registry.py` reports 983
+registered tests with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic
+codes, and the overhead record is re-measured: **108 832 tokens**, unchanged.
+
+What this increment does **not** claim: that the AST walk is gone — 4 of the 32 fixtures
+still need it (`floats`, `map_basics`, `set_basics`, `self_test`); that a slice owns
+anything (it does not, and the checker's borrow is the only thing keeping the parent
+alive); that an element of a struct that owns storage is supported (refused by name); that
+`Vec`, `String`, the collections or the remaining builtins work natively (each is refused
+by name); or anything about speed — the copy on entry is a call per element, and no
+benchmark was run.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1921,7 +1987,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 18 743 lines and 678 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 19 048 lines and 688 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

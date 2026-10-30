@@ -84,8 +84,8 @@ SUPPORTED = (
     ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.TextCompare, ir.Copy, ir.Call,
     ir.Print, ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore,
     ir.Length, ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field,
-    ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Jump, ir.Branch,
-    ir.Ret, ir.Unreachable,
+    ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Slice, ir.Jump,
+    ir.Branch, ir.Ret, ir.Unreachable,
 )
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
@@ -101,12 +101,30 @@ def element_of(typ: str) -> str | None:
     return None
 
 
+def array_element(typ: str, structs: dict | None = None) -> str | None:
+    """`[Point]` -> the C tag of its elements (`Point`), or None if unspellable.
+
+    An array's C type is `nv_arr_<tag>`, and the tag is the element's own name — a
+    scalar's (`i64`, `bool`, `str`) or a struct's (`Point`). The C backend builds the
+    same name from the same rule (`cgen.array_tag`), so a helper name in a crash report
+    means the same thing whichever path printed the file.
+    """
+    if not (typ.startswith("[") and typ.endswith("]")):
+        return None
+    element = typ[1:-1].strip()
+    if element in ELEMENT_NAMES:
+        return element
+    if is_struct(element, structs):
+        return element
+    return None
+
+
 def c_type(typ: str, structs: dict | None = None,
            enums: dict | None = None) -> str:
     """The C type of an IR value, or a KeyError naming the type nobody can spell."""
     if typ in SCALAR_TYPES:
         return SCALAR_TYPES[typ]
-    element = element_of(typ)
+    element = array_element(typ, structs)
     if element is not None:
         return f"nv_arr_{element}"
     if is_struct(typ, structs):
@@ -128,7 +146,7 @@ def is_struct(typ: str, structs: dict | None = None) -> bool:
 def spellable(typ: str, structs: dict | None = None,
               enums: dict | None = None) -> bool:
     """Whether `c_type` can name this type."""
-    return (typ in SCALAR_TYPES or element_of(typ) is not None
+    return (typ in SCALAR_TYPES or array_element(typ, structs) is not None
             or is_struct(typ, structs) or (enums is not None and typ in enums))
 
 
@@ -194,7 +212,7 @@ def value_types(function: ir.Function) -> dict[str, str]:
                 types[instruction.value] = instruction.enum
             elif isinstance(instruction, (ir.ArrayLiteral, ir.ArrayZeros, ir.Index,
                                           ir.SlotLoad, ir.StructNew, ir.Field,
-                                          ir.Payload)):
+                                          ir.Payload, ir.Slice)):
                 types[instruction.value] = instruction.typ
             elif isinstance(instruction, ir.Tag):
                 # A tag is an `i64`: the checker numbered the variants, and a `match`
@@ -250,12 +268,16 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
     if isinstance(instruction, ir.Print):
         return instruction.typ in PRINT_HELPERS
     if isinstance(instruction, (ir.ArrayLiteral, ir.ArrayZeros, ir.CheckIndex)):
-        return element_of(instruction.typ) is not None
+        return array_element(instruction.typ, structs) is not None
+    if isinstance(instruction, ir.Slice):
+        return array_element(instruction.typ, structs) is not None
     if isinstance(instruction, ir.Index):
-        # An `Index` states the *element* type: the array is what it reads from.
-        return instruction.typ in ELEMENT_NAMES
+        # An `Index` states the *element* type: the array is what it reads from, and an
+        # element may be a struct, whose C type is a struct value the array copies.
+        return (instruction.typ in ELEMENT_NAMES or is_struct(instruction.typ, structs)
+                or (enums is not None and instruction.typ in enums))
     if isinstance(instruction, ir.Release):
-        return element_of(instruction.typ) is not None
+        return array_element(instruction.typ, structs) is not None
     if isinstance(instruction, (ir.Variant, ir.Tag, ir.Payload)):
         # The enum has to be in the module's table: a tag compared against a number
         # nobody declared is how a `match` silently picks the wrong arm.
@@ -270,8 +292,12 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
 class Printer:
     """One program, printed: the names it uses and the functions it emits."""
 
-    def __init__(self, module: ir.Module, names: dict[str, str] | None = None) -> None:
+    def __init__(self, module: ir.Module, names: dict[str, str] | None = None,
+                 helpers: str = "") -> None:
         self.module = module
+        #: The per-array-type helpers, already printed: the IR calls them by name and
+        #: the generated family is the same one the AST path uses.
+        self.helpers = helpers
         #: A link-time name → the C function that implements it. `names` is the C
         #: backend's own table (`nv_fn_<ordinal>`, the numbering the checker gave each
         #: function), passed in so that a symbol in a crash report means the same thing
@@ -288,6 +314,9 @@ class Printer:
                  f"function(s), {blocks} block(s). */", ""]
         lines.extend(self.enum_declarations())
         lines.extend(self.struct_declarations())
+        if self.helpers:
+            lines.extend(self.helpers.rstrip("\n").split("\n"))
+            lines.append("")
         for function in self.module.functions:
             lines.append(self.signature(function) + ";")
         lines.append("")
@@ -491,9 +520,9 @@ class Printer:
                     f"{variable(instruction.operand)});"]
         if isinstance(instruction, ir.ArrayLiteral):
             return [f"    {variable(instruction.value)} = "
-                    f"{array_literal(instruction)};"]
+                    f"{array_literal(instruction, self.module.structs)};"]
         if isinstance(instruction, ir.ArrayZeros):
-            element = element_of(instruction.typ)
+            element = array_element(instruction.typ, self.module.structs)
             return [f"    {variable(instruction.value)} = nv_arr_{element}_new("
                     f"{variable(instruction.count)});"]
         if isinstance(instruction, ir.Index):
@@ -506,14 +535,19 @@ class Printer:
             return [f"    (void)nv_check_index({variable(instruction.index)}, "
                     f"{variable(instruction.base)}.len);"]
         if isinstance(instruction, ir.IndexStore):
-            element = element_of(types[instruction.base])
+            element = array_element(types[instruction.base], self.module.structs)
             return [f"    nv_arr_{element}_set(&{variable(instruction.base)}, "
                     f"{variable(instruction.index)}, {variable(instruction.value)});"]
+        if isinstance(instruction, ir.Slice):
+            tag = array_element(instruction.typ, self.module.structs)
+            return [f"    {variable(instruction.value)} = "
+                    f"nv_arr_{tag}_slice({variable(instruction.base)}, "
+                    f"{variable(instruction.start)}, {variable(instruction.end)});"]
         if isinstance(instruction, ir.Length):
             return [f"    {variable(instruction.value)} = "
                     f"{variable(instruction.base)}.len;"]
         if isinstance(instruction, ir.Release):
-            element = element_of(instruction.typ)
+            element = array_element(instruction.typ, self.module.structs)
             return [f"    nv_arr_{element}_free(&{variable(instruction.operand)});"]
         if isinstance(instruction, ir.SlotLoad):
             return [f"    {variable(instruction.value)} = {cell(instruction.slot)};"]
@@ -571,21 +605,26 @@ class Printer:
         raise AssertionError(f"unsupported IR instruction {instruction!r}")
 
 
-def array_literal(instruction: ir.ArrayLiteral) -> str:
+def array_literal(instruction: ir.ArrayLiteral, structs: dict | None = None) -> str:
     """`[a, b, c]` → `nv_arr_i64_init(3, (const int64_t[]){a, b, c})`."""
-    element = element_of(instruction.typ)
+    element = array_element(instruction.typ, structs)
     if not instruction.items:
         # A compound literal with no elements is not something C will type.
         return f"nv_arr_{element}_new(INT64_C(0))"
     items = ", ".join(variable(item) for item in instruction.items)
+    holder = INITIALISER_TYPES.get(element, f"const {STRUCT_PREFIX}{element}[]")
     return (f"nv_arr_{element}_init(INT64_C({len(instruction.items)}), "
-            f"({INITIALISER_TYPES[element]}){{{items}}})")
+            f"({holder}){{{items}}})")
 
 
-def body(module: ir.Module, names: dict[str, str] | None = None) -> str:
+def body(module: ir.Module, names: dict[str, str] | None = None,
+         helpers: str = "") -> str:
     """The translated program, without the runtime prelude.
 
     `names` is the C backend's function table, so that the names in the artefact do not
-    depend on which path printed it.
+    depend on which path printed it. `helpers` is the family of per-array-type routines
+    the IR calls by name (`nv_arr_Point_slice` and its siblings): it is printed after the
+    struct declarations, because a helper that copies an element needs the element's
+    `sizeof`, and before the functions, because they are what calls it.
     """
-    return Printer(module, names).body()
+    return Printer(module, names, helpers).body()

@@ -3607,10 +3607,26 @@ def ir_module(program: Program):
     return module if cgen_ir.supports(module) else None
 
 
+def array_helpers(program: Program) -> str:
+    """The per-array-type routines the IR calls: `nv_arr_<tag>_(new|init|…|slice)`.
+
+    The body of a program printed from the IR names the same helpers the AST walk names
+    (`array_tag` is the one rule for both), so the family is still generated from the
+    checked program's array types. This is the last piece of the prelude the IR needs;
+    it is placed after the struct declarations, because a helper that copies an element
+    needs the element's `sizeof`.
+    """
+    generator = CGenerator(program)
+    generator.emit_array_types()
+    generator.emit_arrays()
+    return "".join(line + "\n" for line in generator.lines)
+
+
 def generate(program: Program, capabilities=None) -> str:
     module = ir_module(program)
     if module is not None:
         from . import cgen_ir
 
-        return assemble_body(cgen_ir.body(module, c_names(program)), capabilities)
+        return assemble_body(cgen_ir.body(module, c_names(program), array_helpers(program)),
+                             capabilities)
     return CGenerator(program, capabilities).generate()

@@ -38,8 +38,8 @@ from ..diagnostics import make
 from ..model import (
     ArrayLiteral, Arm, Assign, Binary, Boolean, Break, Call, Continue, Defer, EnumDecl,
     ExprStmt, Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
-    MemberAssign, Number, Program, Range, Return, String, StructLiteral, Try, Unary,
-    Variable, Variant, VariantValue, While,
+    MemberAssign, Number, Program, Range, Return, Slice, String, StructLiteral, Try,
+    Unary, Variable, Variant, VariantValue, While,
 )
 from ..checker import BUILTINS
 from . import ir
@@ -390,6 +390,8 @@ class Builder:
             value = self.value()
             self.emit(block, ir.Const(value, "f64", float(node.value)))
             return value, "f64", block
+        if isinstance(node, Slice):
+            return self.slice_value(node, block, env)
         if isinstance(node, StructLiteral):
             return self.struct_literal(node, block, env)
         if isinstance(node, VariantValue):
@@ -427,10 +429,25 @@ class Builder:
 
     # -- arrays --------------------------------------------------------------
     def check_element(self, typ: str, loc) -> None:
+        """An array element is one word here: a scalar, or a struct that is a record.
+
+        A struct element is the address of its record, because a struct *is* a record on
+        this backend — so the array copies a pointer where C copies the struct, and the
+        value semantics are kept where the language can observe them (a read gives a
+        value that goes into a cell, and a cell copies).
+        """
         if not is_array(typ):
             raise Refused(f"the array type '{typ}'", loc)
-        if element_of(typ) not in ELEMENT_TYPES:
-            raise Refused(f"an array of {element_of(typ)}", loc)
+        element = element_of(typ)
+        if element in ELEMENT_TYPES:
+            return
+        if self.is_struct(element):
+            # `layout` refuses a struct whose fields are not words, and that refusal is
+            # the one that matters here: an element has to be copyable by copying its
+            # words on both backends, and a struct holding an array is not.
+            self.layout(element, loc)
+            return
+        raise Refused(f"an array of {element}", loc)
 
     def array_literal(self, node: ArrayLiteral, block: ir.Block, env: dict,
                       owned: bool):
@@ -454,6 +471,31 @@ class Builder:
         self.emit(block, ir.ArrayLiteral(value, typ, items))
         self.take(value, typ, owned)
         return value, typ, block
+
+    def slice_value(self, node: Slice, block: ir.Block, env: dict):
+        """`a[i..j]`: the bounds, then one instruction that answers a view.
+
+        The bounds are lowered left to right, before the view exists, which is the
+        language's order; the range itself is checked by the instruction, because the
+        checker proved only that the two bounds are `i64`.
+        """
+        loaded = self.load_variable(node.array.name, block)
+        if loaded is not None:
+            base, base_type = loaded
+        elif node.array.name in env:
+            base, base_type = env[node.array.name]
+        else:
+            raise Refused(f"the variable '{node.array.name}'", node.loc)
+        self.check_element(base_type, node.loc)
+        start, start_type, block = self.expression(node.start, block, env)
+        if start_type != "i64":
+            raise Refused(f"a slice start of type {start_type}", node.loc)
+        end, end_type, block = self.expression(node.end, block, env)
+        if end_type != "i64":
+            raise Refused(f"a slice end of type {end_type}", node.loc)
+        value = self.value()
+        self.emit(block, ir.Slice(value, base_type, base, start, end))
+        return value, base_type, block
 
     def variant_value(self, node: VariantValue, block: ir.Block, env: dict):
         """`Shape::Circle(2)`, in the order the arguments are written.
@@ -808,7 +850,7 @@ class Builder:
             if value_type != element_of(base_type):
                 raise Refused(f"a {value_type} into an array of "
                               f"{element_of(base_type)}", statement.loc)
-            self.emit(block, ir.IndexStore(base, index, value))
+            self.emit(block, ir.IndexStore(base, index, value, base_type))
             return block
         if isinstance(statement, ExprStmt):
             _value, _typ, block = self.expression(statement.expr, block, env)

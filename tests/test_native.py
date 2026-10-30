@@ -560,15 +560,6 @@ class NativeRefusalTests(unittest.TestCase):
     #: has to use. Each is a whole program that the checker accepts: the refusal has
     #: to come from the backend, not from a syntax error before it.
     CONSTRUCTS = {
-        "a slice": """\
-edition 2;
-fn main() -> i64 {
-    let a: [i64] = [1, 2, 3]
-    let part: [i64] = a[0..2]
-    print(len(part))
-    return 0
-}
-""",
         "a 'defer' whose body assigns a variable": """\
 edition 2;
 fn main() -> i64 {
@@ -626,19 +617,6 @@ struct Bag {
 fn main() -> i64 {
     let b: Bag = Bag(count: 1, xs: [1, 2])
     print(b.count)
-    return 0
-}
-""",
-        "an array of Point": """\
-edition 2;
-struct Point {
-    x: i64,
-    y: i64
-}
-
-fn main() -> i64 {
-    let points: [Point] = [Point(x: 1, y: 2)]
-    print(points[0].x)
     return 0
 }
 """,
@@ -1076,16 +1054,17 @@ class NativeCommandTests(unittest.TestCase):
         self.assertIn("jump ^while_head", printed.stdout)
 
     def test_emit_ir_refuses_a_construct_it_cannot_represent(self):
+        """A struct field that owns storage: still refused, by name, with no IR written."""
         with tempfile.TemporaryDirectory() as temp:
-            path = write_source(pathlib.Path(temp), "slice",
-                                "edition 2;\nfn main() -> i64 {\n"
-                                "    let a: [i64] = [1, 2, 3]\n"
-                                "    let part: [i64] = a[0..2]\n"
-                                "    print(len(part))\n    return 0\n}\n")
+            path = write_source(pathlib.Path(temp), "owning",
+                                "edition 2;\nstruct Bag {\n    count: i64,\n"
+                                "    xs: [i64]\n}\n\nfn main() -> i64 {\n"
+                                "    let b: Bag = Bag(count: 1, xs: [1, 2])\n"
+                                "    print(b.count)\n    return 0\n}\n")
             result = run([*NAVA, "emit-ir", str(path)])
         self.assertEqual(result.returncode, 2)
         self.assertIn("E0901", result.stderr)
-        self.assertIn("a slice", result.stderr)
+        self.assertIn("a field 'xs' of type [i64]", result.stderr)
         self.assertEqual(result.stdout, "", "a refusal writes no IR")
 
     def test_emit_ir_states_a_struct_and_an_f64_rather_than_refusing(self):
@@ -2308,6 +2287,247 @@ fn main() {
         self.assertIn("a 'defer' whose body assigns a variable", native.stderr)
         self.assertEqual(c_build.returncode, 0)
 
+
+class NativeSliceTests(unittest.TestCase):
+    """A slice is a view of an array, and both backends answer with one.
+
+    The claim is the one the C backend makes with `nv_arr_T_slice`: a slice is two words
+    — a length and a pointer into somebody else's elements — checked against the parent
+    by `nv_check_slice`'s two questions, in its order and with its words. Nothing is
+    copied, so writing through the parent is visible through the view and a slice of a
+    thousand elements costs two words; the binding that holds a slice owns nothing, so
+    the parent's release is the only release.
+    """
+
+    def test_the_fixture_agrees_with_the_c_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "slices", fixture_text("slices_basic"))
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["2", "20", "30", "30", "1", "9", "b"])
+
+    def test_a_slice_is_a_view_and_not_a_copy(self):
+        """The view reads the parent's elements, and the two bound pairs may be equal."""
+        source = """\
+edition 2;
+
+fn main() {
+    let values: [i64] = [10, 20, 30, 40]
+    let part = values[1..3]
+    print(len(part))
+    print(part[0])
+    let empty = values[2..2]
+    print(len(empty))
+    let all = values[0..4]
+    print(len(all))
+    let text: [str] = ["a", "b", "c"]
+    let letters = text[1..3]
+    print(letters[0])
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "view", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["2", "20", "0", "4", "b"])
+
+    def test_the_bounds_are_checked_and_the_message_is_the_c_one(self):
+        """Both out-of-range bounds stop the program with the runtime's own words."""
+        cases = {
+            "end": ("let a: [i64] = [1, 2, 3]\n    print(len(a[2..5]))",
+                    "nava runtime error: slice end 5 is out of range for start 2 "
+                    "and length 3"),
+            "start": ("let a: [i64] = [1, 2, 3]\n    print(len(a[0 - 1..2]))",
+                      "nava runtime error: slice start -1 is out of range for length 3"),
+            "reversed": ("let a: [i64] = [1, 2, 3]\n    print(len(a[2..1]))",
+                         "nava runtime error: slice end 1 is out of range for start 2 "
+                         "and length 3"),
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            for name, (body, message) in cases.items():
+                with self.subTest(bound=name):
+                    source = f"edition 2;\n\nfn main() {{\n    {body}\n}}\n"
+                    path = write_source(directory, name, source)
+                    c_binary, native_binary = build_both(path, directory)
+                    c_out = run([str(c_binary)])
+                    native_out = run([str(native_binary)])
+                    self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                                     (native_out.stdout, native_out.stderr,
+                                      native_out.returncode))
+                    self.assertEqual(native_out.returncode, 1)
+                    self.assertEqual(native_out.stderr, message + "\n")
+
+    def test_the_lowering_states_the_view_once(self):
+        """`slice` is an instruction: values in, a value out, no memory traffic."""
+        module = lower_source("""\
+edition 2;
+
+fn main() {
+    let a: [i64] = [1, 2, 3]
+    let part = a[0..2]
+    print(len(part))
+}
+""")
+        slices = [instruction for function in module.functions
+                  for block in function.blocks
+                  for instruction in block.instructions
+                  if isinstance(instruction, ir.Slice)]
+        self.assertEqual(len(slices), 1)
+        self.assertEqual(slices[0].typ, "[i64]")
+        self.assertIn("= slice %", ir.dump(module))
+
+
+class NativeStructArrayTests(unittest.TestCase):
+    """An array whose elements are structs: the same six instructions, one word each.
+
+    A struct on this backend is the address of its record, so the element of the array is
+    that address and the array still holds one word per element. What that costs is
+    stated and tested: a struct that enters an array is **copied**, so two elements named
+    from one record stay two, exactly as C copies a struct into its element.
+    """
+
+    def test_the_fixture_agrees_with_the_c_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "points", fixture_text("struct_arrays"))
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stdout.splitlines(), ["21", "3", "4", "0"])
+
+    def test_an_element_is_copied_as_it_enters_the_array(self):
+        """A record written twice, then changed, is two elements and not one."""
+        source = """\
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() {
+    let one = Point(x: 1, y: 2)
+    let twos: [Point] = [one, one]
+    one.x = 99
+    print(twos[0].x)
+    print(twos[1].x)
+    print(one.x)
+    let filled: [Point] = [Point(x: 0, y: 0)]
+    let copy = filled[0]
+    copy.y = 7
+    print(filled[0].y)
+    print(copy.y)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "copy", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.returncode),
+                         (native_out.stdout, native_out.returncode))
+        self.assertEqual(native_out.stdout.splitlines(), ["1", "1", "99", "0", "7"])
+
+    def test_a_zeroed_array_of_structs_holds_a_zeroed_record_each(self):
+        """`array_zeros` of a struct element fills with records, not with nothing.
+
+        An element is an address, so an array allocated by `calloc` would be a row of
+        null pointers and reading a field through one would read unmapped memory. The
+        fill is one zeroed record per slot, which is what the first read below proves.
+        """
+        source = """\
+edition 2;
+
+struct Counter {
+    hits: i64
+}
+
+fn main() {
+    let zeros: [Counter] = array_zeros(2)
+    print(zeros[0].hits)
+    print(zeros[1].hits)
+    zeros[1] = Counter(hits: 5)
+    print(zeros[1].hits)
+    print(zeros[0].hits)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "zeroed", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.returncode),
+                         (native_out.stdout, native_out.returncode))
+        self.assertEqual(native_out.stdout.splitlines(), ["0", "0", "5", "0"])
+
+    def test_an_element_written_into_the_array_is_copied_too(self):
+        """`array[1] = one` copies, so changing `one` afterwards leaves the element."""
+        source = """\
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() {
+    let points: [Point] = array_zeros(2)
+    let one = Point(x: 1, y: 2)
+    points[1] = one
+    one.x = 42
+    print(points[1].x)
+    print(one.x)
+    let view = points[0..2]
+    print(len(view))
+    print(view[1].y)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "store", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout.splitlines(), ["1", "42", "2", "2"])
+
+    def test_an_element_is_one_word_in_the_lowering(self):
+        """The array's instructions are the array's: only the element type differs."""
+        module = lower_source("""\
+edition 2;
+
+struct Point {
+    x: i64,
+    y: i64
+}
+
+fn main() {
+    let points: [Point] = [Point(x: 1, y: 2)]
+    print(points[0].x)
+    print(len(points))
+}
+""")
+        instructions = [instruction for function in module.functions
+                        for block in function.blocks for instruction in block.instructions]
+        literals = [one for one in instructions if isinstance(one, ir.ArrayLiteral)]
+        self.assertEqual([one.typ for one in literals], ["[Point]"])
+        self.assertEqual([one.typ for one in instructions if isinstance(one, ir.Index)],
+                         ["Point"])
+        self.assertTrue(any(isinstance(one, ir.Length) for one in instructions))
 
 class NativeTryTests(unittest.TestCase):
     """`?` forwards the failure variant, and leaves the function the honest way.
