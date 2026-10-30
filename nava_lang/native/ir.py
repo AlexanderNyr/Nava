@@ -110,6 +110,22 @@ class Cmp:
 
 
 @record()
+class TextCompare:
+    """`%v = text cmp <op> %a, %b` — a comparison of the *text* of two strings.
+
+    `Cmp` cannot carry this: two `str` values are addresses, and comparing addresses is
+    not comparing text. The instruction states the language's meaning, so each backend
+    implements it its own way — C with `strcmp`, the native backend with a byte loop —
+    and neither can compare pointers and call it equality.
+    """
+
+    value: str
+    op: str
+    left: str
+    right: str
+
+
+@record()
 class Copy:
     """`%v = copy %a` — a block parameter receiving a value is exactly this."""
 
@@ -452,6 +468,9 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
         return f"%{instruction.value} = not %{instruction.operand}"
     if isinstance(instruction, Cmp):
         return (f"%{instruction.value} = cmp {instruction.op} {instruction.typ} "
+                f"%{instruction.left}, %{instruction.right}")
+    if isinstance(instruction, TextCompare):
+        return (f"%{instruction.value} = text cmp {instruction.op} "
                 f"%{instruction.left}, %{instruction.right}")
     if isinstance(instruction, Copy):
         return f"%{instruction.value} = copy %{instruction.operand}"

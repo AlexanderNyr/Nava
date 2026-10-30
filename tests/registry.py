@@ -1286,6 +1286,24 @@ REGISTERED_TESTS = {
         "test_a_struct_value_lives_in_a_cell_and_nowhere_else",
         "test_the_module_states_every_layout_it_lays_out",
     },
+    #: N14f: text and input. A `str` comparison is `TextCompare` in the IR — never a
+    #: pointer compare — and the four string operations plus `read_i64` are runtime
+    #: routines whose traps are the C runtime's words, so the differential covers them.
+    "NativeInputTestsOrdering": {
+        "test_a_line_printed_before_a_read_comes_first",
+    },
+    "NativeTextTests": {
+        "test_a_byte_index_out_of_bounds_is_the_c_runtime_message",
+        "test_a_slice_out_of_bounds_names_three_numbers",
+        "test_a_string_comparison_is_text_and_not_storage",
+        "test_text_operations_agree_with_the_c_backend",
+        "test_the_text_of_a_number_is_the_text_printed_str_alone",
+    },
+    "NativeInputTests": {
+        "test_a_token_is_read_and_converted",
+        "test_every_refusal_is_the_c_runtime_message_and_status",
+        "test_the_two_extremes_are_read_exactly",
+    },
     "NativeFloatTests": {
         "test_a_float_constant_is_its_bits_and_the_dump_says_so",
         "test_an_f64_crosses_a_call_as_its_bits",
@@ -1361,7 +1379,7 @@ REGISTERED_TESTS = {
         "test_a_generic_with_one_instantiation_is_printed_from_the_ir",
         "test_a_program_outside_the_subset_still_comes_from_the_ast",
         "test_a_program_the_ir_expresses_but_this_printer_does_not",
-        "test_a_str_comparison_is_never_printed_from_the_ir",
+        "test_a_str_comparison_prints_as_strcmp_and_never_as_pointer_equality",
         "test_array_access_goes_through_the_checked_helpers",
         "test_every_function_is_defined_once_under_the_name_the_ast_path_used",
         "test_every_program_in_the_subset_is_printed_from_the_ir",
@@ -1641,6 +1659,9 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeArrayTests"),
                                (test_native, "NativeStructTests"),
                                (test_native, "NativeFloatTests"),
+                               (test_native, "NativeTextTests"),
+                               (test_native, "NativeInputTests"),
+                               (test_native, "NativeInputTestsOrdering"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

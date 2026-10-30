@@ -586,12 +586,6 @@ fn main() -> i64 {
     return 0
 }
 """,
-        "'==' on strs": """\
-fn main() -> i64 {
-    print("a" == "a")
-    return 0
-}
-""",
         "a field 'xs' of type [i64]": """\
 edition 2;
 struct Bag {
@@ -626,10 +620,9 @@ fn main() -> i64 {
     #: the lowering: the IR says what the program means, and the backend says what it
     #: cannot compile.
     CODEGEN_REFUSALS = {
-        "builtin 'read_i64'": """\
+        "builtin 'chars_len'": """\
 fn main() -> i64 {
-    let n: i64 = read_i64()
-    print(n)
+    print(chars_len("abc"))
     return 0
 }
 """,
@@ -1730,3 +1723,216 @@ fn main() {
         integer = ir.dump(lower_source("fn main() -> i64 {\n    if 1 < 2 { print(1) }\n"
                                        "    return 0\n}\n"))
         self.assertIn("= cmp lt i64", integer)
+
+
+class NativeInputTestsOrdering(unittest.TestCase):
+    """`print` before a `read` reaches the reader in that order on both backends.
+
+    The C runtime flushes standard output before it reads, because its reader is buffered;
+    the native backend writes each line as a syscall and buffers nothing. The two must
+    still agree about what the program's output is, and a prompt printed before a read is
+    the case that would show it if they did not.
+    """
+
+    def test_a_line_printed_before_a_read_comes_first(self):
+        source = """\
+fn main() {
+    print(1)
+    let n = read_i64()
+    print(2)
+    print(n)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "interleave", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = subprocess.run([str(c_binary)], input="5\n", capture_output=True,
+                                   text=True, timeout=120)
+            native_out = subprocess.run([str(native_binary)], input="5\n",
+                                        capture_output=True, text=True, timeout=120)
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stdout, "1\n2\n5\n")
+
+
+class NativeTextTests(unittest.TestCase):
+    """Text through one IR: a comparison of content, and the four string operations.
+
+    A native `str` is a pointer to `[length][bytes]` and the C backend's is a NUL-
+    terminated `char *`; the IR says only what the language says, so each backend keeps
+    its own representation and the differential is what holds them together.
+    """
+
+    PROGRAM = """\
+edition 2;
+
+fn shown(text: str) -> i64 {
+    return bytes_len(text)
+}
+
+fn main() {
+    let joined = str_concat("abc", "def")
+    print(joined)
+    print(shown(joined))
+    print(str_from_i64(-42))
+    print(str_slice("hello world", 6, 11))
+    print(byte_at("AZ", 0))
+    print(joined == "abcdef")
+    print(joined != "abcdef")
+    print("" == "")
+    print(str_concat("", "") == "")
+    let empty = ""
+    print(bytes_len(empty))
+}
+"""
+
+    def build(self, source: str, directory: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+        path = write_source(directory, "text", source)
+        return build_both(path, directory)
+
+    def test_text_operations_agree_with_the_c_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(self.PROGRAM, pathlib.Path(temp))
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["abcdef", "6", "-42", "world", "65", "true", "false", "true",
+                          "true", "0"])
+
+    def test_a_string_comparison_is_text_and_not_storage(self):
+        """Two strings built separately are equal when they say the same thing.
+
+        The comparison is `nv_str_cmp` over the bytes, so `str_concat("a", "b")` and
+        `str_concat("ab", "")` are one answer, which is what a pointer comparison would
+        have got wrong.
+        """
+        source = """\
+fn main() {
+    let a = str_concat("a", "b")
+    let b = str_concat("ab", "")
+    print(a == b)
+    print(a == "ab")
+    print("ab" == a)
+    print(a != str_concat("a", "c"))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "compare", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "true\ntrue\ntrue\ntrue\n")
+
+    def test_a_byte_index_out_of_bounds_is_the_c_runtime_message(self):
+        source = """\
+fn main() {
+    print(byte_at("hi", 5))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "byte", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stderr.strip(),
+                         "nava runtime error: byte index 5 is out of bounds for a "
+                         "string of 2 bytes")
+
+    def test_a_slice_out_of_bounds_names_three_numbers(self):
+        source = """\
+fn main() {
+    print(str_slice("hello", 3, 9))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "slice", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stderr.strip(),
+                         "nava runtime error: string slice 3..9 is out of bounds for a "
+                         "string of 5 bytes")
+
+    def test_the_text_of_a_number_is_the_text_printed_str_alone(self):
+        """`str_from_i64` and `print` share one routine, so they cannot disagree."""
+        source = """\
+fn main() {
+    print(str_from_i64(0))
+    print(str_from_i64(-9223372036854775807 - 1))
+    print(str_from_i64(9223372036854775807))
+    print(bytes_len(str_from_i64(-9223372036854775807 - 1)))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "digits", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["0", "-9223372036854775808", "9223372036854775807", "20"])
+
+
+class NativeInputTests(unittest.TestCase):
+    """`read_i64` reads standard input, and refuses it the way the C runtime does."""
+
+    def build(self, directory: pathlib.Path):
+        source = "fn main() {\n    print(read_i64())\n}\n"
+        path = write_source(directory, "read", source)
+        return build_both(path, directory)
+
+    def outcome(self, binary: pathlib.Path, text: str) -> tuple[str, str, int]:
+        result = subprocess.run([str(binary)], input=text, capture_output=True,
+                                text=True, timeout=120)
+        return result.stdout, result.stderr, result.returncode
+
+    def test_a_token_is_read_and_converted(self):
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(pathlib.Path(temp))
+            for text in ("42", "-7", "+5", "  13  ", "0\n"):
+                with self.subTest(input=text):
+                    self.assertEqual(self.outcome(c_binary, text),
+                                     self.outcome(native_binary, text))
+            self.assertEqual(self.outcome(native_binary, "  -7 ")[0], "-7\n")
+
+    def test_the_two_extremes_are_read_exactly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(pathlib.Path(temp))
+            for text in ("9223372036854775807", "-9223372036854775808"):
+                with self.subTest(input=text):
+                    self.assertEqual(self.outcome(c_binary, text),
+                                     self.outcome(native_binary, text))
+                    self.assertEqual(self.outcome(native_binary, text)[0], text + "\n")
+
+    def test_every_refusal_is_the_c_runtime_message_and_status(self):
+        """Four ways to be wrong, one message each, and the same on both backends."""
+        cases = {
+            "": "expected an i64, reached end of input",
+            "abc": "expected a decimal i64",
+            "12x": "invalid character in i64 input",
+            "99999999999999999999": "input outside i64 range",
+            "9223372036854775808": "input outside i64 range",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            c_binary, native_binary = self.build(pathlib.Path(temp))
+            for text, message in cases.items():
+                with self.subTest(input=text):
+                    c_out = self.outcome(c_binary, text)
+                    native_out = self.outcome(native_binary, text)
+                    self.assertEqual(c_out, native_out)
+                    self.assertEqual(native_out[0], "", "a refusal prints nothing")
+                    self.assertEqual(native_out[2], 1)
+                    self.assertEqual(native_out[1].strip(),
+                                     "nava runtime error: " + message)

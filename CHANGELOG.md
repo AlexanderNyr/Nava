@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+N14f: **text and numbers through one IR** — a string comparison is a comparison of text,
+and the runtime's text routines exist in both backends.
+
+- `==`/`!=` on two `str` are `TextCompare` in the representation, not `Cmp`: two strings
+  are addresses, and comparing addresses is not comparing text. C prints it as `strcmp`,
+  the native backend as a byte loop, and a pointer comparison is now impossible in
+  either printer.
+- Eight builtins are implemented by the native runtime — `bytes_len`, `byte_at`,
+  `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — with the C
+  runtime's four ways of refusing a number it cannot read, word for word. A builtin
+  neither backend has (`chars_len`, `str_from_f64`, the filesystem and argument
+  functions) is refused by name.
+- The native `str` is a pointer to `[length][bytes]`, which is not C's `char *`; the
+  representation says only what the language says, so the two never have to agree about
+  a representation — the differential is what holds them together.
+- Traps gained two shapes: a byte index and a string slice (`byte index 5 is out of
+  bounds for a string of 2 bytes`, `string slice 3..9 is out of bounds for a string of 5
+  bytes`), both the C runtime's text and status.
+- Six fixtures left the AST walk: `strings`, `numerical`, `fmt_table`, `read_i64`,
+  `runtime_bad_input` and `arrays_sieve` now compile natively and print from the IR, so
+  the C printer's set and the native backend's set are the same 21 of 32.
+
 N14e: **`f64` and struct values in the IR** — the representation learns the rest of the
 value model, and both readers print it.
 

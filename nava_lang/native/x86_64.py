@@ -72,6 +72,7 @@ SYSCALL_MMAP = 9
 PROT_READ, PROT_WRITE = 1, 2
 MAP_PRIVATE, MAP_ANONYMOUS = 2, 0x20
 I64_MIN = -(2 ** 63)
+I64_MAX = 2 ** 63 - 1
 #: The variable that turns the trace on. A *variable*, not a flag: the same binary
 #: prints a trace when it is asked to and nothing when it is not.
 TRACE_VARIABLE = "NAVA_TRACE="
@@ -79,6 +80,20 @@ TRACE_VARIABLE = "NAVA_TRACE="
 #: program that is already failing.
 TRACE_DEPTH = 64
 
+#: The builtins the native runtime implements: an IR `builtin` name -> the routine
+#: that does the work and how many arguments it takes. A builtin that is not here is
+#: refused by name at code generation, because the IR states the program and the
+#: backend is the half that knows which routines exist.
+BUILTIN_ROUTINES = {
+    "bytes_len": ("nv_str_len", 1),
+    "byte_at": ("nv_byte_at", 2),
+    "str_concat": ("nv_str_concat", 2),
+    "str_slice": ("nv_str_slice", 3),
+    "str_from_i64": ("nv_str_from_i64", 1),
+    "to_i64": ("nv_to_i64", 1),
+    "to_f64": ("nv_to_f64", 1),
+    "read_i64": ("nv_read_i64", 0),
+}
 #: How many bytes one word of a struct takes. A struct is a record of words — an
 #: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
 FIELD_SIZE = 8
@@ -243,7 +258,7 @@ class Generator:
                                             ir.Cmp, ir.Copy, ir.Call, ir.ArrayLiteral,
                                             ir.ArrayZeros, ir.Index, ir.Length,
                                             ir.SlotLoad, ir.StructNew, ir.Field,
-                                            ir.Builtin)):
+                                            ir.Builtin, ir.TextCompare)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -363,15 +378,12 @@ class Generator:
         if isinstance(instruction, ir.FieldStore):
             self.field_store(instruction)
             return
+        if isinstance(instruction, ir.TextCompare):
+            self.text_compare(instruction)
+            return
         if isinstance(instruction, ir.Builtin):
-            raise make(
-                "E0901",
-                f"the native backend does not implement the builtin "
-                f"'{instruction.name}'",
-                None,
-                hint="build with the C backend (the default): `nava build` without "
-                     "--backend native",
-            )
+            self.builtin(instruction)
+            return
         if isinstance(instruction, ir.Jump):
             self.jump(instruction)
             return
@@ -539,6 +551,42 @@ class Generator:
             code.load(RAX, RAX, self.field_offset(typ, step))
             typ = self.field_type(typ, step)
         code.store(RAX, self.field_offset(typ, instruction.path[-1]), R11)
+
+    # -- text and the builtins -----------------------------------------------
+    def text_compare(self, instruction: ir.TextCompare) -> None:
+        """`nv_str_cmp` answers -1, 0 or 1; the operator picks one of the six flags."""
+        code = self.code
+        self.load(instruction.left, RDI)
+        self.load(instruction.right, RSI)
+        code.call("nv_str_cmp")
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RAX, R11)
+        code.setcc(COMPARISONS[instruction.op], RAX)
+        code.movzx_byte(RAX, RAX)
+        self.store(instruction.value, RAX)
+
+    def builtin(self, instruction: ir.Builtin) -> None:
+        """One call, with the arguments in the ABI's registers, exactly like a function."""
+        routine = BUILTIN_ROUTINES.get(instruction.name)
+        if routine is None:
+            raise make(
+                "E0901",
+                f"the native backend does not implement the builtin "
+                f"'{instruction.name}'",
+                None,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
+        symbol, arity = routine
+        if len(instruction.args) != arity:
+            raise AssertionError(
+                f"the IR states {instruction.name} with {len(instruction.args)} "
+                f"argument(s); the runtime implements {arity}")
+        for index, argument in enumerate(instruction.args):
+            self.load(argument, ARGUMENT_REGISTERS[index])
+        self.code.call(symbol)
+        if instruction.typ != "void":
+            self.store(instruction.value, RAX)
 
     def copy_helper_body(self, typ: str) -> None:
         """`nv_copy_<T>(rdi = record)` -> a copy of it, fields and nested structs.
@@ -790,7 +838,17 @@ class Generator:
                              ("nv_format", self.format_helper),
                              ("nv_alloc", self.alloc_helper),
                              ("nv_array_new", self.array_new_helper),
-                             ("nv_fail_pair", self.fail_pair_helper)):
+                             ("nv_fail_pair", self.fail_pair_helper),
+                             ("nv_str_len", self.str_len_helper),
+                             ("nv_str_cmp", self.str_cmp_helper),
+                             ("nv_byte_at", self.byte_at_helper),
+                             ("nv_str_concat", self.str_concat_helper),
+                             ("nv_str_slice", self.str_slice_helper),
+                             ("nv_str_from_i64", self.str_from_i64_helper),
+                             ("nv_to_i64", self.to_i64_helper),
+                             ("nv_to_f64", self.to_f64_helper),
+                             ("nv_getc", self.getc_helper),
+                             ("nv_read_i64", self.read_i64_helper)):
             self.runtime_function(symbol, body)
         for typ in self.copy_types():
             # One copier per struct type, because a copy is as deep as the type is
@@ -1150,67 +1208,100 @@ class Generator:
         code.ret()
 
     def fail_pair_helper(self) -> None:
-        """`nv_fail_pair(rdi = a, rsi = b, rdx = kind)`: a numbered trap, then exit 1.
+        """`nv_fail_pair(rdi = a, rsi = b, rdx = kind, rcx = c)`: a numbered trap.
 
-        Two kinds, because two runtime errors carry two numbers: an index that is
-        out of bounds for a length, and a length that exceeds the limit. The wording
-        is the C runtime's, character for character.
+        Four kinds, because four runtime errors carry numbers: an index out of bounds for
+        a length, a length above the limit, a byte index out of bounds for a string, and a
+        slice whose two indices do not fit one. The wording is the C runtime's, character
+        for character, because the differential compares standard error and a message that
+        differs by a word is a difference.
         """
         code = self.code
-        kind_checked = self.local("pair_kind")
-        second = self.local("pair_second")
+        open_slice, open_byte, open_length = (self.local("pair_slice"),
+                                              self.local("pair_byte"),
+                                              self.local("pair_length"))
+        first, slice_mid, byte_mid = (self.local("pair_first"), self.local("pair_slice_mid"),
+                                      self.local("pair_byte_mid"))
+        length_mid, bytes_tail = (self.local("pair_length_mid"),
+                                  self.local("pair_bytes"))
+        newline = self.local("pair_newline")
         code.push(RBP)
         code.mov_reg(RBP, RSP)
-        code.sub_rsp(96)
+        code.sub_rsp(112)
         code.store(RBP, -8, RDI)                # a
         code.store(RBP, -16, RSI)               # b
         code.store(RBP, -24, RDX)               # kind
-        code.load(RDI, RBP, -8)
-        code.lea_rip(RSI, self.number_buffer(1))
-        code.call("nv_format")
-        code.store(RBP, -32, RAX)               # the digits of a
-        code.store(RBP, -40, RDX)               # how many
-        code.load(RDI, RBP, -16)
-        code.lea_rip(RSI, self.number_buffer(2))
-        code.call("nv_format")
-        code.store(RBP, -48, RAX)
-        code.store(RBP, -56, RDX)
+        code.store(RBP, -32, RCX)               # c
+        for value, start_slot, length_slot, buffer in (
+                (-8, -40, -48, 1), (-16, -56, -64, 2), (-32, -72, -80, 3)):
+            code.load(RDI, RBP, value)
+            code.lea_rip(RSI, self.number_buffer(buffer))
+            code.call("nv_format")
+            code.store(RBP, start_slot, RAX)
+            code.store(RBP, length_slot, RDX)
         code.lea_rip(RSI, self.raw("nv_prefix", FAIL_PREFIX.encode()))
         code.mov_imm(RDX, len(FAIL_PREFIX))
         code.mov_imm(RDI, 2)
         code.mov_imm(RAX, 1)
         code.syscall()
         code.load(RAX, RBP, -24)
-        code.test_reg(RAX)
-        code.jcc("ne", kind_checked)
+        code.mov_imm(R11, 3)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", open_slice)
+        code.mov_imm(R11, 2)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", open_byte)
+        code.mov_imm(R11, 1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", open_length)
         self.write_bytes("array index ")
-        code.jmp(second)
-        code.label(kind_checked)
+        code.jmp(first)
+        code.label(open_length)
         self.write_bytes("array length ")
-        code.label(second)
-        code.load(RSI, RBP, -32)
-        code.load(RDX, RBP, -40)
-        code.mov_imm(RDI, 2)
-        code.mov_imm(RAX, 1)
-        code.syscall()
+        code.jmp(first)
+        code.label(open_byte)
+        self.write_bytes("byte index ")
+        code.jmp(first)
+        code.label(open_slice)
+        self.write_bytes("string slice ")
+        code.label(first)
+        self.write_number(-40, -48)             # a
         code.load(RAX, RBP, -24)
-        code.test_reg(RAX)
-        second_kind = self.local("pair_second_kind")
-        code.jcc("ne", second_kind)
-        self.write_bytes(" is out of bounds for length ")
-        closing = self.local("pair_closing")
-        code.jmp(closing)
-        code.label(second_kind)
+        code.mov_imm(R11, 3)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", slice_mid)
+        self.write_bytes("..")
+        self.write_number(-56, -64)             # the second index of a slice
+        code.label(slice_mid)
+        code.load(RAX, RBP, -24)
+        code.mov_imm(R11, 3)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", byte_mid)
+        self.write_bytes(" is out of bounds for a string of ")
+        self.write_number(-72, -80)             # the length a slice did not fit
+        code.jmp(bytes_tail)
+        code.label(byte_mid)
+        code.mov_imm(R11, 2)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", length_mid)
+        self.write_bytes(" is out of bounds for a string of ")
+        self.write_number(-56, -64)
+        code.jmp(bytes_tail)
+        code.label(length_mid)
+        code.mov_imm(R11, 1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", "nv_fail_pair.index_tail")
         self.write_bytes(" exceeds the limit of ")
-        code.label(closing)
-        code.load(RSI, RBP, -48)
-        code.load(RDX, RBP, -56)
-        code.mov_imm(RDI, 2)
-        code.mov_imm(RAX, 1)
-        code.syscall()
+        self.write_number(-56, -64)
+        code.jmp(newline)
+        code.label("nv_fail_pair.index_tail")
+        self.write_bytes(" is out of bounds for length ")
+        self.write_number(-56, -64)
+        code.jmp(newline)
+        code.label(bytes_tail)
+        self.write_bytes(" bytes")
+        code.label(newline)
         self.newline_to(2)
-        # A trap is a trap: `NV_TRACE` walks the frames here exactly as `nv_fail`
-        # does, so an index out of bounds says where it happened.
         flag = self.raw("nv_trace_flag", bytes(8), DATA)
         no_trace = self.local("no_trace")
         code.lea_rip(RAX, flag)
@@ -1226,6 +1317,15 @@ class Generator:
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.ret()
+
+    def write_number(self, start_slot: int, length_slot: int) -> None:
+        """Write one already-formatted number to standard error."""
+        code = self.code
+        code.load(RSI, RBP, start_slot)
+        code.load(RDX, RBP, length_slot)
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
 
     def write_bytes(self, text: str) -> None:
         """`write(2, text)`, for a literal that is part of a message.
@@ -1360,6 +1460,472 @@ class Generator:
         code.load(RDI, R11, field_offset)
         code.load(RAX, RBP, -48)
         code.add_reg(RDI, RAX)
+
+    # -- text, numbers and input ---------------------------------------------
+    def str_len_helper(self) -> None:
+        """`nv_str_len(rdi)` -> the byte length a `str` carries in its header.
+
+        A native `str` is a pointer to `[length][bytes]`, so the length is a load rather
+        than a scan: that is the whole difference between this and the C runtime's
+        `strlen`, and it is why the two representations never have to agree.
+        """
+        code = self.code
+        code.load(RAX, RDI, 0)
+        code.ret()
+
+    def str_cmp_helper(self) -> None:
+        """`nv_str_cmp(rdi = a, rsi = b)` -> -1, 0 or 1 by the text, byte by byte.
+
+        `strcmp`'s rule, which is the language's: bytes compared as unsigned, and a word
+        that is a prefix of another sorts first.
+        """
+        code = self.code
+        loop, prefix = self.local("cmp_loop"), self.local("cmp_prefix")
+        less, greater = self.local("cmp_less"), self.local("cmp_greater")
+        done, keep = self.local("cmp_done"), self.local("cmp_short")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R10, RDI, 0)                  # the length of a
+        code.load(R11, RSI, 0)                  # the length of b
+        code.lea(R8, RDI, 8)                    # a's bytes
+        code.lea(R9, RSI, 8)                    # b's bytes
+        code.cmp_reg(R10, R11)
+        code.jcc("be", keep)
+        code.mov_reg(R10, R11)                  # the shorter of the two
+        code.label(keep)
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", prefix)
+        code.load_byte(RDX, R8, 0)
+        code.load_byte(RCX, R9, 0)
+        code.cmp_reg(RDX, RCX)
+        code.jcc("b", less)
+        code.jcc("a", greater)
+        code.inc(R8)
+        code.inc(R9)
+        code.dec(R10)
+        code.jmp(loop)
+        code.label(prefix)
+        code.load(R8, RBP, -8)
+        code.load(R8, R8, 0)                    # the length of a, again
+        code.load(R9, RBP, -16)
+        code.load(R9, R9, 0)                    # the length of b
+        code.cmp_reg(R8, R9)
+        code.jcc("b", less)
+        code.jcc("a", greater)
+        code.xor_reg(RAX, RAX)
+        code.jmp(done)
+        code.label(less)
+        code.mov_imm(RAX, -1)
+        code.jmp(done)
+        code.label(greater)
+        code.mov_imm(RAX, 1)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def byte_at_helper(self) -> None:
+        """`nv_byte_at(rdi = str, rsi = index)` -> one unsigned byte, or a trap."""
+        code = self.code
+        trap, inside = self.local("byte_trap"), self.local("byte_inside")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R11, RDI, 0)                  # the length
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RSI, R10)
+        code.jcc("l", trap)
+        code.cmp_reg(RSI, R11)
+        code.jcc("ge", trap)
+        code.jmp(inside)
+        code.label(trap)
+        code.mov_reg(RDI, RSI)                  # the index
+        code.mov_reg(RSI, R11)                  # the length
+        code.mov_imm(RDX, 2)                    # kind 2: a byte of a string
+        code.call("nv_fail_pair")
+        code.label(inside)
+        code.load(R11, RBP, -8)
+        code.lea(R11, R11, 8)
+        code.load(RDX, RBP, -16)
+        code.add_reg(R11, RDX)
+        code.load_byte(RAX, R11, 0)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def str_concat_helper(self) -> None:
+        """`nv_str_concat(rdi = a, rsi = b)` -> a new string holding both, in order."""
+        code = self.code
+        loop, second = self.local("cat_loop"), self.local("cat_second")
+        finished = self.local("cat_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)                # a
+        code.store(RBP, -16, RSI)               # b
+        code.load(R8, RDI, 0)
+        code.load(R9, RSI, 0)
+        code.store(RBP, -24, R8)                # the length of a
+        code.store(RBP, -32, R9)                # the length of b
+        code.add_reg(R8, R9)
+        code.store(RBP, -40, R8)                # the total
+        code.mov_reg(RDI, R8)
+        code.add_imm8(RDI, FIELD_SIZE)          # the header word, and the bytes
+        code.call("nv_alloc")
+        code.store(RBP, -48, RAX)               # the new string
+        code.load(R11, RBP, -40)
+        code.store(RAX, 0, R11)                 # its length
+        code.lea(R8, RAX, 8)                    # where the bytes go
+        code.load(R9, RBP, -8)
+        code.lea(R9, R9, 8)                     # a's bytes
+        code.load(R10, RBP, -24)
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", second)
+        code.load_byte(RDX, R9, 0)
+        code.store_byte(R8, 0, RDX)
+        code.inc(R8)
+        code.inc(R9)
+        code.dec(R10)
+        code.jmp(loop)
+        code.label(second)
+        code.load(R9, RBP, -16)
+        code.lea(R9, R9, 8)                     # b's bytes
+        code.load(R10, RBP, -32)
+        code.label("nv_str_concat.third")
+        code.test_reg(R10)
+        code.jcc("e", finished)
+        code.load_byte(RDX, R9, 0)
+        code.store_byte(R8, 0, RDX)
+        code.inc(R8)
+        code.inc(R9)
+        code.dec(R10)
+        code.jmp("nv_str_concat.third")
+        code.label(finished)
+        code.load(RAX, RBP, -48)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def str_slice_helper(self) -> None:
+        """`nv_str_slice(rdi = str, rsi = start, rdx = end)` -> the bytes between.
+
+        The check is `0 <= start <= end <= length`, and its message states all three
+        numbers because that is what the C runtime states: a slice of the wrong shape is
+        a mistake about two indices and one length, and naming two of the three would
+        send the reader back to the source.
+        """
+        code = self.code
+        trap, inside, loop = (self.local("slice_trap"), self.local("slice_inside"),
+                              self.local("slice_loop"))
+        finished = self.local("slice_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)                # the string
+        code.store(RBP, -16, RSI)               # start
+        code.store(RBP, -24, RDX)               # end
+        code.load(R11, RDI, 0)                  # the length
+        code.store(RBP, -32, R11)
+        code.xor_reg(R10, R10)
+        code.cmp_reg(RSI, R10)
+        code.jcc("l", trap)
+        code.cmp_reg(RSI, R11)
+        code.jcc("g", trap)
+        code.cmp_reg(RDX, RSI)
+        code.jcc("l", trap)
+        code.cmp_reg(RDX, R11)
+        code.jcc("g", trap)
+        code.jmp(inside)
+        code.label(trap)
+        code.mov_reg(RDI, RSI)                  # the start
+        code.mov_reg(RSI, RDX)                  # the end
+        code.load(RCX, RBP, -32)                # the length, as the third number
+        code.mov_imm(RDX, 3)                    # kind 3: a slice of a string
+        code.call("nv_fail_pair")
+        code.label(inside)
+        code.load(R10, RBP, -24)
+        code.sub_reg(R10, RSI)                  # how many bytes
+        code.store(RBP, -40, R10)
+        code.mov_reg(RDI, R10)
+        code.add_imm8(RDI, FIELD_SIZE)
+        code.call("nv_alloc")
+        code.store(RBP, -48, RAX)
+        code.load(R11, RBP, -40)
+        code.store(RAX, 0, R11)                 # the length
+        code.lea(R8, RAX, 8)                    # where the bytes go
+        code.load(R9, RBP, -8)
+        code.lea(R9, R9, 8)
+        code.load(R10, RBP, -16)
+        code.add_reg(R9, R10)                   # the first byte of the slice
+        code.load(R10, RBP, -40)
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", finished)
+        code.load_byte(RDX, R9, 0)
+        code.store_byte(R8, 0, RDX)
+        code.inc(R8)
+        code.inc(R9)
+        code.dec(R10)
+        code.jmp(loop)
+        code.label(finished)
+        code.load(RAX, RBP, -48)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def str_from_i64_helper(self) -> None:
+        """`nv_str_from_i64(rdi)` -> the decimal digits as a string.
+
+        The digits are `nv_format`'s, the same routine that prints an integer, so the
+        text of `str_from_i64(-42)` and the text `print(-42)` writes cannot disagree.
+        """
+        code = self.code
+        loop, finished = self.local("from_loop"), self.local("from_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.lea_rip(RSI, self.number_buffer(3))
+        code.call("nv_format")                  # rax = the first digit, rdx = how many
+        code.store(RBP, -8, RAX)
+        code.store(RBP, -16, RDX)
+        code.mov_reg(RDI, RDX)
+        code.add_imm8(RDI, FIELD_SIZE)
+        code.call("nv_alloc")
+        code.store(RBP, -24, RAX)
+        code.load(R11, RBP, -16)
+        code.store(RAX, 0, R11)                 # the length
+        code.lea(R8, RAX, 8)
+        code.load(R9, RBP, -8)
+        code.load(R10, RBP, -16)
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", finished)
+        code.load_byte(RDX, R9, 0)
+        code.store_byte(R8, 0, RDX)
+        code.inc(R8)
+        code.inc(R9)
+        code.dec(R10)
+        code.jmp(loop)
+        code.label(finished)
+        code.load(RAX, RBP, -24)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def to_f64_helper(self) -> None:
+        """`nv_to_f64(rdi = i64)` -> the nearest `f64`, as its bits in `rax`."""
+        code = self.code
+        code.cvtsi2sd(XMM0, RDI)
+        code.movq_xmm_to_reg(RAX, XMM0)
+        code.ret()
+
+    def to_i64_helper(self) -> None:
+        """`nv_to_i64(rdi = f64 bits)` -> the value truncated toward zero, or a trap.
+
+        `cvttsd2si` answers `int64_min` for a `nan` and for anything outside the range,
+        so the answer is converted back and compared: a value that converts to itself is
+        one the machine could hold, and `-2^63` converting to itself is why the check is
+        a round trip rather than a range test.
+        """
+        code = self.code
+        done, nan, outside = (self.local("to_i64_done"), self.local("to_i64_nan"),
+                              self.local("to_i64_range"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.movq_xmm(XMM0, RDI)
+        code.ucomisd(XMM0, XMM0)
+        code.jcc("p", nan)                      # unordered: a nan
+        code.cvttsd2si(RAX, XMM0)
+        code.mov_imm(R11, I64_MIN)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", done)
+        code.cvtsi2sd(XMM1, RAX)
+        code.ucomisd(XMM0, XMM1)
+        code.jcc("ne", outside)
+        code.jmp(done)
+        code.label(nan)
+        self.fail("to_i64 of NaN")
+        code.jmp(done)
+        code.label(outside)
+        self.fail("to_i64 of a value outside the i64 range")
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def getc_helper(self) -> None:
+        """`nv_getc()` -> the next byte of standard input, or -1 at the end.
+
+        One `read` of one byte: no buffer, so nothing is ever read that the program did
+        not ask for. That is a cost (a syscall per byte) taken deliberately, because a
+        buffer would have to hold back the byte that ended a token, and holding a byte
+        back is the part of `getchar` that is easy to get wrong.
+        """
+        code = self.code
+        eof, done = self.local("getc_eof"), self.local("getc_done")
+        buffer = self.raw("nv_stdin_byte", bytes(1), DATA)
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.xor_reg(RDI, RDI)                  # stdin
+        code.lea_rip(RSI, buffer)
+        code.mov_imm(RDX, 1)
+        code.xor_reg(RAX, RAX)                  # read
+        code.syscall()
+        code.mov_imm(R11, 1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", eof)                      # nothing read, or the call failed
+        code.lea_rip(R11, buffer)
+        code.load_byte(RAX, R11, 0)
+        code.jmp(done)
+        code.label(eof)
+        code.mov_imm(RAX, -1)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def read_space(self, register: int, yes: str) -> None:
+        """`jmp yes` when `register` holds an ASCII space character.
+
+        The set is C's `isspace` for the default locale — space, tab, newline, vertical
+        tab, form feed and carriage return — because the C runtime's reader uses it and
+        the two backends have to agree about where a token ends.
+        """
+        code = self.code
+        not_space = self.local("read_word")
+        code.mov_imm(R11, 32)
+        code.cmp_reg(register, R11)
+        code.jcc("e", yes)
+        code.mov_imm(R11, 13)
+        code.cmp_reg(register, R11)
+        code.jcc("a", not_space)                # above 13 is either a space or nothing
+        code.mov_imm(R11, 9)
+        code.cmp_reg(register, R11)
+        code.jcc("ae", yes)                     # 9..13 are all whitespace
+        code.label(not_space)
+
+    def read_i64_helper(self) -> None:
+        """`nv_read_i64()` -> one whitespace-delimited decimal, or the C runtime's trap.
+
+        The four refusals are the C runtime's, in its order and with its words: no token
+        at all, a token that is not decimal, one that does not fit, and one with a
+        character where its end should be. Overflow is decided before it happens — the
+        value is compared against `(limit - digit) / 10` — so a number one past the limit
+        is a trap rather than a wrapped value.
+        """
+        code = self.code
+        skip, no_sign, after_sign = (self.local("read_skip"), self.local("read_plain"),
+                                     self.local("read_sign"))
+        step, separator = self.local("read_step"), self.local("read_tail")
+        finish, done = self.local("read_finish"), self.local("read_done")
+        no_token = self.local("read_none")
+        not_decimal = self.local("read_undecimal")
+        out_of_range = self.local("read_range")
+        bad_tail = self.local("read_bad")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.label(skip)
+        code.call("nv_getc")
+        code.mov_imm(R11, -1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", no_token)
+        self.read_space(RAX, skip)
+        # `rax` is the first character of the token.
+        code.xor_reg(R10, R10)
+        code.store(RBP, -16, R10)               # not negative
+        code.mov_imm(R11, 45)                   # '-'
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", no_sign)
+        code.mov_imm(R10, 1)
+        code.store(RBP, -16, R10)               # negative
+        code.call("nv_getc")
+        code.jmp(after_sign)
+        code.label(no_sign)
+        code.mov_imm(R11, 43)                   # '+'
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", after_sign)
+        code.call("nv_getc")
+        code.label(after_sign)
+        code.mov_imm(R11, 48)                   # '0'
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", not_decimal)
+        code.mov_imm(R11, 57)                   # '9'
+        code.cmp_reg(RAX, R11)
+        code.jcc("a", not_decimal)
+        code.mov_imm(R10, I64_MAX)
+        code.load(R11, RBP, -16)
+        code.test_reg(R11)
+        code.jcc("e", step)
+        code.add_imm8(R10, 1)                   # a negative may reach one further
+        code.label(step)
+        code.store(RBP, -24, R10)               # the limit
+        code.xor_reg(R11, R11)
+        code.store(RBP, -8, R11)                # the value
+        code.label("nv_read_i64.digit")
+        code.mov_reg(R10, RAX)
+        code.mov_imm(R11, 48)
+        code.sub_reg(R10, R11)                  # the digit
+        code.load(R11, RBP, -24)
+        code.sub_reg(R11, R10)                  # the limit, less this digit
+        code.mov_reg(RAX, R11)
+        code.xor_reg(RDX, RDX)
+        code.mov_imm(R9, 10)
+        code.div(R9)                            # (limit - digit) / 10
+        code.load(R11, RBP, -8)
+        code.cmp_reg(R11, RAX)
+        code.jcc("a", out_of_range)
+        code.mov_imm(R9, 10)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, R10)
+        code.store(RBP, -8, R11)
+        code.call("nv_getc")
+        code.mov_imm(R11, -1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", finish)
+        code.mov_imm(R11, 48)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", separator)
+        code.mov_imm(R11, 57)
+        code.cmp_reg(RAX, R11)
+        code.jcc("be", "nv_read_i64.digit")
+        code.label(separator)
+        self.read_space(RAX, finish)            # a space ends the token
+        code.jmp(bad_tail)                      # anything else is refused
+        code.label(finish)
+        code.load(RAX, RBP, -8)
+        code.load(R11, RBP, -16)
+        code.test_reg(R11)
+        code.jcc("e", done)
+        code.mov_imm(R10, I64_MIN)
+        code.cmp_reg(RAX, R10)
+        code.jcc("e", done)                     # exactly 2^63: the answer is int64_min
+        code.neg(RAX)
+        code.jmp(done)
+        code.label(no_token)
+        self.fail("expected an i64, reached end of input")
+        code.jmp(finish)
+        code.label(not_decimal)
+        self.fail("expected a decimal i64")
+        code.jmp(finish)
+        code.label(out_of_range)
+        self.fail("input outside i64 range")
+        code.jmp(finish)
+        code.label(bad_tail)
+        self.fail("invalid character in i64 input")
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
 
     def fail_helper(self) -> None:
         """`nv_fail(rdi)`: the C runtime's message on stderr, then the trace, then exit."""

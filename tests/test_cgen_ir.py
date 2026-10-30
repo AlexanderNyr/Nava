@@ -37,18 +37,22 @@ FIXTURES = ROOT / "tests" / "fixtures" / "positive"
 
 #: The fixtures the IR can express today. Every one of them must take the IR path:
 #: this list is the "not silently skipped" half of the gate.
-IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sort", "for_loops",
-                 "scoping", "short_circuit", "while_recheck", "arithmetic",
+IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
+                 "for_loops", "scoping", "short_circuit", "while_recheck", "arithmetic",
                  "functions", "hello", "exit_code", "runtime_div_zero",
-                 "runtime_overflow", "structs_basic", "structs_copy")
+                 "runtime_overflow", "structs_basic", "structs_copy", "strings",
+                 "numerical", "fmt_table", "read_i64", "runtime_bad_input")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident. An
 #: `f64` is one: float arithmetic is `nv_add`'s for the `i64` and `print` of an `f64`
 #: is the runtime's `snprintf`, and neither helper exists in this printer yet.
 LOWERED_NOT_PRINTED = ("floats",)
 #: Programs whose C must still come from the AST walk, because the lowering refuses
-#: them by name (`E0901`).
-OUTSIDE_THE_SUBSET = ("map_basics", "strings", "defer_labels")
+#: them by name (`E0901`). One per family: a slice, an enum, a `match`, a `defer`, a
+#: `Set` iteration and a variable that holds a function.
+OUTSIDE_THE_SUBSET = ("defer_labels", "enums_basic", "enums_state", "map_basics",
+                      "results_basic", "results_chain", "self_test", "set_basics",
+                      "slices_basic", "struct_arrays")
 MARKER = "A lowering of the shared IR"
 
 
@@ -124,7 +128,8 @@ class CFromIRTests(unittest.TestCase):
                 self.assertIsNotNone(module, f"{name} was refused by the lowering")
                 self.assertTrue(cgen_ir.supports(module),
                                 f"{name} lowers to IR the C printer cannot print")
-                text = emitted(fixture(name).read_text(encoding="utf-8"))
+                text = emitted(fixture(name).read_text(encoding="utf-8"),
+                               path=fixture(name))
                 self.assertIn(MARKER, text,
                               f"{name} was printed by the AST walk, not from the IR")
 
@@ -134,7 +139,8 @@ class CFromIRTests(unittest.TestCase):
             with self.subTest(fixture=name):
                 self.assertIsNone(lowered(name),
                                   f"{name} lowers now; move it to IN_THE_SUBSET")
-                text = emitted(fixture(name).read_text(encoding="utf-8"))
+                text = emitted(fixture(name).read_text(encoding="utf-8"),
+                               path=fixture(name))
                 self.assertNotIn(MARKER, text)
 
     def test_a_program_the_ir_expresses_but_this_printer_does_not(self):
@@ -267,25 +273,28 @@ fn main() {
         source = fixture("arrays_basic").read_text(encoding="utf-8")
         self.assertNotIn(MARKER, emitted(source, from_ir=False))
 
-    def test_a_str_comparison_is_never_printed_from_the_ir(self):
-        """`==` on two `str`s means text, and C would compare pointers.
+    def test_a_str_comparison_prints_as_strcmp_and_never_as_pointer_equality(self):
+        """`==` on two `str`s means text. Since N14f the IR can say so.
 
-        The lowering refuses it (`E0901`, naming the operator), so the C backend keeps
-        its own path and its own answer rather than inheriting the pointer compare a
-        naive printer would emit.
+        It says it with `TextCompare`, which the C printer turns into `strcmp(...) == 0`
+        — so a string comparison is never `v1 == v2` on two `const char *`, which is a
+        question about addresses and not about text. The IR keeps the instruction rather
+        than a `Cmp` because the two backends' string representations differ and neither
+        may be tempted to compare the representations.
         """
         source = 'fn main() -> i64 {\n    print("a" == "a")\n    return 0\n}\n'
-        program = program_of(source)
-        try:
-            module = lower.lower(program)
-        except NavaError as error:
-            self.assertEqual(getattr(error, "code", None), "E0901")
-            self.assertIn("on strs", str(error))
-        else:
-            self.assertFalse(cgen_ir.supports(module),
-                             "a str comparison reached the printer")
+        module = lower.lower(program_of(source))
+        instructions = [item for function in module.functions
+                        for block in function.blocks for item in block.instructions]
+        self.assertTrue(any(isinstance(item, ir.TextCompare) for item in instructions))
+        self.assertFalse(any(isinstance(item, ir.Cmp) for item in instructions),
+                         "a text comparison was stated as a pointer comparison")
         text = emitted(source)
-        self.assertNotIn(MARKER, text)
+        self.assertIn(MARKER, text)
+        self.assertIn("strcmp(", text)
+        # A `==` between two locals would be the pointer comparison this instruction
+        # exists to prevent.
+        self.assertIsNone(re.search(r"v\d+ == v\d+;", text))
 
     def test_a_generic_with_one_instantiation_is_printed_from_the_ir(self):
         source = ("edition 2;\n"

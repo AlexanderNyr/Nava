@@ -1489,11 +1489,19 @@ an `f64` is refused by name until that conversion is its own increment. A progra
 therefore observe a float through `if` and `while` on the native backend, and not yet
 through `print`.
 
+Text is compared and built: `==` and `!=` on two `str` compare the **text**
+(`TextCompare` in the representation, `nv_str_cmp` in the runtime), and the string
+operations `bytes_len`, `byte_at`, `str_concat`, `str_slice` and `str_from_i64` are
+runtime routines, as are the number conversions `to_i64` and `to_f64` and the reader
+`read_i64` — with the C runtime's four ways of refusing a number it cannot read, word
+for word and status for status.
+
 Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, enums, `match`,
 `defer`, `?`, a call through a function value, a generic function, arrays of structs, a
 struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
-builtins (`read_i64`, `read_f64`, `to_i64`, `to_f64`, the text and filesystem
-functions) — is refused with `E0901`, **naming the construct and the function**. A
+builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem and
+argument functions) — is refused with `E0901`, **naming the construct and the
+function**. A
 builtin is refused by the *instruction* rather than by the lowering: the IR says what
 the program means, and the backend says which routine it does not have. So is a generic
 function with more than one instantiation: an instantiation carries no type argument in
@@ -1536,10 +1544,13 @@ runtime helper (`nv_arr_i64_get`, `nv_arr_i64_set`, `nv_arr_i64_free`), so owner
 bounds checks do not depend on how the program reached the backend.
 
 The rest of the language is still printed by the AST walk: slices, `String`, `Vec`,
-`HashMap`, `HashSet`, enums, `match`, `defer`, `?`, generics, the builtins, float
-arithmetic (the C runtime's checked helpers are `i64` ones, and a float sum has nothing
-to check) and `print` of an `f64` (`nv_print_f64` is the AST path's) are not printable
-from the representation yet, and a program using them is printed the old way. A struct,
+`HashMap`, `HashSet`, enums, `match`, `defer`, `?`, generics, the builtins the runtime
+does not have, and `print` of an `f64` (`nv_print_f64` is the AST path's) are not
+printable
+from the representation yet, and a program using them is printed the old way. A float
+sum, a text comparison and the eight builtins above are printable: an `f64` sum is `+`
+on two `double`s, which is IEEE and checks nothing because there is nothing to check,
+and a text comparison is `strcmp`, never `==` on two addresses. A struct,
 a cell and an `f64` *comparison* are printable: the struct's `typedef` is emitted from
 the layout the representation carries, a cell is an ordinary C local, and a comparison
 of two `double`s is what IEEE says it is in either printer. Which
@@ -1604,6 +1615,19 @@ sharing a record instead would make `let s = Segment(from: origin, ...)` let a w
 through `s.from.x` be visible in `origin`. Strings inside a struct are pointers to the
 program's literals and are shared, which is sound because a string is never written
 through.
+
+**How text is represented.** The two backends disagree about what a `str` is and that is
+deliberate: C's is a NUL-terminated `char *`, because the C runtime is C, and the native
+backend's is a pointer to `[length][bytes]`, because a syscall runtime has no `strlen` to
+spend and a length is one load. The representation says only what the language says — a
+`str` is a byte sequence, comparing two is comparing their text, and the length is a
+number — so neither representation is part of the IR's vocabulary. A string built at run
+time (`str_concat`, `str_slice`, `str_from_i64`) comes from the same arena structures come
+from, and is never given back: that is the arena's documented limit, not a claim about
+garbage collection. `read_i64` reads **one byte per `read` syscall**, deliberately: a
+buffer would have to hold back the byte that ended a token, and holding a byte back is
+the part of a reader that is easy to get wrong. The cost is stated here because it is
+paid by every call.
 
 The options that describe a C build do not apply, and none of them is ignored:
 `--cc`, `--opt` and `--record` with `--backend native` are `E0903`, because a record

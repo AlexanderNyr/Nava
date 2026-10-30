@@ -462,11 +462,16 @@ class Builder:
             self.emit(block, ir.Bin(value, opcode, left, right, left_type))
             return value, left_type, block
         if node.op in ("==", "!=", "<", "<=", ">", ">="):
-            if left_type not in ("i64", "bool", "f64"):
+            if left_type not in ("i64", "bool", "f64", "str"):
                 raise Refused(f"'{node.op}' on {left_type}s", node.loc)
             value = self.value()
             opcode = {"==": "eq", "!=": "ne", "<": "lt", "<=": "le",
                       ">": "gt", ">=": "ge"}[node.op]
+            if left_type == "str":
+                # Two strings compare by their text. That is a different question from
+                # where they are, so it is a different instruction.
+                self.emit(block, ir.TextCompare(value, opcode, left, right))
+                return value, "bool", block
             self.emit(block, ir.Cmp(value, opcode, left, right, left_type))
             return value, "bool", block
         raise Refused(f"the operator '{node.op}'", node.loc)

@@ -291,6 +291,25 @@ class Assembler:
         """`divsd xmm1, xmm2`: F2 0F 5E /r — `1.0 / 0.0` is `inf`, as in C."""
         self._sse(b"\x5e", destination, source)
 
+    def cvtsi2sd(self, xmm: int, register: int) -> None:
+        """`cvtsi2sd xmm, r64`: F2 REX.W 0F 2A /r — an `i64` to the nearest `f64`.
+
+        Every `i64` that does not fit exactly is rounded to nearest-even, which is the
+        language's rule and the C compiler's rule for the same conversion.
+        """
+        self.emit(b"\xf2" + _rex(w=True, r=xmm, b=register) + b"\x0f\x2a"
+                  + _modrm(3, xmm, register))
+
+    def cvttsd2si(self, register: int, xmm: int) -> None:
+        """`cvttsd2si r64, xmm`: F2 REX.W 0F 2C /r — the `f64`, truncated toward zero.
+
+        An inexact answer is not the only failure mode: a value outside the `i64` range
+        and a `nan` both answer `int64_min`, which is why the caller compares the result
+        back instead of trusting it.
+        """
+        self.emit(b"\xf2" + _rex(w=True, r=register, b=xmm) + b"\x0f\x2c"
+                  + _modrm(3, register, xmm))
+
     def ucomisd(self, left: int, right: int) -> None:
         """`ucomisd xmm1, xmm2`: 66 0F 2E /r — flags for a comparison, `pf` if unordered.
 

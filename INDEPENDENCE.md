@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a, N14b, N14c, N14d and N14e delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison and struct values are compiled natively, while printing an `f64`, the collections, enums, slices and the builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14f delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison and the eight builtins the runtime has are compiled natively, while printing an `f64`, the collections, enums, slices and the remaining builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1360,6 +1360,7 @@ the differential records.
 | N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
 | N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
 | N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
+| N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
 | N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
 
@@ -1626,6 +1627,56 @@ hold a struct; that the arena reclaims a record (it does not, and `release` is s
 nothing on this backend); or anything about speed — every value is still a frame slot,
 every struct field is a load, and no benchmark was run.
 
+#### Delivery record N14f (2026-10-30)
+
+**Text and numbers through one IR — and the `str`-comparison hole closed from the other
+side.** N14d refused `==` on two `str` because the representation could not say "compare
+the text" without a C printer that would compare addresses. This increment says it: a
+`TextCompare` instruction, which C answers with `strcmp` and the native backend with a
+byte-loop routine, so neither can compare storage and call it equality. Alongside it, the
+eight builtins the language has and the runtime can implement become real in both
+backends, and the native runtime grows the routines behind them.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| Two strings compare by their text, not their storage | `NativeTextTests.test_a_string_comparison_is_text_and_not_storage` | `str_concat("a","b")`, `str_concat("ab","")` and a literal `"ab"` are one answer four times over: two separately built strings are equal, so the comparison is over the bytes |
+| The IR states it as its own instruction, and C prints `strcmp` | `CFromIRTests.test_a_str_comparison_prints_as_strcmp_and_never_as_pointer_equality` | the module holds a `TextCompare` and **no** `Cmp`; the emitted C contains `strcmp(` and no `v1 == v2` between two locals — the pointer comparison the instruction exists to prevent |
+| The string operations agree with the C backend | `NativeTextTests.test_text_operations_agree_with_the_c_backend` | ten observations — a concatenation, its length, `str_from_i64(-42)`, a slice, `byte_at`, four comparisons and the length of `""` — identical on stdout, stderr and status |
+| A number's text is the text `print` writes | `test_the_text_of_a_number_is_the_text_printed_str_alone` | `str_from_i64` and `print` of an `i64` share one routine (`nv_format`), so `-9223372036854775808` is 20 bytes of text and the same 20 bytes on both backends |
+| Every trap is the C runtime's, word for word | `test_a_byte_index_out_of_bounds_is_the_c_runtime_message`, `test_a_slice_out_of_bounds_names_three_numbers` | `byte index 5 is out of bounds for a string of 2 bytes` and `string slice 3..9 is out of bounds for a string of 5 bytes` — three numbers in the second, because that is what the C runtime states — with the same status and nothing on stdout |
+| A prompt printed before a read comes first | `NativeInputTestsOrdering` | `print(1)` then `read_i64()` prints `1 2 5` on both backends: the C runtime flushes before it reads and the native one never buffered, and the outputs are still the same bytes |
+| Reading a number is reading a number | `NativeInputTests` | `42`, `-7`, `+5`, `  13  `, both `i64` extremes, and all four refusals (`expected an i64, reached end of input`, `expected a decimal i64`, `invalid character in i64 input`, `input outside i64 range`) — the same bytes, the same status, on both backends |
+| The corpus grows | the fixture sweep | **21 of 32** fixtures build and run identically through both backends (15 at N14e — `arrays_sieve`, `fmt_table`, `numerical`, `read_i64`, `runtime_bad_input` and `strings` joined), **0 differ**, 11 refused by name; and the C-from-IR set is the same 21, so "the representation covers what both backends compile" is a measurement |
+| What neither can do, both refuse by name | `NativeRefusalTests` | `chars_len` is refused at code generation by the *builtin's* name in both backends, and the lowering refusals are unchanged (slice, enum variant, `defer`, an array of structs, a field that owns storage) |
+
+Two things this increment had to get right, both about *representation* rather than
+language. The message routine: `nv_fail_pair` carried two numbers and two phrases, and a
+slice needs three numbers and a byte index a fourth phrase, so it now takes four kinds —
+0 for an array index, 1 for a length limit, 2 for a byte of a string, 3 for a slice — and
+every one of them was checked against the C runtime's text rather than written from
+memory. And `read_i64` reads **one byte per syscall**: a buffer would have to hold back
+the byte that ended a token, which is exactly the part of `getchar` that is easy to get
+wrong, so the cost is stated in `LANGUAGE.md` rather than discovered later.
+
+The audit is re-measured: **18 230 lines, 27 modules, 664 functions** (17 580 / 27 / 648
+at N14e) — no new module, 16 functions: the text comparison, the eight builtin
+implementations and the nine runtime routines behind them. The suite is **1 027 tests,
+1 632 subtests**, `tests/registry.py` reports 957 registered tests with the same 11
+tasks, 76 cases, 192 spec fixtures and 173 diagnostic codes, and the overhead record is
+re-measured rather than assumed: **108 832 tokens**, unchanged, because the guide
+describes the language and this increment changed which backend implements which part of
+it.
+
+What this increment does **not** claim: that the AST walk is gone — 11 of the 32
+fixtures still need it, and they are the ones with a slice, an enum, a `match`, a
+`defer`, a `Set` iteration and a variable holding a function; that printing an `f64`
+works natively (it does not: its shortest round-tripping decimal form is a conversion the
+backend does not have, and it is refused by name); that `chars_len`, `str_from_f64`,
+`read_f64`, the filesystem or the argument functions exist natively (each is refused by
+name); that a string built at run time is ever reclaimed (the arena does not give memory
+back); or anything about speed — `read_i64` costs a syscall per byte, and no benchmark
+was run.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1778,7 +1829,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 17 577 Python lines and 648 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 18 230 Python lines and 664 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

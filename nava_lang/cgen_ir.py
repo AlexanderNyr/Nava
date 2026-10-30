@@ -50,18 +50,35 @@ ELEMENT_NAMES = {"i64": "int64_t", "bool": "bool", "str": "const char *"}
 #: always trapped it and with the message it has always printed.
 BINARY_HELPERS = {"add": "nv_add", "sub": "nv_sub", "mul": "nv_mul",
                   "div": "nv_div", "mod": "nv_rem"}
+#: Float arithmetic is the machine's too: `+` on two `double`s is IEEE and traps
+#: nothing, which is the language's rule for `f64` and the reason it needs no helper.
+FLOAT_OPERATORS = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
 #: Comparisons are the machine's: an `i64` or a `bool` compares by value.
 COMPARE_OPERATORS = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+#: The builtins the C printer can print: an IR `builtin` name -> the runtime function
+#: that implements it, with how many arguments it takes. The native backend has its own
+#: list, and a builtin that is on only one list is a gap in one backend — which is a
+#: refusal with the builtin's name, not a silent difference.
+BUILTIN_HELPERS = {
+    "bytes_len": ("nv_bytes_len", 1),
+    "byte_at": ("nv_byte_at", 2),
+    "str_concat": ("nv_str_concat", 2),
+    "str_slice": ("nv_str_slice", 3),
+    "str_from_i64": ("nv_str_from_i64", 1),
+    "to_i64": ("nv_to_i64", 1),
+    "to_f64": ("nv_to_f64", 1),
+    "read_i64": ("nv_read_i64", 0),
+}
 #: `print` of a value, per type. The three helpers print exactly what the native
 #: backend's three writers print, which is what the differential compares.
 PRINT_HELPERS = {"i64": "nv_print_i64", "bool": "nv_print_bool", "str": "nv_print_str"}
 #: What this printer implements. A program that lowers to anything else is printed by
 #: the AST walk instead, and `supports()` is where that decision is made.
 SUPPORTED = (
-    ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.Copy, ir.Call, ir.Print,
-    ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore, ir.Length,
-    ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field, ir.FieldStore,
-    ir.Jump, ir.Branch, ir.Ret,
+    ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.TextCompare, ir.Copy, ir.Call,
+    ir.Print, ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore,
+    ir.Length, ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field,
+    ir.FieldStore, ir.Builtin, ir.Jump, ir.Branch, ir.Ret,
 )
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
@@ -151,8 +168,10 @@ def value_types(function: ir.Function) -> dict[str, str]:
                 types[instruction.value] = instruction.typ
             elif isinstance(instruction, ir.Length):
                 types[instruction.value] = "i64"
-            elif isinstance(instruction, (ir.Not, ir.Cmp)):
+            elif isinstance(instruction, (ir.Not, ir.Cmp, ir.TextCompare)):
                 types[instruction.value] = "bool"
+            elif isinstance(instruction, ir.Builtin):
+                types[instruction.value] = instruction.typ
             elif isinstance(instruction, ir.Copy):
                 types[instruction.value] = types[instruction.operand]
             elif isinstance(instruction, ir.Call):
@@ -193,17 +212,19 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
                           structs: dict | None = None) -> bool:
     """The per-instruction half of `supports()`: types this printer must not guess."""
     if isinstance(instruction, ir.Cmp):
-        # Two `str` values compare by pointer in C. The language compares text, so a
-        # comparison of strings is not this printer's to emit: it goes to the AST.
-        # Floats compare the way IEEE says either way, `nan` included, so they stay.
+        # Two `str` values compare by pointer in C, so a comparison of strings is never
+        # a `Cmp`: the lowering states it as `TextCompare`, which prints as `strcmp`.
         return types.get(instruction.left) != ir.STRING_TYPE
+    if isinstance(instruction, ir.Builtin):
+        routine = BUILTIN_HELPERS.get(instruction.name)
+        return routine is not None and routine[1] == len(instruction.args)
     if isinstance(instruction, ir.Bin):
-        # `nv_add` and its siblings are the checked `i64` ones. Float arithmetic is
-        # `+` on two `double`s, which would need its own helper to state that nothing
-        # traps; until it has one, an `f64` sum is the AST path's to print.
-        return types.get(instruction.left) == "i64"
+        # `nv_add` and its siblings are the checked `i64` ones, so an `i64` sum is a
+        # helper call. A float sum is `+` on two `double`s: nothing is checked, an
+        # overflow is `inf` and the language says so, and that is what C does with `+`.
+        return types.get(instruction.left) in ("i64", "f64")
     if isinstance(instruction, ir.Neg):
-        return types.get(instruction.operand) == "i64"
+        return types.get(instruction.operand) in ("i64", "f64")
     if isinstance(instruction, ir.Print):
         return instruction.typ in PRINT_HELPERS
     if isinstance(instruction, (ir.ArrayLiteral, ir.ArrayZeros, ir.CheckIndex)):
@@ -356,10 +377,18 @@ class Printer:
         if isinstance(instruction, ir.Str):
             return [f"    {variable(instruction.value)} = {c_string(instruction.text)};"]
         if isinstance(instruction, ir.Bin):
+            if types.get(instruction.left) == "f64":
+                return [f"    {variable(instruction.value)} = "
+                        f"{variable(instruction.left)} "
+                        f"{FLOAT_OPERATORS[instruction.op]} "
+                        f"{variable(instruction.right)};"]
             return [f"    {variable(instruction.value)} = "
                     f"{BINARY_HELPERS[instruction.op]}({variable(instruction.left)}, "
                     f"{variable(instruction.right)});"]
         if isinstance(instruction, ir.Neg):
+            if types.get(instruction.operand) == "f64":
+                return [f"    {variable(instruction.value)} = "
+                        f"-{variable(instruction.operand)};"]
             return [f"    {variable(instruction.value)} = nv_neg("
                     f"{variable(instruction.operand)});"]
         if isinstance(instruction, ir.Not):
@@ -368,8 +397,20 @@ class Printer:
             operator = COMPARE_OPERATORS[instruction.op]
             return [f"    {variable(instruction.value)} = ({variable(instruction.left)} "
                     f"{operator} {variable(instruction.right)});"]
+        if isinstance(instruction, ir.TextCompare):
+            return [f"    {variable(instruction.value)} = "
+                    f"(strcmp({variable(instruction.left)}, "
+                    f"{variable(instruction.right)}) "
+                    f"{COMPARE_OPERATORS[instruction.op]} 0);"]
         if isinstance(instruction, ir.Copy):
             return [f"    {variable(instruction.value)} = {variable(instruction.operand)};"]
+        if isinstance(instruction, ir.Builtin):
+            helper, _arity = BUILTIN_HELPERS[instruction.name]
+            arguments = ", ".join(variable(argument) for argument in instruction.args)
+            call = f"{helper}({arguments})"
+            if instruction.typ == "void":
+                return [f"    {call};"]
+            return [f"    {variable(instruction.value)} = {call};"]
         if isinstance(instruction, ir.Call):
             arguments = ", ".join(variable(argument) for argument in instruction.args)
             call = f"{self.call_name(instruction.target)}({arguments})"
