@@ -41,18 +41,18 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "for_loops", "scoping", "short_circuit", "while_recheck", "arithmetic",
                  "functions", "hello", "exit_code", "runtime_div_zero",
                  "runtime_overflow", "structs_basic", "structs_copy", "strings",
-                 "numerical", "fmt_table", "read_i64", "runtime_bad_input")
+                 "numerical", "fmt_table", "read_i64", "runtime_bad_input",
+                 "enums_basic", "enums_state")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident. An
 #: `f64` is one: float arithmetic is `nv_add`'s for the `i64` and `print` of an `f64`
 #: is the runtime's `snprintf`, and neither helper exists in this printer yet.
 LOWERED_NOT_PRINTED = ("floats",)
 #: Programs whose C must still come from the AST walk, because the lowering refuses
-#: them by name (`E0901`). One per family: a slice, an enum, a `match`, a `defer`, a
-#: `Set` iteration and a variable that holds a function.
-OUTSIDE_THE_SUBSET = ("defer_labels", "enums_basic", "enums_state", "map_basics",
-                      "results_basic", "results_chain", "self_test", "set_basics",
-                      "slices_basic", "struct_arrays")
+#: them by name (`E0901`). One per family: a slice, the `?` operator, a `defer`, a
+#: `Set` iteration, a map and a variable that holds a function.
+OUTSIDE_THE_SUBSET = ("defer_labels", "map_basics", "results_basic", "results_chain",
+                      "self_test", "set_basics", "slices_basic", "struct_arrays")
 MARKER = "A lowering of the shared IR"
 
 
@@ -295,6 +295,23 @@ fn main() {
         # A `==` between two locals would be the pointer comparison this instruction
         # exists to prevent.
         self.assertIsNone(re.search(r"v\d+ == v\d+;", text))
+
+    def test_an_enum_is_declared_with_the_name_the_checker_gave_it(self):
+        """The IR carries the written type (`Shape`); the C name is the checker's.
+
+        `nv_enum_Shape` for a declared enum and `nv_enum_Result_i64_str` for an
+        instantiation, both from one rule (`checker.mangle`), so a crash report or a
+        symbol in the artefact means the same thing whichever path printed the file.
+        And a `match` is printed as what it is: a comparison against the tag.
+        """
+        source = fixture("enums_basic").read_text(encoding="utf-8")
+        text = emitted(source, path=fixture("enums_basic"))
+        self.assertIn(MARKER, text)
+        self.assertIn("typedef struct nv_enum_Shape {", text)
+        self.assertIn("int32_t _tag;", text)
+        self.assertIn("._tag", text)
+        self.assertIn("._payload._v_Circle._f0", text)
+        self.assertIn("._payload = { ._v_Circle = { ._f0 = v", text)
 
     def test_a_generic_with_one_instantiation_is_printed_from_the_ir(self):
         source = ("edition 2;\n"

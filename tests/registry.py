@@ -1292,6 +1292,22 @@ REGISTERED_TESTS = {
     "NativeInputTestsOrdering": {
         "test_a_line_printed_before_a_read_comes_first",
     },
+    #: N14g: enums and `match`. A tag is a word in the record and a match is a
+    #: comparison against the variant's position, so the layout is the module's fact
+    #: and the arm is a constant. The last class pins the `unreachable` terminator that
+    #: lets a function whose every path returns lower at all.
+    "NativeEnumTests": {
+        "test_a_match_inside_a_loop_reads_the_value_it_was_given_each_time",
+        "test_a_match_through_a_parameter_sees_the_tag_it_was_given",
+        "test_a_payload_the_backend_cannot_hold_is_refused_by_name",
+        "test_an_enum_and_a_match_agree_with_the_c_backend",
+        "test_the_ir_states_the_tag_and_the_layouts",
+    },
+    "NativeReturnPathTests": {
+        "test_a_stmt_after_a_finished_match_is_not_emitted",
+        "test_an_if_where_both_halves_return_lowers",
+        "test_the_block_after_a_finished_choice_is_stated_unreachable",
+    },
     "NativeTextTests": {
         "test_a_byte_index_out_of_bounds_is_the_c_runtime_message",
         "test_a_slice_out_of_bounds_names_three_numbers",
@@ -1380,6 +1396,7 @@ REGISTERED_TESTS = {
         "test_a_program_outside_the_subset_still_comes_from_the_ast",
         "test_a_program_the_ir_expresses_but_this_printer_does_not",
         "test_a_str_comparison_prints_as_strcmp_and_never_as_pointer_equality",
+        "test_an_enum_is_declared_with_the_name_the_checker_gave_it",
         "test_array_access_goes_through_the_checked_helpers",
         "test_every_function_is_defined_once_under_the_name_the_ast_path_used",
         "test_every_program_in_the_subset_is_printed_from_the_ir",
@@ -1662,6 +1679,8 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeTextTests"),
                                (test_native, "NativeInputTests"),
                                (test_native, "NativeInputTestsOrdering"),
+                               (test_native, "NativeEnumTests"),
+                               (test_native, "NativeReturnPathTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

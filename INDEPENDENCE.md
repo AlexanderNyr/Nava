@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14f delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison and the eight builtins the runtime has are compiled natively, while printing an `f64`, the collections, enums, slices and the remaining builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14g delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, and enums with `match` are compiled natively, while printing an `f64`, the collections, slices, `defer`, `?` and the remaining builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1360,6 +1360,7 @@ the differential records.
 | N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
 | N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
 | N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
+| N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
 | N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
@@ -1677,6 +1678,53 @@ name); that a string built at run time is ever reclaimed (the arena does not giv
 back); or anything about speed — `read_i64` costs a syscall per byte, and no benchmark
 was run.
 
+#### Delivery record N14g (2026-10-30)
+
+**Enums and `match` through one IR — and the block a finished choice leaves dead.**
+N14e gave the IR structs with cells; an enum needs the other half of the same question:
+a value that is *one of several shapes*, and a pattern that asks which. The answer is a
+tag and a payload stated as instructions, with the layouts in the module, so the backend
+compares numbers the checker assigned instead of looking a name up.
+
+Alongside it, a hole the enum work exposed: a function whose every path returns was
+**refused** by this backend ("a path in 'area' that does not return"), because the block
+after an `if`/`match` had nothing to end it. The IR now says `unreachable` there, which
+is what the program proved.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| An enum and a `match` agree with the C backend | `NativeEnumTests.test_an_enum_and_a_match_agree_with_the_c_backend` | five values through one function with three variants, plus a wildcard arm that answers differently from the variant it does not match: `0 12 12 71 1` on stdout, stderr and status |
+| The tag travels with the value | `test_a_match_through_a_parameter_sees_the_tag_it_was_given` | a unit variant, an `i64` payload and a `str` payload, matched in a function that received the enum: `5 bee empty` |
+| A `match` in a loop reads what it was given each turn | `test_a_match_inside_a_loop_reads_the_value_it_was_given_each_time` | an arm that assigns an outer local accumulates across iterations (`20`, the sum of `0,2,4,6,8`), which is what the loop-carried join is for |
+| The IR states the tag, the payload and the layout | `test_the_ir_states_the_tag_and_the_layouts` | `enum Shape {Dot(), Circle(i64), Rect(i64, i64)}`, `= variant Shape::Circle(%3) tag 1`, `= tag %`, `= payload %`, and the tag compared against `const i64 1` |
+| A finished choice ends the function | `NativeReturnPathTests` | an `if`/`else` where both halves return lowers (it used to be `E0901`), the join says `unreachable`, and a `match` whose every arm returns ends the function the same way |
+| What this backend cannot hold, it names | `test_a_payload_the_backend_cannot_hold_is_refused_by_name` | a struct payload is `E0901` naming `a payload of type Point in 'Holder::Full'`, and the C backend builds the same file |
+| The corpus grows | the fixture sweep | **23 of 32** fixtures build and run identically through both backends (21 at N14f — `enums_basic` and `enums_state` joined), **0 differ**, 9 refused by name; the C-from-IR set is the same 23 |
+
+Two things went wrong, both found by running rather than by reading. **The arms read
+values nobody passed them.** The branch into an arm block was emitted with an empty
+argument list while the arm block declared a parameter for every local the arms assign, so
+an arm that added to an outer variable added to whatever the slot held — on both backends,
+because both read the same IR. The loop test is what caught it: it printed `0 2 4 6 8`
+where the sum is `20`. **And `assigned_names` did not know `match`**, so a variable
+assigned only inside an arm was not loop-carried at all; the same walk in the `if` case
+already had the shape the `match` case needed.
+
+The audit is re-measured: **18 654 lines, 27 modules, 676 functions** (18 230 / 27 / 664
+at N14f) — 424 lines, no new module, 12 functions. The suite is **1 036 tests, 1 632
+subtests**, `tests/registry.py` reports 966 registered tests with the same 11 tasks, 76
+cases, 192 spec fixtures and 173 diagnostic codes, and the overhead record is re-measured
+rather than assumed: **108 832 tokens**, unchanged.
+
+What this increment does **not** claim: that the AST walk is gone — 9 of the 32 fixtures
+still need it (`slices_basic`, `struct_arrays`, `results_basic`, `results_chain`,
+`map_basics`, `set_basics`, `defer_labels`, `self_test`, and `floats`, which needs the text
+of an `f64`); that `?`, `defer`, slices, `String`/`Vec` or the collections work natively
+(each is refused by name); that a payload may be a struct (refused by name); that printing
+an `f64` works (it does not, and it is now its own increment: the shortest round-tripping
+decimal form needs exact decimal arithmetic, which is a conversion this backend does not
+have); or anything about speed — no benchmark was run.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1829,7 +1877,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 18 230 Python lines and 664 functions (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 18 654 lines and 676 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

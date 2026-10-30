@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+N14g: **enums and `match` through one IR** — a tag in a record, and a pattern that
+compares it with a constant.
+
+- A variant value, its tag and a payload field are instructions (`variant`, `tag`,
+  `payload`), and the module states every enum layout it lays out: the position of a
+  variant in its declaration *is* its tag, so a `match` compares numbers the checker
+  assigned and no backend looks a name up at run time.
+- `match` lowers to a chain of tag comparisons, one arm per variant, with one join that
+  carries the locals the arms assign — the same block-parameter join an `if` uses. A `_`
+  arm is the default and tests nothing; the checker has already proved the arms cover
+  every variant.
+- A function whose every path returns now lowers. The block an `if` or a `match` would
+  have met at is *dead*, and the IR says so with `unreachable`, which the native backend
+  turns into a trap and the C backend into `nv_unreachable()`. Before this, an `if` whose
+  two halves both returned was refused as "a path that does not return".
+- Two fixtures left the AST walk: `enums_basic` and `enums_state` — 23 of 32 now build and
+  run identically through both backends, and the set the C backend prints from the IR is
+  the same 23.
+- A payload of struct type is refused by name: a struct value inside a record is the
+  copy a struct already needs, and it arrives with that copy.
+
 N14f: **text and numbers through one IR** — a string comparison is a comparison of text,
 and the runtime's text routines exist in both backends.
 

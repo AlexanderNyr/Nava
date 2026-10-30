@@ -564,25 +564,29 @@ fn main() -> i64 {
     return 0
 }
 """,
-        "an enum variant": """\
-edition 2;
-enum Shape {
-    Dot,
-    Circle(i64)
-}
-
-fn main() -> i64 {
-    let s: Shape = Shape::Circle(2)
-    print(1)
-    return 0
-}
-""",
         "a defer": """\
 edition 2;
 fn main() -> i64 {
     defer {
         print(1)
     }
+    return 0
+}
+""",
+        "a payload of type Point in 'Holder::Full'": """\
+edition 2;
+struct Point {
+    x: i64
+}
+
+enum Holder {
+    Empty,
+    Full(Point)
+}
+
+fn main() -> i64 {
+    let h: Holder = Holder::Full(Point(x: 1))
+    print(1)
     return 0
 }
 """,
@@ -1047,14 +1051,15 @@ class NativeCommandTests(unittest.TestCase):
 
     def test_emit_ir_refuses_a_construct_it_cannot_represent(self):
         with tempfile.TemporaryDirectory() as temp:
-            path = write_source(pathlib.Path(temp), "enum",
-                                "edition 2;\nenum Shape {\n    Dot,\n    Circle(i64)\n}\n\n"
-                                "fn main() -> i64 {\n    let s: Shape = Shape::Circle(2)\n"
-                                "    print(1)\n    return 0\n}\n")
+            path = write_source(pathlib.Path(temp), "slice",
+                                "edition 2;\nfn main() -> i64 {\n"
+                                "    let a: [i64] = [1, 2, 3]\n"
+                                "    let part: [i64] = a[0..2]\n"
+                                "    print(len(part))\n    return 0\n}\n")
             result = run([*NAVA, "emit-ir", str(path)])
         self.assertEqual(result.returncode, 2)
         self.assertIn("E0901", result.stderr)
-        self.assertIn("an enum variant", result.stderr)
+        self.assertIn("a slice", result.stderr)
         self.assertEqual(result.stdout, "", "a refusal writes no IR")
 
     def test_emit_ir_states_a_struct_and_an_f64_rather_than_refusing(self):
@@ -1936,3 +1941,247 @@ class NativeInputTests(unittest.TestCase):
                     self.assertEqual(native_out[2], 1)
                     self.assertEqual(native_out[1].strip(),
                                      "nava runtime error: " + message)
+
+
+class NativeEnumTests(unittest.TestCase):
+    """An enum is a tag and what the variant carries, and a `match` reads the tag.
+
+    The value lives in an arena record whose first word is the tag; a pattern binds the
+    words after it. The C backend keeps a `struct` with a tag and a union, so the two
+    representations differ while the behaviour does not — which is the point of stating
+    the tag and the payload as instructions rather than leaving them to a printer.
+    """
+
+    PROGRAM = """\
+edition 2;
+
+enum Shape {
+    Dot,
+    Circle(i64),
+    Rect(i64, i64)
+}
+
+fn area(s: Shape) -> i64 {
+    match s {
+        Shape::Dot => { return 0 }
+        Shape::Circle(r) => { return 3 * r * r }
+        Shape::Rect(w, h) => { return w * h }
+    }
+}
+
+fn describe(s: Shape, tag: i64) -> i64 {
+    let extra = 0
+    match s {
+        Shape::Circle(r) => { extra = r * 10 }
+        _ => { extra = 0 - 1 }
+    }
+    return extra + tag
+}
+
+fn main() {
+    print(area(Shape::Dot))
+    print(area(Shape::Circle(2)))
+    print(area(Shape::Rect(3, 4)))
+    print(describe(Shape::Circle(7), 1))
+    print(describe(Shape::Rect(1, 1), 2))
+}
+"""
+
+    def test_an_enum_and_a_match_agree_with_the_c_backend(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "enum", self.PROGRAM)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # `describe(Rect(1, 1), 2)` takes the wildcard arm, which answers -1, so the
+        # sum is 1: the arm that does not match is the one that runs.
+        self.assertEqual(native_out.stdout.splitlines(), ["0", "12", "12", "71", "1"])
+
+    def test_a_match_through_a_parameter_sees_the_tag_it_was_given(self):
+        """The tag travels with the value: it is in the record, not in the call site."""
+        source = """\
+edition 2;
+
+enum Kind {
+    A(i64),
+    B(str),
+    Empty
+}
+
+fn say(k: Kind) {
+    match k {
+        Kind::A(n) => { print(n) }
+        Kind::B(text) => { print(text) }
+        Kind::Empty => { print("empty") }
+    }
+}
+
+fn main() {
+    say(Kind::A(5))
+    say(Kind::B("bee"))
+    say(Kind::Empty)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "payload", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        self.assertEqual(native_out.stdout, "5\nbee\nempty\n")
+
+    def test_a_match_inside_a_loop_reads_the_value_it_was_given_each_time(self):
+        source = """\
+edition 2;
+
+enum Step {
+    Add(i64),
+    Stop
+}
+
+fn main() {
+    let total = 0
+    let i = 0
+    while i < 5 {
+        let step: Step = Step::Add(i * 2)
+        match step {
+            Step::Add(n) => { total = total + n }
+            Step::Stop => { total = 0 }
+        }
+        i = i + 1
+    }
+    print(total)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "loop", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "20\n")
+
+    def test_the_ir_states_the_tag_and_the_layouts(self):
+        """`emit-ir` shows a tag comparison against a constant and the enum's layout."""
+        with tempfile.TemporaryDirectory() as temp:
+            path = write_source(pathlib.Path(temp), "enum", self.PROGRAM)
+            result = run([*NAVA, "emit-ir", str(path)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = result.stdout
+        self.assertIn("enum Shape {Dot(), Circle(i64), Rect(i64, i64)}", text)
+        self.assertIn("= tag %", text)
+        self.assertIn("= payload %", text)
+        self.assertIn("= variant Shape::Circle(%", text)
+        # A match compares the tag with the variant's position, so the constant is in
+        # the IR and no backend looks a name up at run time.
+        self.assertIn("= const i64 1", text)
+
+    def test_a_payload_the_backend_cannot_hold_is_refused_by_name(self):
+        """A struct payload waits for the copy a struct value needs inside a record."""
+        source = """\
+edition 2;
+
+struct Point {
+    x: i64
+}
+
+enum Holder {
+    Empty,
+    Full(Point)
+}
+
+fn main() {
+    let h: Holder = Holder::Full(Point(x: 1))
+    print(1)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "payload", source)
+            native = run([*NAVA, "run", str(path), "--backend", "native"])
+            c_build = run([*NAVA, "build", str(path), "-o", str(directory / "c")])
+        self.assertEqual(native.returncode, 2)
+        self.assertIn("E0901", native.stderr)
+        self.assertIn("a payload of type Point in 'Holder::Full'", native.stderr)
+        self.assertEqual(c_build.returncode, 0,
+                         "the C backend builds what the native one refuses")
+
+
+class NativeReturnPathTests(unittest.TestCase):
+    """A function whose every path returns is a function with nothing after the choice.
+
+    Before N14g the lowering refused it: the block after an `if`/`match` had no
+    terminator, and the function-level check read that as a path that does not return.
+    The IR now says `unreachable`, which is what the program proved.
+    """
+
+    def test_an_if_where_both_halves_return_lowers(self):
+        source = """\
+fn pick(n: i64) -> i64 {
+    if n > 0 {
+        return 1
+    } else {
+        return 2
+    }
+}
+
+fn main() {
+    print(pick(1))
+    print(pick(0 - 1))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "pick", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "1\n2\n")
+
+    def test_the_block_after_a_finished_choice_is_stated_unreachable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = write_source(pathlib.Path(temp), "pick",
+                                "fn pick(n: i64) -> i64 {\n"
+                                "    if n > 0 {\n        return 1\n    } else {\n"
+                                "        return 2\n    }\n}\n\n"
+                                "fn main() {\n    print(pick(1))\n}\n")
+            result = run([*NAVA, "emit-ir", str(path)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("unreachable", result.stdout)
+
+    def test_a_stmt_after_a_finished_match_is_not_emitted(self):
+        """Unreachable code after the join is not lowered at all, on either backend."""
+        source = """\
+edition 2;
+
+enum Flag {
+    On,
+    Off
+}
+
+fn value(f: Flag) -> i64 {
+    match f {
+        Flag::On => { return 1 }
+        Flag::Off => { return 0 }
+    }
+}
+
+fn main() {
+    print(value(Flag::On))
+    print(value(Flag::Off))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "flags", source)
+            c_binary, native_binary = build_both(path, directory)
+            self.assertEqual(run([str(c_binary)]).stdout,
+                             run([str(native_binary)]).stdout)
+            self.assertEqual(run([str(native_binary)]).stdout, "1\n0\n")

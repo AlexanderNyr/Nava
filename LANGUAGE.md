@@ -1489,6 +1489,17 @@ an `f64` is refused by name until that conversion is its own increment. A progra
 therefore observe a float through `if` and `while` on the native backend, and not yet
 through `print`.
 
+Enums are values with a tag: `Shape::Circle(2)` is a record whose first word says which
+variant it is, a `match` compares that word, and a pattern binds the fields the variant
+carries. `Shape` and `Result(i64, str)` are both enum types; the tag is the variant's
+position in the declaration. A payload may be a number, a `bool`, a string or an `f64`; a
+payload of struct type is refused by name, because a struct inside a record is a copy and
+that copy is not in this backend yet.
+
+A `match` with an arm for every variant needs no wildcard, and one with a `_` arm tests
+nothing for it. An `if` or a `match` whose every path returns leaves the block after it
+unreachable, which the representation states rather than leaving to a backend to guess.
+
 Text is compared and built: `==` and `!=` on two `str` compare the **text**
 (`TextCompare` in the representation, `nv_str_cmp` in the runtime), and the string
 operations `bytes_len`, `byte_at`, `str_concat`, `str_slice` and `str_from_i64` are
@@ -1496,9 +1507,9 @@ runtime routines, as are the number conversions `to_i64` and `to_f64` and the re
 `read_i64` — with the C runtime's four ways of refusing a number it cannot read, word
 for word and status for status.
 
-Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, enums, `match`,
-`defer`, `?`, a call through a function value, a generic function, arrays of structs, a
-struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
+Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, the `?` operator,
+`defer`, a call through a function value, a generic function, arrays of structs, an enum
+payload of struct type, a struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
 builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem and
 argument functions) — is refused with `E0901`, **naming the construct and the
 function**. A
@@ -1544,8 +1555,8 @@ runtime helper (`nv_arr_i64_get`, `nv_arr_i64_set`, `nv_arr_i64_free`), so owner
 bounds checks do not depend on how the program reached the backend.
 
 The rest of the language is still printed by the AST walk: slices, `String`, `Vec`,
-`HashMap`, `HashSet`, enums, `match`, `defer`, `?`, generics, the builtins the runtime
-does not have, and `print` of an `f64` (`nv_print_f64` is the AST path's) are not
+`HashMap`, `HashSet`, `defer`, `?`, generics, the builtins the runtime does not have, and
+`print` of an `f64` (`nv_print_f64` is the AST path's) are not
 printable
 from the representation yet, and a program using them is printed the old way. A float
 sum, a text comparison and the eight builtins above are printable: an `f64` sum is `+`
@@ -1615,6 +1626,16 @@ sharing a record instead would make `let s = Segment(from: origin, ...)` let a w
 through `s.from.x` be visible in `origin`. Strings inside a struct are pointers to the
 program's literals and are shared, which is sound because a string is never written
 through.
+
+**How an enum meets the machine.** A variant value is one record from the same arena: the
+first word is the tag — the variant's position in the declaration — and the words after it
+are what the variant carries, in the order the pattern binds them. A `match` is therefore a
+chain of comparisons against constants, and the payload is a load at a fixed offset. The C
+backend keeps a `struct` with a tag and a union of payload structs, which is a different
+layout with the same meaning: the IR states the tag and the payload, not the layout. An
+`if` or a `match` whose every path returns leaves the block after it dead, and the
+representation says `unreachable` there; the native backend traps on it, so a lowering bug
+that made it reachable says so instead of running on whatever the next load returns.
 
 **How text is represented.** The two backends disagree about what a `str` is and that is
 deliberate: C's is a NUL-terminated `char *`, because the C runtime is C, and the native

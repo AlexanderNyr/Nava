@@ -36,9 +36,10 @@ from __future__ import annotations
 
 from ..diagnostics import make
 from ..model import (
-    ArrayLiteral, Assign, Binary, Boolean, Break, Call, Continue, ExprStmt, Float, For,
-    Function, If, Index, IndexAssign, Let, Member, MemberAssign, Number, Program, Range,
-    Return, String, StructLiteral, Unary, Variable, While,
+    ArrayLiteral, Arm, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl, ExprStmt,
+    Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
+    Number, Program, Range, Return, String, StructLiteral, Unary, Variable, Variant,
+    VariantValue, While,
 )
 from ..checker import BUILTINS
 from . import ir
@@ -49,6 +50,10 @@ from . import ir
 #: which is the shortest round-tripping decimal form and needs a conversion this
 #: backend does not have yet.
 PRINTABLE = ("i64", "bool", "str", "f64")
+#: The payload types an enum variant may carry here. A struct payload would be a
+#: struct value inside an arena record, which is the copy question structs already
+#: answer in their own layout; it arrives when the copy does.
+PAYLOAD_TYPES = ("i64", "bool", "str", "f64")
 #: The element types an array may hold here. A `Vec`, a struct or a slice is a
 #: different representation, and each arrives with its own increment.
 ELEMENT_TYPES = ("i64", "bool", "str")
@@ -68,6 +73,46 @@ def struct_layouts(program: Program) -> dict[str, tuple]:
     for written, struct in program.struct_instances.items():
         layouts[written] = tuple((item.name, item.typ) for item in struct.fields)
     return layouts
+
+
+def enum_layouts(program: Program) -> dict[str, tuple]:
+    """Every enum type the program constructs: its variants and what each carries.
+
+    The written type is the key (`Shape`, `Result(i64, str)`), because that is what a
+    value's type is spelled as; a variant's position in the tuple is its tag. The
+    declarations come from the nodes themselves — a construction names its enum — so
+    the lowering does not have to guess which enums a program uses.
+    """
+    layouts: dict[str, tuple] = {}
+    for decl in program.enums:
+        layouts[decl.name] = tuple((item.name, tuple(item.types))
+                                   for item in decl.variants)
+    for node in walk(program.functions):
+        if isinstance(node, VariantValue) and node.declared is not None:
+            key = node.instance or node.declared.name
+            layouts[key] = tuple((item.name, tuple(item.types))
+                                 for item in node.declared.variants)
+    return layouts
+
+
+def walk(value, depth: int = 0):
+    """Every node under `value`, in source order.
+
+    A small walker over the typed AST: records hold lists and tuples of children, and
+    a `str` has no children, which is what keeps the walk from reading types as nodes.
+    """
+    if depth > 60 or isinstance(value, (str, bytes, int, float, bool, type(None))):
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            yield from walk(item, depth + 1)
+        return
+    fields = getattr(value, "__dict__", None)
+    if fields is None:
+        return
+    yield value
+    for item in list(fields.values()):
+        yield from walk(item, depth + 1)
 
 
 def is_array(typ: object) -> bool:
@@ -126,6 +171,11 @@ def assigned_names(body) -> set[str]:
         elif isinstance(statement, For):
             names |= assigned_names(statement.body)
             names.add(statement.name)
+        elif isinstance(statement, Match):
+            # An arm assigns through the same join as an `if` half, so a `match` inside
+            # a loop body contributes the names its arms assign to the loop's frame.
+            for arm in statement.arms:
+                names |= assigned_names(arm.body)
         elif isinstance(statement, (Break, Continue, Return, ExprStmt, IndexAssign,
                                     MemberAssign)):
             # Nothing here binds a name: an element write changes storage that some
@@ -186,12 +236,17 @@ FIELD_TYPES = ("i64", "bool", "f64", "str")
 class Builder:
     """One function's lowering: its blocks, its values, its cells, its environment."""
 
-    def __init__(self, function: Function, structs: dict | None = None):
+    def __init__(self, function: Function, structs: dict | None = None,
+                 enums: dict | None = None):
         self.function = function
         #: The struct types of the program and their fields, in declaration order: a
         #: variable of one of these lives in a slot, because a field assignment writes
         #: into storage, and a field name is a position in the layout.
         self.structs = dict(structs or {})
+        #: The enum types of the program: variant names in declaration order, and the
+        #: types each carries. The position of a variant is its tag, so this is also
+        #: what a `match` compares.
+        self.enums = dict(enums or {})
         #: The cells this function declares, in declaration order.
         self.slots: list[ir.Slot] = []
         #: Variable name -> slot name, for the variables that live in a slot.
@@ -258,6 +313,28 @@ class Builder:
                     loc)
         return fields
 
+    def is_enum(self, typ: object) -> bool:
+        return isinstance(typ, str) and typ in self.enums
+
+    def enum_layout(self, typ: str, loc) -> tuple:
+        """The variants of an enum type, refusing one the lowering was not given.
+
+        An enum reached only through a parameter or a return value, and never
+        constructed anywhere in the program, has no layout to state — and a backend
+        that guessed one would be reading words it had not been told about.
+        """
+        variants = self.enums.get(typ)
+        if variants is None:
+            raise Refused(f"the enum type '{typ}'", loc)
+        for name, types in variants:
+            for payload_type in types:
+                if payload_type not in PAYLOAD_TYPES:
+                    raise Refused(
+                        f"a payload of type {payload_type} in '{typ}::{name}': the "
+                        f"native backend holds a payload that is a number, a bool or a "
+                        f"string", loc)
+        return variants
+
     def load_variable(self, name: str, block: ir.Block) -> tuple[str, str] | None:
         """`a` where `a` lives in a cell: the value it holds now."""
         slot = self.cells.get(name)
@@ -305,6 +382,8 @@ class Builder:
             return value, "f64", block
         if isinstance(node, StructLiteral):
             return self.struct_literal(node, block, env)
+        if isinstance(node, VariantValue):
+            return self.variant_value(node, block, env)
         if isinstance(node, Member):
             base, base_type, block = self.expression(node.base, block, env)
             self.layout(base_type, node.loc)
@@ -364,6 +443,30 @@ class Builder:
         value = self.value()
         self.emit(block, ir.ArrayLiteral(value, typ, items))
         self.take(value, typ, owned)
+        return value, typ, block
+
+    def variant_value(self, node: VariantValue, block: ir.Block, env: dict):
+        """`Shape::Circle(2)`, in the order the arguments are written.
+
+        The arguments are lowered left to right before the value exists, which is the
+        language's evaluation order; a call in the second argument happens after a call
+        in the first, on both backends.
+        """
+        declared = node.declared
+        if declared is None:
+            raise Refused(f"the variant '{node.enum}::{node.variant}'", node.loc)
+        typ = node.instance or declared.name
+        self.enum_layout(typ, node.loc)
+        values: list[str] = []
+        types: list[str] = []
+        for argument in node.args:
+            value, argument_type, block = self.expression(argument, block, env)
+            values.append(value)
+            types.append(argument_type)
+        value = self.value()
+        tag = node.choice.tag if node.choice is not None else -1
+        self.emit(block, ir.Variant(value, typ, node.variant, tag, tuple(values),
+                                    tuple(types)))
         return value, typ, block
 
     def struct_literal(self, node: StructLiteral, block: ir.Block, env: dict):
@@ -670,6 +773,8 @@ class Builder:
             return self.while_statement(statement, block, env)
         if isinstance(statement, For):
             return self.for_statement(statement, block, env)
+        if isinstance(statement, Match):
+            return self.match_statement(statement, block, env)
         if isinstance(statement, Return):
             if statement.value is None:
                 self.leave(block, 0)
@@ -722,19 +827,108 @@ class Builder:
         then_env = {**env, **{name: (then_block.params[index][0], env[name][1])
                               for index, name in enumerate(names)}}
         tail = self.body(statement.then_body, then_block, then_env)
-        if tail.terminator is None:
+        then_leaves = tail.terminator is not None
+        if not then_leaves:
             self.emit(tail, ir.Jump(join.label,
                                              [then_env[name][0] for name in names]))
+        else_leaves = False
         if else_block is not None:
             else_env = {**env, **{name: (else_block.params[index][0], env[name][1])
                                   for index, name in enumerate(names)}}
             tail = self.body(statement.else_body, else_block, else_env)
-            if tail.terminator is None:
+            else_leaves = tail.terminator is not None
+            if not else_leaves:
                 self.emit(tail, ir.Jump(join.label,
                                                  [else_env[name][0] for name in names]))
         for index, name in enumerate(names):
             env[name] = (join.params[index][0], env[name][1])
+        if then_leaves and else_leaves:
+            # Neither half falls through, so nothing arrives at the join: saying so
+            # is what lets a function whose every path returns lower at all.
+            self.emit(join, ir.Unreachable())
         return join
+
+    def match_statement(self, statement: Match, block: ir.Block, env: dict) -> ir.Block:
+        """`match` is a chain of tag comparisons, one arm per tag.
+
+        The checker has already proved the arms cover every variant, so the last arm
+        needs no test; a `_` arm becomes the default and tests nothing. Every arm jumps
+        to one join, which carries the locals the arms assign — the same block-parameter
+        join an `if` uses, because a `match` is a choice between paths and the values
+        have to meet somewhere.
+        """
+        subject, subject_type, block = self.expression(statement.value, block, env)
+        variants = self.enum_layout(subject_type, statement.loc)
+        tags = {name: index for index, (name, _types) in enumerate(variants)}
+        names = sorted({name for arm in statement.arms
+                        for name in assigned_names(arm.body)} & set(env))
+        tag_value = self.value()
+        self.emit(block, ir.Tag(tag_value, subject, subject_type))
+        join = self.block("match_join",
+                          [(self.value(), env[name][1]) for name in names])
+        wildcard = None
+        tested: dict[str, ir.Block] = {}
+        #: Whether each arm ended in a terminator, so the join can be told it is dead.
+        leaves: list[bool] = []
+        for arm in statement.arms:
+            if arm.variant is None:
+                wildcard = arm
+                continue
+            if arm.variant not in tags:
+                raise Refused(f"the variant '{subject_type}::{arm.variant}'", arm.loc)
+            arm_block = self.block("match_arm",
+                                   [(self.value(), env[name][1]) for name in names])
+            tested[arm.variant] = arm_block
+            following = self.block("match_next")
+            constant = self.value()
+            self.emit(block, ir.Const(constant, "i64", tags[arm.variant]))
+            condition = self.value()
+            self.emit(block, ir.Cmp(condition, "eq", tag_value, constant, "i64"))
+            self.emit(block, ir.Branch(condition, arm_block.label,
+                                       [env[name][0] for name in names],
+                                       following.label, []))
+            leaves.append(self.match_arm(arm, subject, subject_type, arm_block, env,
+                                         names, join))
+            block = following
+        if not any(arm_block for arm_block in tested.values()):
+            raise Refused("a match with no arm", statement.loc)
+        if wildcard is not None:
+            wildcard_block = self.block("match_wild",
+                                        [(self.value(), env[name][1]) for name in names])
+            self.emit(block, ir.Jump(wildcard_block.label,
+                                     [env[name][0] for name in names]))
+            leaves.append(self.match_arm(wildcard, subject, subject_type,
+                                         wildcard_block, env, names, join))
+        else:
+            # Every variant has an arm, so this block is unreachable: the checker
+            # proved it. It still has to go somewhere, and the join is where a value
+            # would belong — an arm that falls through arrives there too.
+            self.emit(block, ir.Jump(join.label, [env[name][0] for name in names]))
+        for index, name in enumerate(names):
+            env[name] = (join.params[index][0], env[name][1])
+        if all(leaves):
+            self.emit(join, ir.Unreachable())
+        return join
+
+    def match_arm(self, arm, subject: str, subject_type: str, arm_block: ir.Block,
+                  env: dict, names: list, join: ir.Block) -> None:
+        """One arm: its bindings are payload reads, its body a block that joins."""
+        arm_env = {**env, **{name: (arm_block.params[index][0], env[name][1])
+                             for index, name in enumerate(names)}}
+        choice = arm.choice
+        if choice is not None:
+            for index, name in enumerate(arm.bindings):
+                payload_type = choice.types[index]
+                value = self.value()
+                self.emit(arm_block, ir.Payload(value, subject, subject_type,
+                                                choice.name, index, payload_type))
+                arm_env[name] = (value, payload_type)
+        self.loc = arm.loc
+        tail = self.body(arm.body, arm_block, arm_env)
+        if tail.terminator is not None:
+            return True
+        self.emit(tail, ir.Jump(join.label, [arm_env[name][0] for name in names]))
+        return False
 
     def while_statement(self, statement: While, block: ir.Block, env: dict) -> ir.Block:
         names = [name for name in sorted(assigned_names(statement.body)) if name in env]
@@ -980,6 +1174,7 @@ def lower(program: Program) -> ir.Module:
     reached = reachable(program)
     check_instantiations(reached)
     layouts = struct_layouts(program)
+    enum_tables = enum_layouts(program)
     for function in reached:
         if function.type_params:
             raise make(
@@ -990,7 +1185,7 @@ def lower(program: Program) -> ir.Module:
                 hint="build with the C backend (the default): `nava build` without "
                      "--backend native",
             )
-        builder = Builder(function, layouts)
+        builder = Builder(function, layouts, enum_tables)
         entry = builder.block("entry")
         env: dict[str, tuple[str, str]] = {}
         for param in function.params:
@@ -1038,4 +1233,13 @@ def lower(program: Program) -> ir.Module:
         for _field, typ in used[name]:
             if typ in layouts:
                 used[typ] = layouts[typ]
-    return ir.Module(functions, structs=used)
+    # The same rule for enums: a type the program never builds and never matches is
+    # a declaration with no value behind it.
+    used_enums: dict[str, tuple] = {}
+    for function in functions:
+        for block in function.blocks:
+            for instruction in block.instructions:
+                name = getattr(instruction, "enum", None)
+                if name in enum_tables:
+                    used_enums[name] = enum_tables[name]
+    return ir.Module(functions, structs=used, enums=used_enums)

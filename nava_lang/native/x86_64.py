@@ -258,7 +258,8 @@ class Generator:
                                             ir.Cmp, ir.Copy, ir.Call, ir.ArrayLiteral,
                                             ir.ArrayZeros, ir.Index, ir.Length,
                                             ir.SlotLoad, ir.StructNew, ir.Field,
-                                            ir.Builtin, ir.TextCompare)):
+                                            ir.Builtin, ir.TextCompare, ir.Variant,
+                                            ir.Tag, ir.Payload)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -377,6 +378,20 @@ class Generator:
             return
         if isinstance(instruction, ir.FieldStore):
             self.field_store(instruction)
+            return
+        if isinstance(instruction, ir.Variant):
+            self.variant(instruction)
+            return
+        if isinstance(instruction, ir.Tag):
+            self.tag(instruction)
+            return
+        if isinstance(instruction, ir.Payload):
+            self.payload(instruction)
+            return
+        if isinstance(instruction, ir.Unreachable):
+            # The program proved nothing arrives here. If a lowering bug arrives
+            # anyway, a message is better than executing whatever follows.
+            self.fail("reached a block the program proved unreachable")
             return
         if isinstance(instruction, ir.TextCompare):
             self.text_compare(instruction)
@@ -529,6 +544,36 @@ class Generator:
             code.mov_reg(R11, RAX)
             self.load(instruction.value, RAX)
             code.store(RAX, self.field_offset(instruction.typ, name), R11)
+
+    def variant(self, instruction: ir.Variant) -> None:
+        """`Shape::Circle(2)`: one record whose first word is the tag.
+
+        The tag is in the record rather than beside it, so a value travelling through a
+        parameter or an array carries which variant it is — an enum is one word in the
+        IR and one allocation here, whatever it holds.
+        """
+        code = self.code
+        code.mov_imm(RDI, FIELD_SIZE * (1 + len(instruction.args)))
+        code.call("nv_alloc")
+        self.store(instruction.value, RAX)
+        code.mov_imm(R11, instruction.tag)
+        code.store(RAX, 0, R11)
+        for index, argument in enumerate(instruction.args):
+            self.load(argument, R11)
+            self.load(instruction.value, RAX)   # the record, again: `load` uses rax
+            code.store(RAX, FIELD_SIZE * (index + 1), R11)
+
+    def tag(self, instruction: ir.Tag) -> None:
+        """Which variant a value is: the first word of its record."""
+        self.load(instruction.operand, RAX)
+        self.code.load(RAX, RAX, 0)
+        self.store(instruction.value, RAX)
+
+    def payload(self, instruction: ir.Payload) -> None:
+        """One field a variant carries: the word after the tag, by position."""
+        self.load(instruction.operand, RAX)
+        self.code.load(RAX, RAX, FIELD_SIZE * (instruction.index + 1))
+        self.store(instruction.value, RAX)
 
     def field(self, instruction: ir.Field) -> None:
         """A field read is a load from a fixed offset of the record."""

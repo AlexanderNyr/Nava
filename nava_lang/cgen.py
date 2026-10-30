@@ -38,6 +38,13 @@ static void nv_fail(const char *message) {
     exit(1);
 }
 
+/* A block the program proved nothing reaches. The IR states it, so the C printer has
+   to say it: if a lowering bug arrives anyway, the program stops with a message
+   rather than running on whatever the next statement reads. */
+static void nv_unreachable(void) {
+    nv_fail("reached a block the program proved unreachable");
+}
+
 static void nv_failf(const char *format, ...) {
     char message[512];
     va_list arguments;

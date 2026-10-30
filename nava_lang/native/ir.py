@@ -126,6 +126,53 @@ class TextCompare:
 
 
 @record()
+class Variant:
+    """`%v = variant Shape::Circle(%a) tag 1` — an enum value, built in one place.
+
+    The tag is the variant's position in the declaration, which the checker assigned;
+    the module states every layout, so nothing here is the backend's opinion about
+    how an enum is laid out. A unit variant carries nothing and is still a value.
+    """
+
+    value: str
+    enum: str
+    variant: str
+    tag: int
+    args: tuple = ()
+    arg_types: tuple = ()
+
+
+@record()
+class Tag:
+    """`%v = tag %e` — which variant this value is, as an `i64`.
+
+    A tag is an `i64` rather than a `bool` or a `str` because that is what a `match`
+    compares it against: the checker numbered the variants, so the comparison is with
+    a constant and the backend never looks a name up.
+    """
+
+    value: str
+    operand: str
+    enum: str
+
+
+@record()
+class Payload:
+    """`%v = payload %e Shape::Rect[1] : i64` — one field a variant carries.
+
+    Positional, because that is how a pattern binds them: `Rect(w, h)` binds the
+    first field to `w` by position, and the position is the declaration's.
+    """
+
+    value: str
+    operand: str
+    enum: str
+    variant: str
+    index: int
+    typ: str
+
+
+@record()
 class Copy:
     """`%v = copy %a` — a block parameter receiving a value is exactly this."""
 
@@ -345,7 +392,20 @@ class Ret:
 
 
 #: The terminators: every block ends with exactly one of these.
-TERMINATORS = (Jump, Branch, Ret)
+@record()
+class Unreachable:
+    """`unreachable` — the program proved no path arrives here.
+
+    It is a terminator because a block that has one cannot fall through: every arm of
+    a `match`, or both halves of an `if`, ended in `return`, and the join they would
+    have met at is dead. The block still has to be *ended* rather than left open —
+    an open block is a backend asking itself what happens next, and the answer it
+    invents is the bug. The native backend traps, so a lowering bug that made this
+    reachable would say so instead of running on garbage.
+    """
+
+
+TERMINATORS = (Jump, Branch, Ret, Unreachable)
 
 
 @record()
@@ -415,6 +475,10 @@ class Module:
     #: order: `{"Point": (("x", "i64"), ("y", "i64"))}`. A layout is a fact about the
     #: program, not about the machine, so it is the module that states it.
     structs: dict = field(default_factory=dict)
+    #: Every enum type the program builds or matches, as its variants in declaration
+    #: order with the types they carry: `{"Shape": (("Dot", ()), ("Circle", ("i64",)))}`.
+    #: The position of a variant is its tag, so this is also the `match` table.
+    enums: dict = field(default_factory=dict)
 
     def function(self, name: str) -> Function | None:
         for item in self.functions:
@@ -430,6 +494,12 @@ def dump(module: Module) -> str:
         declared = ", ".join(f"{field}: {typ}" for field, typ in fields)
         lines.append(f"struct {name} {{{declared}}}")
     if module.structs:
+        lines.append("")
+    for name, variants in sorted(module.enums.items()):
+        declared = ", ".join(
+            f"{variant}({', '.join(types)})" for variant, types in variants)
+        lines.append(f"enum {name} {{{declared}}}")
+    if module.enums:
         lines.append("")
     for function in module.functions:
         params = ", ".join(f"{value}: {typ}" for value, typ in function.params)
@@ -472,6 +542,18 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
     if isinstance(instruction, TextCompare):
         return (f"%{instruction.value} = text cmp {instruction.op} "
                 f"%{instruction.left}, %{instruction.right}")
+    if isinstance(instruction, Variant):
+        arguments = ", ".join(f"%{name}" for name in instruction.args)
+        return (f"%{instruction.value} = variant {instruction.enum}::"
+                f"{instruction.variant}({arguments}) tag {instruction.tag}")
+    if isinstance(instruction, Tag):
+        return f"%{instruction.value} = tag %{instruction.operand} ({instruction.enum})"
+    if isinstance(instruction, Payload):
+        return (f"%{instruction.value} = payload %{instruction.operand} "
+                f"{instruction.enum}::{instruction.variant}[{instruction.index}] : "
+                f"{instruction.typ}")
+    if isinstance(instruction, Unreachable):
+        return "unreachable"
     if isinstance(instruction, Copy):
         return f"%{instruction.value} = copy %{instruction.operand}"
     if isinstance(instruction, Call):

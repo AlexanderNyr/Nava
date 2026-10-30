@@ -33,6 +33,7 @@ Four decisions worth stating:
 from __future__ import annotations
 
 from .cgen import c_string
+from .checker import mangle
 from .native import ir
 
 #: The C spelling of a scalar IR type. `void` is here for a function that returns
@@ -44,6 +45,11 @@ SCALAR_TYPES = {"i64": "int64_t", "bool": "bool", "f64": "double",
 #: path printed it. A type written with an argument — `Pair(i64)` — is a name the
 #: printer does not spell: `spellable()` says so and the AST path prints the module.
 STRUCT_PREFIX = "nv_struct_"
+#: The C name of an enum type is the checker's: `Shape` -> `nv_enum_Shape`, and an
+#: instantiation goes through the same mangle (`Result(i64, str)` ->
+#: `nv_enum_Result_i64_str`). One rule, imported rather than copied, so the printer
+#: and the checker cannot disagree about the name of a type.
+ENUM_PREFIX = "nv_enum_"
 #: The element names the C runtime knows: `nv_arr_<element>_*`, one set per type.
 ELEMENT_NAMES = {"i64": "int64_t", "bool": "bool", "str": "const char *"}
 #: Checked arithmetic is the runtime's, so overflow traps where the C backend has
@@ -78,7 +84,8 @@ SUPPORTED = (
     ir.Const, ir.Str, ir.Bin, ir.Neg, ir.Not, ir.Cmp, ir.TextCompare, ir.Copy, ir.Call,
     ir.Print, ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore,
     ir.Length, ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field,
-    ir.FieldStore, ir.Builtin, ir.Jump, ir.Branch, ir.Ret,
+    ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Jump, ir.Branch,
+    ir.Ret, ir.Unreachable,
 )
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
@@ -94,7 +101,8 @@ def element_of(typ: str) -> str | None:
     return None
 
 
-def c_type(typ: str, structs: dict | None = None) -> str:
+def c_type(typ: str, structs: dict | None = None,
+           enums: dict | None = None) -> str:
     """The C type of an IR value, or a KeyError naming the type nobody can spell."""
     if typ in SCALAR_TYPES:
         return SCALAR_TYPES[typ]
@@ -103,6 +111,8 @@ def c_type(typ: str, structs: dict | None = None) -> str:
         return f"nv_arr_{element}"
     if is_struct(typ, structs):
         return STRUCT_PREFIX + typ
+    if enums is not None and typ in enums:
+        return ENUM_PREFIX + mangle(typ)
     raise KeyError(typ)
 
 
@@ -115,10 +125,11 @@ def is_struct(typ: str, structs: dict | None = None) -> bool:
     return structs is not None and typ in structs and typ.isidentifier()
 
 
-def spellable(typ: str, structs: dict | None = None) -> bool:
+def spellable(typ: str, structs: dict | None = None,
+              enums: dict | None = None) -> bool:
     """Whether `c_type` can name this type."""
     return (typ in SCALAR_TYPES or element_of(typ) is not None
-            or is_struct(typ, structs))
+            or is_struct(typ, structs) or (enums is not None and typ in enums))
 
 
 def variable(value: str) -> str:
@@ -177,39 +188,50 @@ def value_types(function: ir.Function) -> dict[str, str]:
             elif isinstance(instruction, ir.Call):
                 if instruction.returns != "void":
                     types[instruction.value] = instruction.returns
+            elif isinstance(instruction, ir.Variant):
+                # The type of a variant value is the enum it belongs to, written the
+                # way the program writes it (`Shape`, `Result(i64, str)`).
+                types[instruction.value] = instruction.enum
             elif isinstance(instruction, (ir.ArrayLiteral, ir.ArrayZeros, ir.Index,
-                                          ir.SlotLoad, ir.StructNew, ir.Field)):
+                                          ir.SlotLoad, ir.StructNew, ir.Field,
+                                          ir.Payload)):
                 types[instruction.value] = instruction.typ
+            elif isinstance(instruction, ir.Tag):
+                # A tag is an `i64`: the checker numbered the variants, and a `match`
+                # compares that number.
+                types[instruction.value] = "i64"
     return types
 
 
 def supports(module: ir.Module) -> bool:
     """Whether this printer can print the whole module, and print it correctly."""
     structs = module.structs
+    enums = module.enums
     for function in module.functions:
-        if not spellable(function.returns, structs):
+        if not spellable(function.returns, structs, enums):
             return False
         for _name, typ in function.params:
-            if not spellable(typ, structs):
+            if not spellable(typ, structs, enums):
                 return False
         for cell in function.slots:
-            if not spellable(cell.typ, structs):
+            if not spellable(cell.typ, structs, enums):
                 return False
         types = value_types(function)
         for typ in types.values():
-            if not spellable(typ, structs):
+            if not spellable(typ, structs, enums):
                 return False
         for block in function.blocks:
             for instruction in block.instructions:
                 if not isinstance(instruction, SUPPORTED):
                     return False
-                if not instruction_supported(instruction, types, structs):
+                if not instruction_supported(instruction, types, structs, enums):
                     return False
     return True
 
 
 def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
-                          structs: dict | None = None) -> bool:
+                          structs: dict | None = None,
+                          enums: dict | None = None) -> bool:
     """The per-instruction half of `supports()`: types this printer must not guess."""
     if isinstance(instruction, ir.Cmp):
         # Two `str` values compare by pointer in C, so a comparison of strings is never
@@ -234,10 +256,14 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
         return instruction.typ in ELEMENT_NAMES
     if isinstance(instruction, ir.Release):
         return element_of(instruction.typ) is not None
+    if isinstance(instruction, (ir.Variant, ir.Tag, ir.Payload)):
+        # The enum has to be in the module's table: a tag compared against a number
+        # nobody declared is how a `match` silently picks the wrong arm.
+        return enums is not None and instruction.enum in enums
     if isinstance(instruction, ir.Call):
         # A call answers whatever its callee returns, including a struct: the C type of
         # the value is the callee's return type, and both are spelled the same way.
-        return spellable(instruction.returns, structs)
+        return spellable(instruction.returns, structs, enums)
     return True
 
 
@@ -260,6 +286,7 @@ class Printer:
         blocks = sum(len(function.blocks) for function in self.module.functions)
         lines = [f"/* A lowering of the shared IR: {len(self.module.functions)} "
                  f"function(s), {blocks} block(s). */", ""]
+        lines.extend(self.enum_declarations())
         lines.extend(self.struct_declarations())
         for function in self.module.functions:
             lines.append(self.signature(function) + ";")
@@ -304,8 +331,36 @@ class Printer:
             lines.append("")
         return lines
 
+    def enum_declarations(self) -> list[str]:
+        """The `typedef` of every enum the module lays out, in declaration order.
+
+        A tag and a union of payload structs, which is the shape the AST path emits and
+        the shape a `switch` on the tag reads. The tag is the variant's position, so
+        the printer never has to name a variant to compare it. A unit-only enum still
+        needs one byte: C has no empty struct, and a union needs a member.
+        """
+        lines: list[str] = []
+        for typ, variants in self.module.enums.items():
+            name = ENUM_PREFIX + mangle(typ)
+            payloads = [(variant, types) for variant, types in variants if types]
+            if not payloads:
+                lines.append(f"typedef struct {name} {{ int32_t _tag; }} {name};")
+                continue
+            lines.append(f"typedef struct {name} {{")
+            lines.append("    int32_t _tag;")
+            lines.append("    union {")
+            for variant, types in payloads:
+                fields = " ".join(f"{self.c_type(payload_type)} _f{index};"
+                                  for index, payload_type in enumerate(types))
+                lines.append(f"        struct {{ {fields} }} _v_{variant};")
+            lines.append("    } _payload;")
+            lines.append(f"}} {name};")
+        if lines:
+            lines.append("")
+        return lines
+
     def c_type(self, typ: str) -> str:
-        return c_type(typ, self.module.structs)
+        return c_type(typ, self.module.structs, self.module.enums)
 
     def signature(self, function: ir.Function) -> str:
         params = ", ".join(f"{self.c_type(typ)} {variable(name)}"
@@ -354,6 +409,20 @@ class Printer:
                 lines.extend(self.instruction_lines(instruction, function, types))
         lines.append("}")
         return lines
+
+    def variant_literal(self, instruction: ir.Variant) -> str:
+        """`Shape::Circle(2)` as a C compound literal with the tag and the payload set.
+
+        One literal for the whole value, so a variant cannot exist half-built: the tag
+        and the fields it describes are written together, which is what makes a `match`
+        on a value that came through a parameter safe.
+        """
+        name = ENUM_PREFIX + mangle(instruction.enum)
+        arguments = ", ".join(variable(argument) for argument in instruction.args)
+        payload = (f" ._payload = {{ ._v_{instruction.variant} = "
+                   f"{{ {', '.join(f'._f{index} = {variable(argument)}' for index, argument in enumerate(instruction.args))} }} }},"
+                   if instruction.args else "")
+        return f"({name}){{ ._tag = {instruction.tag},{payload} }}"
 
     def block_label(self, function: ir.Function, label: str) -> str:
         """A block label qualified by its function: two functions may both say `entry`."""
@@ -477,6 +546,23 @@ class Printer:
                 function, instruction.else_target, instruction.else_args)]
             lines.append(f"        goto {self.block_label(function, instruction.else_target)};")
             lines.append("    }")
+            return lines
+        if isinstance(instruction, ir.Variant):
+            return [f"    {variable(instruction.value)} = "
+                    f"{self.variant_literal(instruction)};"]
+        if isinstance(instruction, ir.Tag):
+            return [f"    {variable(instruction.value)} = "
+                    f"{variable(instruction.operand)}._tag;"]
+        if isinstance(instruction, ir.Payload):
+            return [f"    {variable(instruction.value)} = "
+                    f"{variable(instruction.operand)}._payload._v_"
+                    f"{instruction.variant}._f{instruction.index};"]
+        if isinstance(instruction, ir.Unreachable):
+            lines = ['    nv_unreachable();']
+            if function.returns != "void":
+                # C wants a path out of a non-void function even when the code is
+                # dead; a zero compound literal is the value nobody will read.
+                lines.append(f"    return ({self.c_type(function.returns)}){{0}};")
             return lines
         if isinstance(instruction, ir.Ret):
             if instruction.operand is None:
