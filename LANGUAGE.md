@@ -1496,6 +1496,20 @@ position in the declaration. A payload may be a number, a `bool`, a string or an
 payload of struct type is refused by name, because a struct inside a record is a copy and
 that copy is not in this backend yet.
 
+A `defer` block runs when the block that registered it is left — on the normal path, on
+`return`, and on a `break`/`continue` that leaves it — last registered first, and before
+the block gives its arrays back, so a deferred block may still use them. A deferred body
+that *assigns* is refused by name on this backend: its assignment would land after the
+values it changed had already been carried out of the scope.
+
+`let x = f()?` forwards the failure variant of an `Option(T)` or a `Result(T, E)`: the
+tag is tested, the failure value is returned from the enclosing function, and the success
+payload is bound to `x`. The early return leaves its scopes first, so the `defer` bodies
+it passes run and its arrays are given back. A `?` whose callee answers a *different*
+instantiation of the same enum — `Result(bool, str)` inside a function returning
+`Result(i64, str)` — is refused by name here, because the two records are laid out
+differently even though their failure payloads match.
+
 A `match` with an arm for every variant needs no wildcard, and one with a `_` arm tests
 nothing for it. An `if` or a `match` whose every path returns leaves the block after it
 unreachable, which the representation states rather than leaving to a backend to guess.
@@ -1507,9 +1521,9 @@ runtime routines, as are the number conversions `to_i64` and `to_f64` and the re
 `read_i64` — with the C runtime's four ways of refusing a number it cannot read, word
 for word and status for status.
 
-Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, the `?` operator,
-`defer`, a call through a function value, a generic function, arrays of structs, an enum
-payload of struct type, a struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
+Everything else — slices, `Vec`, `String`, `HashMap`, `HashSet`, a call through a
+function value, a generic function, arrays of structs, an enum payload of struct type, a
+struct field that owns storage (`String`, `Vec`, a map, a set, an array), and the
 builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem and
 argument functions) — is refused with `E0901`, **naming the construct and the
 function**. A
@@ -1555,8 +1569,8 @@ runtime helper (`nv_arr_i64_get`, `nv_arr_i64_set`, `nv_arr_i64_free`), so owner
 bounds checks do not depend on how the program reached the backend.
 
 The rest of the language is still printed by the AST walk: slices, `String`, `Vec`,
-`HashMap`, `HashSet`, `defer`, `?`, generics, the builtins the runtime does not have, and
-`print` of an `f64` (`nv_print_f64` is the AST path's) are not
+`HashMap`, `HashSet`, generics, the builtins the runtime does not have, and `print` of an
+`f64` (`nv_print_f64` is the AST path's) are not
 printable
 from the representation yet, and a program using them is printed the old way. A float
 sum, a text comparison and the eight builtins above are printable: an `f64` sum is `+`
@@ -1626,6 +1640,13 @@ sharing a record instead would make `let s = Segment(from: origin, ...)` let a w
 through `s.from.x` be visible in `origin`. Strings inside a struct are pointers to the
 program's literals and are shared, which is sound because a string is never written
 through.
+
+**How cleanup meets the machine.** A `defer` body is copied to each exit rather than run
+from a table, and the copy is lowered where it runs: that is why it reads the values its
+scope holds at that moment, and why the two backends agree about a loop. On the native
+backend nothing reclaims memory, so a `defer` that releases storage is a no-op there and a
+`free` in C — the IR still states it, because which of the two happens is the backend's
+question and not the program's.
 
 **How an enum meets the machine.** A variant value is one record from the same arena: the
 first word is the tag — the variant's position in the declaration — and the words after it

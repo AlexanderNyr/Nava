@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+N14h: **cleanup and early return through one IR** — `defer` and `?`, and the two
+fixtures that needed them.
+
+- A `defer` body is *lowered at every exit*, not where it is written: at the end of the
+  block that registered it, on `return`, and on a `break`/`continue` that leaves it — and
+  before the block gives its arrays back, so a deferred block may still use them. That is
+  why `defer { print(100 + i) }` in a loop prints the value `i` has when the iteration
+  ends, on both backends, and it is what makes the fixture's order `-1 1 1 0 101 1 102`.
+- `let x = f()?` is a tag test, an early `return` of the failure value, and one payload
+  read on the success path: `Option` and `Result` both, with the failure variant the
+  checker numbered last. The early return leaves its scopes first, so the `defer` bodies
+  it passes run and the arrays it owned are given back.
+- Two refusals closed, two narrowed and named: `defer` and `?` compile natively now; a
+  `defer` whose body *assigns* is refused by name (its assignment would land after the
+  scope was carried out), and so is a `?` that would forward `Result(bool, str)` into a
+  function returning `Result(i64, str)` (the two instantiations are different records).
+- Three fixtures left the AST walk — `defer_labels`, `results_basic`, `results_chain` —
+  so **26 of 32** now build and run identically through both backends, and the set the C
+  backend prints from the IR is the same 26.
+
 N14g: **enums and `match` through one IR** — a tag in a record, and a pattern that
 compares it with a constant.
 

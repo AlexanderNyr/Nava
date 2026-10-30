@@ -36,10 +36,10 @@ from __future__ import annotations
 
 from ..diagnostics import make
 from ..model import (
-    ArrayLiteral, Arm, Assign, Binary, Boolean, Break, Call, Continue, EnumDecl, ExprStmt,
-    Float, For, Function, If, Index, IndexAssign, Let, Match, Member, MemberAssign,
-    Number, Program, Range, Return, String, StructLiteral, Unary, Variable, Variant,
-    VariantValue, While,
+    ArrayLiteral, Arm, Assign, Binary, Boolean, Break, Call, Continue, Defer, EnumDecl,
+    ExprStmt, Float, For, Function, If, Index, IndexAssign, Let, Match, Member,
+    MemberAssign, Number, Program, Range, Return, String, StructLiteral, Try, Unary,
+    Variable, Variant, VariantValue, While,
 )
 from ..checker import BUILTINS
 from . import ir
@@ -171,6 +171,11 @@ def assigned_names(body) -> set[str]:
         elif isinstance(statement, For):
             names |= assigned_names(statement.body)
             names.add(statement.name)
+        elif isinstance(statement, Defer):
+            # A `defer` assigns nothing the loop carries: its body runs where the block
+            # is left. Whether it *may* assign is decided where it is lowered, so that
+            # the refusal is the same inside a loop as outside one.
+            continue
         elif isinstance(statement, Match):
             # An arm assigns through the same join as an `if` half, so a `match` inside
             # a loop body contributes the names its arms assign to the loop's frame.
@@ -273,6 +278,11 @@ class Builder:
         #: Arrays built inside one statement: nobody binds them, so the statement
         #: gives them back when it ends.
         self.temporaries: list[tuple[str, str]] = []
+        #: One entry per enclosing block, innermost last: the `defer` bodies that block
+        #: registered, in the order it registered them. They are *bodies*, not
+        #: instructions: a deferred block reads the values its scope holds when it
+        #: runs, so it is lowered at every exit rather than once where it is written.
+        self.defers: list[list[list]] = []
 
     def emit(self, block: ir.Block, instruction) -> None:
         """Append one instruction and the line it came from, in one call.
@@ -525,22 +535,45 @@ class Builder:
         path that fell out of the block.
         """
         self.frames.append([])
+        self.defers.append([])
         try:
             tail = self.statements(statements, block, env)
             if tail.terminator is None:
+                tail = self.run_defers(tail, len(self.frames) - 1, env)
                 self.release_frame(tail, len(self.frames) - 1)
         finally:
             self.frames.pop()
+            self.defers.pop()
         return tail
+
+    def run_defers(self, block: ir.Block, index: int, env: dict) -> ir.Block:
+        """Lower one frame's `defer` bodies where the block is left, last first.
+
+        A deferred block is lowered *at the exit point*, not where it is written, which
+        is why `defer { print(i) }` in a loop prints the value `i` has when the iteration
+        ends. Each exit path gets its own copy — the same thing C does — and the copies
+        run before the frame releases the arrays it owns, so a deferred block can still
+        use them.
+        """
+        for body in reversed(self.defers[index]):
+            block = self.body(body, block, dict(env))
+        return block
 
     def release_frame(self, block: ir.Block, index: int) -> None:
         """Emit `release` for one frame, last declared first."""
         for value, typ in reversed(self.frames[index]):
             self.emit(block, ir.Release(typ, value))
 
-    def leave(self, block: ir.Block, down_to: int) -> None:
-        """Leave every block from the innermost down to `down_to`, inclusive."""
+    def leave(self, block: ir.Block, down_to: int, env: dict | None = None) -> None:
+        """Leave every block from the innermost down to `down_to`, inclusive.
+
+        A block is left in the language's order: its `defer` bodies, last registered
+        first, and then the storage it owns — so a deferred block still has the arrays
+        its scope declared.
+        """
         for index in range(len(self.frames) - 1, down_to - 1, -1):
+            if env is not None:
+                block = self.run_defers(block, index, env)
             self.release_frame(block, index)
 
     def release_temporaries(self, block: ir.Block) -> ir.Block:
@@ -678,6 +711,19 @@ class Builder:
     def statement(self, statement, block: ir.Block, env: dict) -> ir.Block:
         if getattr(statement, "loc", None) is not None:
             self.loc = statement.loc
+        if isinstance(statement, Defer):
+            # A deferred body runs where the block is left, so an assignment inside it
+            # would land after the values it changed had already been carried out of the
+            # scope. The C backend accepts one; refusing it here is honest, and the
+            # refusal names it.
+            if assigned_names(statement.body):
+                raise Refused("a 'defer' whose body assigns a variable", statement.loc)
+            # Kept, not emitted: the frame that registered it runs it on every path
+            # out of this block, which is why nothing is emitted here.
+            self.defers[-1].append(statement.body)
+            return block
+        if isinstance(statement, Let) and isinstance(statement.value, Try):
+            return self.propagate_let(statement, block, env)
         if isinstance(statement, Let):
             declared = getattr(statement.symbol, "typ", None)
             if is_array(declared) and not getattr(statement.symbol, "borrowed", False):
@@ -777,18 +823,18 @@ class Builder:
             return self.match_statement(statement, block, env)
         if isinstance(statement, Return):
             if statement.value is None:
-                self.leave(block, 0)
+                self.leave(block, 0, env)
                 self.emit(block, ir.Ret(None))
                 return block
             value, _typ, block = self.expression(statement.value, block, env)
             # The value is computed before the blocks are left, because a release
             # may free the array it was read from.
-            self.leave(block, 0)
+            self.leave(block, 0, env)
             self.emit(block, ir.Ret(value))
             return block
         if isinstance(statement, Break):
             loop = self.find_loop(statement.label, statement.loc)
-            self.leave(block, loop.frame)
+            self.leave(block, loop.frame, env)
             self.emit(block,
                 ir.Jump(loop.exit_label, [env[name][0] for name in loop.names]))
             return block
@@ -796,7 +842,7 @@ class Builder:
             loop = self.find_loop(statement.label, statement.loc)
             if loop.back_edge is None:
                 raise Refused("a continue in a loop without a next entry", statement.loc)
-            self.leave(block, loop.frame)
+            self.leave(block, loop.frame, env)
             return loop.back_edge(self, block, env)
         raise Refused(describe(statement), getattr(statement, "loc", None))
 
@@ -808,6 +854,49 @@ class Builder:
         if label not in self.labels:
             raise Refused(f"the label '{label}'", loc)
         return self.labels[label]
+
+    def propagate_let(self, statement: Let, block: ir.Block, env: dict) -> ir.Block:
+        """`let x = f()?`: test the failure tag, leave the function, bind the payload.
+
+        The checker has already proved that the callee answers an `Option`/`Result`
+        whose *failure* type is the one this function returns, so the failure path is a
+        `return` of the value itself. The success path is one payload read: the first
+        variant's first field. Both are stated in the IR, so both backends answer the
+        same question the same way — and the failure path leaves its scopes first, which
+        is what runs the `defer` bodies and gives back the arrays.
+        """
+        node: Try = statement.value
+        value, typ, block = self.expression(node.inner, block, env)
+        variants = self.enum_layout(typ, statement.loc)
+        if len(variants) < 2:
+            raise Refused(f"a '?' on '{typ}', which has no failure variant", statement.loc)
+        returns = self.function.returns
+        if typ != returns:
+            raise Refused(
+                f"a '?' that forwards {typ} into a function returning {returns}: the "
+                f"two instantiations are different records", statement.loc)
+        success_name, success_types = variants[0]
+        if not success_types:
+            raise Refused(f"a '?' on '{typ}', whose success variant carries nothing",
+                          statement.loc)
+        ok_block = self.block("try_ok")
+        fail_block = self.block("try_fail")
+        tag = self.value()
+        self.emit(block, ir.Tag(tag, value, typ))
+        constant = self.value()
+        self.emit(block, ir.Const(constant, "i64", len(variants) - 1))
+        condition = self.value()
+        self.emit(block, ir.Cmp(condition, "eq", tag, constant, "i64"))
+        self.emit(block, ir.Branch(condition, fail_block.label, [], ok_block.label, []))
+        # The failure is forwarded as it is: the checker proved the payload types match,
+        # and an enum's record is its tag and its payload words whichever instance it is.
+        self.leave(fail_block, 0, env)
+        self.emit(fail_block, ir.Ret(value))
+        payload_type = success_types[0]
+        payload = self.value()
+        self.emit(ok_block, ir.Payload(payload, value, typ, success_name, 0, payload_type))
+        env[statement.name] = (payload, payload_type)
+        return ok_block
 
     def if_statement(self, statement: If, block: ir.Block, env: dict) -> ir.Block:
         names = [name for name in sorted(

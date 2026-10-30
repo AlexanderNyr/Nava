@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14g delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, and enums with `match` are compiled natively, while printing an `f64`, the collections, slices, `defer`, `?` and the remaining builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14h delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic and comparison, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?` are compiled natively, while printing an `f64`, the collections, slices, arrays of structs and the remaining builtins are still refused by name, and the AST walk is still what prints them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1360,6 +1360,7 @@ the differential records.
 | N14b | **Whole programs**: symbols, relocations, sections, a static linker for multi-file programs, line tables for diagnostics and traces, our own `readelf`-equivalent, and `nava run --backend native` | **Delivered** (record below) |
 | N14c | **An array is a value of the IR**: literals, `array_zeros`, a checked read, a checked write, `len` and `release`, with ownership decided by the lowering; an `mmap` arena on the native side and the C runtime's three array traps, word for word | **Delivered** (record below) |
 | N14d | **One IR, two backends**: `cgen.py` reads the shared IR instead of walking the AST, for everything the IR can express | **Delivered** (record below) |
+| N14h | **Cleanup and early return through one IR**: `defer` lowered at every exit of the block that registered it, `?` as a tag test with an early return of the failure value and one payload read, both fixture families closed, and the two shapes this backend cannot hold refused by name | **Delivered** (record below) |
 | N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
@@ -1725,6 +1726,49 @@ an `f64` works (it does not, and it is now its own increment: the shortest round
 decimal form needs exact decimal arithmetic, which is a conversion this backend does not
 have); or anything about speed — no benchmark was run.
 
+#### Delivery record N14h (2026-10-30)
+
+**Cleanup and early return through one IR — `defer` and `?`.** Both are about leaving a
+scope, which is why they are one increment: a `defer` body runs where the block is left,
+and `?` is an early `return`, so `?` is the thing that makes a deferred body run in the
+middle of a statement list.
+
+The design decision worth stating: a deferred body is **lowered at every exit**, not once
+where it is written and not through a runtime table of thunks. That is what makes
+`defer { print(100 + i) }` print the value `i` has when the iteration ends, which is what
+the C backend prints, and it costs code size for correctness that can be checked.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A `defer` runs where its block is left, last registered first | `NativeDeferTests.test_a_defer_runs_on_the_fall_through_path_last_registered_first` | `1 4 3 2` on both backends |
+| It runs **before** the block gives its arrays back | `test_a_defer_runs_before_the_arrays_of_its_scope_are_given_back` | a deferred `print(len(a))` still sees `a`; `555 -3 3 8 -3 3 0` on both, with the inner block's defer first |
+| It sees the values of the iteration that ends | `test_a_defer_in_a_loop_sees_the_values_of_the_iteration_that_ends` | the fixture's own order `-1 1 1 0 101 1 102`: `101` is `100 + i` **after** `i = i + 1` |
+| `?` forwards the failure and binds the payload | `NativeTryTests.test_propagation_agrees_with_the_c_backend`, `test_an_option_propagates_too` | three `Result` cases (`3 4 0`) and both `Option` cases (`10 -1`) identical on stdout, stderr and status |
+| The early return runs the defers it leaves | `test_the_failure_path_runs_the_defers_it_leaves` | a `?` inside a loop inside a function with two defers: `0 1 2 2 1000 big` — the failure leaves both defers behind it, in reverse order, and the error travels out |
+| The IR states it | `test_the_ir_states_the_early_return_and_the_payload_read` | `= tag %`, `= payload %`, the failure tag as `const i64 1`, and the early `ret %` |
+| What this backend cannot hold, it names | `NativeRefusalTests` | a `defer` whose body assigns is `E0901` naming it; a `?` that would forward `Result(bool, str)` into `Result(i64, str)` is `E0901` naming both types; the C backend builds both files |
+| The corpus grows | the fixture sweep | **26 of 32** fixtures build and run identically through both backends (23 at N14g — `defer_labels`, `results_basic` and `results_chain` joined), **0 differ**, 6 refused by name; the C-from-IR set is the same 26 |
+
+Two things went wrong. **`assigned_names` did not know `defer`**, so a deferred block
+inside a loop made the loop's frame computation raise "the native backend does not
+implement a defer" — a refusal that named the wrong thing, because the defer *was*
+implemented and the walk had not been taught about it. And the first version of the
+"a deferred body cannot assign" rule lived in that walk, which meant it only fired when
+the defer sat inside a loop or an `if`; the check belongs where the body is lowered, and
+it moved there.
+
+The audit is re-measured: **18 743 lines, 27 modules, 678 functions** (18 654 / 27 / 676
+at N14g). The suite is **1 044 tests, 1 634 subtests**, `tests/registry.py` reports 974
+registered tests with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic
+codes, and the overhead record is re-measured: **108 832 tokens**, unchanged.
+
+What this increment does **not** claim: that the AST walk is gone — 6 of the 32 fixtures
+still need it (`slices_basic`, `struct_arrays`, `map_basics`, `set_basics`, `self_test`,
+`floats`); that a deferred body may assign (refused by name); that a `?` may forward
+between instantiations (refused by name); that a `defer` on this backend releases
+anything (the arena does not give memory back, so `release` is still nothing here); or
+anything about speed — every deferred body is a copy, and no benchmark was run.
+
 ---
 
 ### Phase N15 — Self-hosting and bootstrap
@@ -1877,7 +1921,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 18 654 lines and 676 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 18 743 lines and 678 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

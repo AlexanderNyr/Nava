@@ -1296,6 +1296,22 @@ REGISTERED_TESTS = {
     #: comparison against the variant's position, so the layout is the module's fact
     #: and the arm is a constant. The last class pins the `unreachable` terminator that
     #: lets a function whose every path returns lower at all.
+    #: N14h: cleanup and early return. A `defer` body is lowered at every exit, so it
+    #: sees the values its scope holds then; `?` forwards the failure variant after the
+    #: scopes it leaves have run theirs. Both classes assert against the C backend, and
+    #: the two refusals they close are gone from `NativeRefusalTests`.
+    "NativeDeferTests": {
+        "test_a_defer_in_a_loop_sees_the_values_of_the_iteration_that_ends",
+        "test_a_defer_runs_before_the_arrays_of_its_scope_are_given_back",
+        "test_a_defer_runs_on_the_fall_through_path_last_registered_first",
+        "test_a_defer_whose_body_assigns_is_refused_by_name",
+    },
+    "NativeTryTests": {
+        "test_an_option_propagates_too",
+        "test_propagation_agrees_with_the_c_backend",
+        "test_the_failure_path_runs_the_defers_it_leaves",
+        "test_the_ir_states_the_early_return_and_the_payload_read",
+    },
     "NativeEnumTests": {
         "test_a_match_inside_a_loop_reads_the_value_it_was_given_each_time",
         "test_a_match_through_a_parameter_sees_the_tag_it_was_given",
@@ -1681,6 +1697,8 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeInputTestsOrdering"),
                                (test_native, "NativeEnumTests"),
                                (test_native, "NativeReturnPathTests"),
+                               (test_native, "NativeDeferTests"),
+                               (test_native, "NativeTryTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),

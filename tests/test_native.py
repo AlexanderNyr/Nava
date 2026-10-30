@@ -247,6 +247,11 @@ TRAPS = {
 }
 
 
+def fixture_text(name: str) -> str:
+    """The source of one positive fixture, by name."""
+    return (ROOT / "tests" / "fixtures" / "positive" / f"{name}.nv").read_text(encoding="utf-8")
+
+
 def write_source(directory: pathlib.Path, name: str, source: str) -> pathlib.Path:
     path = directory / f"{name}.nv"
     path.write_text(source, encoding="utf-8")
@@ -564,13 +569,34 @@ fn main() -> i64 {
     return 0
 }
 """,
-        "a defer": """\
+        "a 'defer' whose body assigns a variable": """\
 edition 2;
 fn main() -> i64 {
+    let n = 0
     defer {
-        print(1)
+        n = 1
     }
+    print(n)
     return 0
+}
+""",
+        "a '?' that forwards Result(bool, str) into a function returning Result(i64, str)": """\
+edition 2;
+fn small() -> Result(bool, str) {
+    return Result(bool, str)::Ok(true)
+}
+
+fn outer() -> Result(i64, str) {
+    let flag = small()?
+    print(flag)
+    return Result(i64, str)::Ok(1)
+}
+
+fn main() {
+    match outer() {
+        Result(i64, str)::Ok(v) => { print(v) }
+        Result(i64, str)::Err(e) => { print(e) }
+    }
 }
 """,
         "a payload of type Point in 'Holder::Full'": """\
@@ -2185,3 +2211,262 @@ fn main() {
             self.assertEqual(run([str(c_binary)]).stdout,
                              run([str(native_binary)]).stdout)
             self.assertEqual(run([str(native_binary)]).stdout, "1\n0\n")
+
+
+class NativeDeferTests(unittest.TestCase):
+    """`defer` runs where the block is left, last registered first.
+
+    A deferred body is lowered at each exit rather than where it is written, so it sees
+    the values its scope holds when it runs — which is what the C backend's deferred
+    block does, and the reason the two agree about `defer { print(i) }` in a loop.
+    """
+
+    def test_a_defer_runs_on_the_fall_through_path_last_registered_first(self):
+        source = """\
+edition 2;
+
+fn main() {
+    print(1)
+    defer { print(2) }
+    defer { print(3) }
+    print(4)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "fall", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout, "1\n4\n3\n2\n")
+
+    def test_a_defer_runs_before_the_arrays_of_its_scope_are_given_back(self):
+        """A deferred block may still use what its scope owns: it runs first."""
+        source = """\
+edition 2;
+
+fn probe(n: i64) -> i64 {
+    let a: [i64] = [7, 8, 9]
+    defer { print(len(a)) }
+    defer { print(0 - len(a)) }
+    if n > 0 {
+        defer { print(555) }
+        return a[0] + n
+    }
+    return 0
+}
+
+fn main() {
+    print(probe(1))
+    print(probe(0 - 1))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "arrays", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # The inner `if` block's defer, then the two of the function body, then the
+        # returned value; the second call skips the inner block and answers 0.
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["555", "-3", "3", "8", "-3", "3", "0"])
+
+    def test_a_defer_in_a_loop_sees_the_values_of_the_iteration_that_ends(self):
+        """The fixture's `defer { print(100 + i) }` prints the *incremented* `i`."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "loop",
+                                fixture_text("defer_labels"))
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["-1", "1", "1", "0", "101", "1", "102"])
+
+    def test_a_defer_whose_body_assigns_is_refused_by_name(self):
+        source = """\
+edition 2;
+
+fn main() {
+    let n = 0
+    defer { n = 1 }
+    print(n)
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "assign", source)
+            native = run([*NAVA, "run", str(path), "--backend", "native"])
+            c_build = run([*NAVA, "build", str(path), "-o", str(directory / "c")])
+        self.assertEqual(native.returncode, 2)
+        self.assertIn("E0901", native.stderr)
+        self.assertIn("a 'defer' whose body assigns a variable", native.stderr)
+        self.assertEqual(c_build.returncode, 0)
+
+
+class NativeTryTests(unittest.TestCase):
+    """`?` forwards the failure variant, and leaves the function the honest way.
+
+    The failure path is a `return` of the value itself, after the scopes it leaves have
+    run their `defer` bodies and given back their arrays — so a function with a `?` and
+    a `defer` does both, in the language's order.
+    """
+
+    def test_propagation_agrees_with_the_c_backend(self):
+        source = """\
+edition 2;
+
+fn small(n: i64) -> Result(i64, str) {
+    if n > 2 { return Result(i64, str)::Err("big") }
+    return Result(i64, str)::Ok(n)
+}
+
+fn total(a: i64, b: i64) -> Result(i64, str) {
+    let x = small(a)?
+    let y = small(b)?
+    return Result(i64, str)::Ok(x + y)
+}
+
+fn report(r: Result(i64, str)) -> i64 {
+    match r {
+        Result(i64, str)::Ok(v) => { return v }
+        Result(i64, str)::Err(e) => { return 0 - 1 }
+    }
+}
+
+fn main() {
+    print(report(total(1, 2)))
+    print(report(total(2, 2)))
+    print(report(total(1, 0 - 1)))
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "prop", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # `small(1) + small(2)` is 3, `small(2) + small(2)` is 4 and the third call
+        # propagates a failure; the report of a failure is -1 and not the sum.
+        self.assertEqual(native_out.stdout.splitlines(), ["3", "4", "0"])
+
+    def test_the_failure_path_runs_the_defers_it_leaves(self):
+        source = """\
+edition 2;
+
+fn inner(n: i64) -> Result(i64, str) {
+    if n > 2 { return Result(i64, str)::Err("big") }
+    return Result(i64, str)::Ok(n)
+}
+
+fn outer(n: i64) -> Result(i64, str) {
+    defer { print(1000) }
+    let a: [i64] = [1, 2]
+    defer { print(len(a)) }
+    let i = 0
+    while i < n {
+        let v = inner(i)?
+        print(v)
+        i = i + 1
+    }
+    return Result(i64, str)::Ok(42)
+}
+
+fn main() {
+    match outer(5) {
+        Result(i64, str)::Ok(v) => { print(v) }
+        Result(i64, str)::Err(e) => { print(e) }
+    }
+    match outer(2) {
+        Result(i64, str)::Ok(v) => { print(v) }
+        Result(i64, str)::Err(e) => { print(e) }
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "defers", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual((c_out.stdout, c_out.stderr, c_out.returncode),
+                         (native_out.stdout, native_out.stderr, native_out.returncode))
+        # The failure leaves both defers behind it, in reverse order, and the error
+        # travels out; the second call never fails and returns 42 after the same two.
+        self.assertEqual(native_out.stdout.splitlines(),
+                         ["0", "1", "2", "2", "1000", "big",
+                          "0", "1", "2", "1000", "42"])
+
+    def test_an_option_propagates_too(self):
+        source = """\
+edition 2;
+
+fn found(n: i64) -> Option(i64) {
+    if n > 0 { return Option(i64)::Some(n) }
+    return Option(i64)::None
+}
+
+fn twice(n: i64) -> Option(i64) {
+    let value = found(n)?
+    return Option(i64)::Some(value * 2)
+}
+
+fn main() {
+    match twice(5) {
+        Option(i64)::Some(v) => { print(v) }
+        Option(i64)::None => { print(0 - 1) }
+    }
+    match twice(0) {
+        Option(i64)::Some(v) => { print(v) }
+        Option(i64)::None => { print(0 - 1) }
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "option", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run([str(c_binary)])
+            native_out = run([str(native_binary)])
+        self.assertEqual(c_out.stdout, native_out.stdout)
+        self.assertEqual(native_out.stdout.splitlines(), ["10", "-1"])
+
+    def test_the_ir_states_the_early_return_and_the_payload_read(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = """\
+edition 2;
+
+fn small(n: i64) -> Result(i64, str) {
+    if n > 2 { return Result(i64, str)::Err("big") }
+    return Result(i64, str)::Ok(n)
+}
+
+fn total(n: i64) -> Result(i64, str) {
+    let x = small(n)?
+    return Result(i64, str)::Ok(x)
+}
+
+fn main() {
+    match total(5) {
+        Result(i64, str)::Ok(v) => { print(v) }
+        Result(i64, str)::Err(e) => { print(e) }
+    }
+}
+"""
+            path = write_source(pathlib.Path(temp), "ir", source)
+            result = run([*NAVA, "emit-ir", str(path)])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = result.stdout
+        self.assertIn("= tag %", text)
+        self.assertIn("= payload %", text)
+        # The failure variant is the last one the checker numbered, so the tag it is
+        # compared with is a constant in the IR.
+        self.assertIn("= const i64 1", text)
+        self.assertIn("ret %", text)

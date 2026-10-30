@@ -42,17 +42,18 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "functions", "hello", "exit_code", "runtime_div_zero",
                  "runtime_overflow", "structs_basic", "structs_copy", "strings",
                  "numerical", "fmt_table", "read_i64", "runtime_bad_input",
-                 "enums_basic", "enums_state")
+                 "enums_basic", "enums_state", "defer_labels", "results_basic",
+                 "results_chain")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident. An
 #: `f64` is one: float arithmetic is `nv_add`'s for the `i64` and `print` of an `f64`
 #: is the runtime's `snprintf`, and neither helper exists in this printer yet.
 LOWERED_NOT_PRINTED = ("floats",)
 #: Programs whose C must still come from the AST walk, because the lowering refuses
-#: them by name (`E0901`). One per family: a slice, the `?` operator, a `defer`, a
-#: `Set` iteration, a map and a variable that holds a function.
-OUTSIDE_THE_SUBSET = ("defer_labels", "map_basics", "results_basic", "results_chain",
-                      "self_test", "set_basics", "slices_basic", "struct_arrays")
+#: them by name (`E0901`). One per family: a slice, an array of structs, a `Set`
+#: iteration, a map, and a variable that holds a function.
+OUTSIDE_THE_SUBSET = ("map_basics", "self_test", "set_basics", "slices_basic",
+                      "struct_arrays")
 MARKER = "A lowering of the shared IR"
 
 
