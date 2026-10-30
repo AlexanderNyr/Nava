@@ -388,6 +388,46 @@ class Release:
 
 
 @record()
+class Slots:
+    """`%v = slots %table` — how many positions a table has, occupied or not.
+
+    A table's iteration is over its *storage*, not over its entries: the order a
+    `for` over a map or a set visits is the order the slots are laid out in, with
+    the empty and the tombstoned ones skipped. So the loop bound is the capacity
+    and the liveness of a slot is a question the loop asks — which is exactly the
+    two questions a C `for` over `slots[index].state` asks.
+    """
+
+    value: str
+    base: str
+
+
+@record()
+class Live:
+    """`%v = live %table[%index]` — is that position holding an entry?"""
+
+    value: str
+    base: str
+    index: str
+
+
+@record()
+class KeyAt:
+    """`%v = key %table[%index] : K` — the key stored in that position.
+
+    The same instruction serves a `HashMap` and a `HashSet`, because a set is a
+    table whose entry is the key and nothing else. Reading a position that is not
+    live is the caller's mistake, and the two instructions above are what keeps it
+    from being one: `live` is asked first, in the loop the lowering builds.
+    """
+
+    value: str
+    base: str
+    index: str
+    typ: str
+
+
+@record()
 class Jump:
     """`jump ^label(%args)` — the block arguments become the target's parameters."""
 
@@ -501,12 +541,76 @@ class Module:
     #: order with the types they carry: `{"Shape": (("Dot", ()), ("Circle", ("i64",)))}`.
     #: The position of a variant is its tag, so this is also the `match` table.
     enums: dict = field(default_factory=dict)
+    #: Every `Vec(T)` the program builds, as the written type. A vector's operations
+    #: are on the element, and the element's size and copy are known here rather than
+    #: at run time — which is why the module states it.
+    vectors: list = field(default_factory=list)
+    #: Every `HashMap(K, V)` and `HashSet(T)` the program builds, as the written type.
+    #: A table is walked by position and probed by a hash of its key, so both the slot
+    #: layout and the hash are facts about the type, not about the machine.
+    tables: list = field(default_factory=list)
 
     def function(self, name: str) -> Function | None:
         for item in self.functions:
             if item.name == name:
                 return item
         return None
+
+
+def value_types(function: Function) -> dict[str, str]:
+    """The type of every value the function defines, block parameters included.
+
+    A `Copy` takes its type from its operand, which is why the parameters of every
+    block are collected before any instruction is looked at: a block parameter is
+    what an edge assigns, so its type is part of the block's signature.
+    """
+    types: dict[str, str] = {}
+    for name, typ in function.params:
+        types[name] = typ
+    for block in function.blocks:
+        for name, typ in block.params:
+            types[name] = typ
+    for block in function.blocks:
+        for instruction in block.instructions:
+            if isinstance(instruction, Const):
+                types[instruction.value] = instruction.typ
+            elif isinstance(instruction, Str):
+                types[instruction.value] = STRING_TYPE
+            elif isinstance(instruction, (Bin, Neg)):
+                types[instruction.value] = instruction.typ
+            elif isinstance(instruction, Length):
+                types[instruction.value] = "i64"
+            elif isinstance(instruction, (Not, Cmp, TextCompare)):
+                types[instruction.value] = "bool"
+            elif isinstance(instruction, Builtin):
+                # A builtin that answers nothing defines no value, however the IR
+                # names it: `vec_push` is a statement whose result nobody reads.
+                if instruction.typ != "void":
+                    types[instruction.value] = instruction.typ
+            elif isinstance(instruction, Copy):
+                types[instruction.value] = types[instruction.operand]
+            elif isinstance(instruction, Call):
+                if instruction.returns != "void":
+                    types[instruction.value] = instruction.returns
+            elif isinstance(instruction, Variant):
+                # The type of a variant value is the enum it belongs to, written the
+                # way the program writes it (`Shape`, `Result(i64, str)`).
+                types[instruction.value] = instruction.enum
+            elif isinstance(instruction, (ArrayLiteral, ArrayZeros, Index,
+                                          SlotLoad, StructNew, Field,
+                                          Payload, Slice)):
+                types[instruction.value] = instruction.typ
+            elif isinstance(instruction, Tag):
+                # A tag is an `i64`: the checker numbered the variants, and a `match`
+                # compares that number.
+                types[instruction.value] = "i64"
+            elif isinstance(instruction, Slots):
+                types[instruction.value] = "i64"
+            elif isinstance(instruction, Live):
+                types[instruction.value] = "bool"
+            elif isinstance(instruction, KeyAt):
+                types[instruction.value] = instruction.typ
+    return types
 
 
 def dump(module: Module) -> str:
@@ -605,6 +709,13 @@ def _instruction_text(instruction) -> str:  # noqa: C901 - one branch per instru
         return f"%{instruction.value} = len %{instruction.base}"
     if isinstance(instruction, Release):
         return f"release {instruction.typ} %{instruction.operand}"
+    if isinstance(instruction, Slots):
+        return f"%{instruction.value} = slots %{instruction.base}"
+    if isinstance(instruction, Live):
+        return f"%{instruction.value} = live %{instruction.base}[%{instruction.index}]"
+    if isinstance(instruction, KeyAt):
+        return (f"%{instruction.value} = key %{instruction.base}[%{instruction.index}]"
+                f" : {instruction.typ}")
     if isinstance(instruction, SlotLoad):
         return f"%{instruction.value} = load %{instruction.slot}"
     if isinstance(instruction, SlotStore):

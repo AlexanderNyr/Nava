@@ -43,16 +43,17 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "runtime_overflow", "structs_basic", "structs_copy", "strings",
                  "numerical", "fmt_table", "read_i64", "runtime_bad_input",
                  "enums_basic", "enums_state", "defer_labels", "results_basic",
-                 "results_chain", "slices_basic", "struct_arrays", "floats")
+                 "results_chain", "slices_basic", "struct_arrays", "floats",
+                 "map_basics", "set_basics")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident. The
 #: list is empty: every program that lowers is printed from the IR as well, and the
 #: list stays here so that the next gap is named rather than discovered.
 LOWERED_NOT_PRINTED = ()
 #: Programs whose C must still come from the AST walk, because the lowering refuses
-#: them by name (`E0901`). One per family: a `Set` iteration, a map, and a variable
-#: that holds a function.
-OUTSIDE_THE_SUBSET = ("map_basics", "self_test", "set_basics")
+#: them by name (`E0901`). What is left is `String`, a function used as a value and
+#: the builtins the runtime has no native form of.
+OUTSIDE_THE_SUBSET = ("self_test",)
 MARKER = "A lowering of the shared IR"
 
 

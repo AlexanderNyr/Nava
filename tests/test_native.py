@@ -2685,6 +2685,451 @@ fn main() {
         self.assertIn("ret %", text)
 
 
+def table_program(seed: int, rounds: int = 120) -> str:
+    """A deterministic sequence of map and set operations, with what they answer.
+
+    Two backends agreeing on a fixture is a weak claim when the thing under test is
+    a hash table: the interesting cases are the ones a fixture does not reach — a
+    table that has grown four times, a removal that left a tombstone in the probe
+    chain of a key that collided with it, a rehash that has to place a key again.
+    So the corpus is generated, the generator is seeded, and every answer the
+    program prints is one the other backend has to produce too.
+    """
+    import random as _random
+
+    generator = _random.Random(seed)
+    keys = [generator.randrange(97) for _ in range(rounds)]
+    doomed = [generator.randrange(97) for _ in range(rounds // 3)]
+    lines = ["edition 2;", "", "fn main() -> i64 {"]
+    lines.append("    let m: HashMap(i64, i64) = map_new()")
+    lines.append("    let s: HashSet(i64) = set_new()")
+    lines.append("    let i = 0")
+    lines.append("    let keys: [i64] = [" + ", ".join(str(key) for key in keys) + "]")
+    lines.append(f"    while i < {rounds} {{")
+    lines.append("        let key = keys[i]")
+    lines.append("        map_set(m, key, i)")
+    lines.append("        set_add(s, key)")
+    lines.append("        i = i + 1")
+    lines.append("    }")
+    lines.append("    print(map_len(m))")
+    lines.append("    print(set_len(s))")
+    lines.append(f"    let doomed: [i64] = ["
+                 + ", ".join(str(key) for key in doomed) + "]")
+    lines.append("    let removed = 0")
+    lines.append("    i = 0")
+    lines.append(f"    while i < {len(doomed)} {{")
+    lines.append("        let key = doomed[i]")
+    lines.append("        if map_remove(m, key) { removed = removed + 1 }")
+    lines.append("        set_remove(s, key)")
+    lines.append("        i = i + 1")
+    lines.append("    }")
+    lines.append("    print(map_len(m))")
+    lines.append("    print(set_len(s))")
+    lines.append("    print(removed)")
+    lines.append("    i = 0")
+    lines.append("    while i < 97 {")
+    lines.append("        if map_contains(m, i) { print(i) }")
+    lines.append("        i = i + 1")
+    lines.append("    }")
+    lines.append("    let from_map = 0")
+    lines.append("    for key in m { from_map = from_map + key }")
+    lines.append("    print(from_map)")
+    lines.append("    let from_set = 0")
+    lines.append("    for member in s { from_set = from_set + member }")
+    lines.append("    print(from_set)")
+    lines.append("    i = 0")
+    lines.append("    while i < 97 {")
+    lines.append("        match map_get(m, i) {")
+    lines.append("            Option(i64)::Some(value) => { print(value) }")
+    lines.append("            Option(i64)::None => { print(-1) }")
+    lines.append("        }")
+    lines.append("        i = i + 1")
+    lines.append("    }")
+    lines.append("    map_clear(m)")
+    lines.append("    set_clear(s)")
+    lines.append("    print(map_len(m))")
+    lines.append("    print(set_len(s))")
+    lines.append("    let after_clear = 0")
+    lines.append("    for key in m { after_clear = after_clear + 1 }")
+    lines.append("    for member in s { after_clear = after_clear + 1 }")
+    lines.append("    print(after_clear)")
+    lines.append("    return 0")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+class NativeTableTests(unittest.TestCase):
+    """`HashMap(K, V)` and `HashSet(T)` — one table, walked by position.
+
+    A table is the shape where the two backends could most easily agree on every
+    fixture and disagree on the thousandth key: the probe is a hash, the growth is
+    a rehash, and a removal leaves a tombstone whose whole purpose is to keep the
+    chain of a key that collided with it. So the tests here are not fixtures — they
+    are generated sequences, seeded, long enough to grow the table five times and
+    to leave tombstones behind before the next insert walks into them.
+
+    The order a `for` visits is the table's own, not sorted: it is the order the
+    slots are laid out in, which is why it is a *differential* rather than an
+    expected value. Both backends print it and the two texts have to be equal.
+    """
+
+    def agrees(self, source: str, name: str = "tables") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def test_the_two_fixtures_agree_with_the_c_backend(self):
+        """`map_basics` and `set_basics` leave the AST walk: both compile them."""
+        for name in ("map_basics", "set_basics"):
+            with tempfile.TemporaryDirectory() as temp:
+                directory = pathlib.Path(temp)
+                path = write_source(directory, name, fixture_text(name))
+                c_binary, native_binary = build_both(path, directory)
+                self.assertEqual(run_binary(native_binary), run_binary(c_binary))
+
+    def test_a_generated_sequence_agrees_on_every_answer(self):
+        """120 inserts, 40 removals, a walk, a lookup per key, and a clear."""
+        for seed in (1, 7, 2024):
+            lines = self.agrees(table_program(seed), f"tables{seed}")
+            # The map and the set hold the same keys, and a clear empties both:
+            # three answers the differential alone would not be able to fail on.
+            self.assertEqual(lines[0], lines[1])
+            self.assertEqual(lines[-3:], ["0", "0", "0"])
+            self.assertTrue(len(lines) > 70)
+
+    def test_the_iteration_order_is_the_table_s_own_and_the_two_agree(self):
+        """The order is not sorted and not insertion order: it is the slots'.
+
+        That is the claim a fixture cannot check, because a fixture is short enough
+        to fit in one table. Here the table grows four times and every removal
+        leaves a tombstone behind, so a backend that rehashed differently, or that
+        buried a key whose chain crossed a tombstone, prints a different order.
+        """
+        source = """edition 2;
+fn main() -> i64 {
+    let s: HashSet(i64) = set_new()
+    let i = 0
+    while i < 300 { set_add(s, i * 13); i = i + 1 }
+    i = 0
+    while i < 300 {
+        if i % 4 == 0 { set_remove(s, i * 13) }
+        i = i + 1
+    }
+    i = 0
+    while i < 300 {
+        if i % 4 == 2 { set_add(s, i * 13 + 1) }
+        i = i + 1
+    }
+    let text = ""
+    for member in s { text = str_concat(text, str_concat(str_from_i64(member), ",")) }
+    print(bytes_len(text))
+    print(text)
+    print(set_contains(s, 0))
+    print(set_contains(s, 13))
+    print(set_contains(s, 2 * 13 + 1))
+    let total = 0
+    for member in s { total = total + member }
+    print(total)
+    print(set_len(s))
+    return 0
+}
+"""
+        lines = self.agrees(source)
+        # 0 was removed by the first pass; 13 was not; 27 was added by the second.
+        self.assertEqual(lines[2], "false")
+        self.assertEqual(lines[3], "true")
+        self.assertEqual(lines[4], "true")
+        self.assertEqual(lines[6], "300")
+
+    def test_a_str_key_compares_by_value_and_not_by_its_address(self):
+        """Two strings with the same bytes are one key, however they were built."""
+        source = """edition 2;
+fn main() -> i64 {
+    let m: HashMap(str, i64) = map_new()
+    let s: HashSet(str) = set_new()
+    let i = 0
+    while i < 40 {
+        let word = str_from_i64(i)
+        map_set(m, word, i)
+        set_add(s, word)
+        i = i + 1
+    }
+    print(map_len(m))
+    print(set_len(s))
+    print(map_contains(m, str_from_i64(7)))
+    print(map_contains(m, str_concat(str_from_i64(1), str_from_i64(2))))
+    print(set_contains(s, str_from_i64(39)))
+    print(set_contains(s, "nope"))
+    set_remove(s, str_from_i64(3))
+    print(set_len(s))
+    print(set_contains(s, str_from_i64(3)))
+    let text = ""
+    for word in s { text = str_concat(text, word) }
+    print(bytes_len(text))
+    print(text)
+    return 0
+}
+"""
+        lines = self.agrees(source)
+        self.assertEqual(lines[0], "40")
+        self.assertEqual(lines[1], "40")
+        self.assertEqual(lines[2], "true")
+        self.assertEqual(lines[3], "true")
+        self.assertEqual(lines[6], "39")
+        self.assertEqual(lines[7], "false")
+
+    def test_a_removed_key_does_not_bury_one_that_collided_with_it(self):
+        """The tombstone: take the key out, and its neighbour is still found.
+
+        A table of capacity 8 holds keys 0..5; `find` for any of them walks past
+        the ones that are gone. Removing one and asking for the rest is the whole
+        reason a removal marks a slot instead of emptying it.
+        """
+        source = """edition 2;
+fn main() -> i64 {
+    let m: HashMap(i64, i64) = map_new()
+    let i = 0
+    while i < 6 { map_set(m, i, i * 10); i = i + 1 }
+    print(map_remove(m, 2))
+    print(map_remove(m, 2))
+    print(map_len(m))
+    i = 0
+    while i < 6 {
+        if map_contains(m, i) { print(i) }
+        i = i + 1
+    }
+    map_set(m, 2, 999)
+    print(map_len(m))
+    print(map_contains(m, 2))
+    match map_get(m, 2) {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(-1) }
+    }
+    return 0
+}
+"""
+        self.assertEqual(self.agrees(source),
+                         ["true", "false", "5", "0", "1", "3", "4", "5", "6",
+                          "true", "999"])
+
+    def test_a_for_over_a_table_is_slots_live_and_key(self):
+        """Three instructions, one each: the walk is the IR's, not a lowering trick."""
+        module = lower_source("""edition 2;
+fn main() -> i64 {
+    let m: HashMap(i64, i64) = map_new()
+    map_set(m, 1, 1)
+    let total = 0
+    for key in m { total = total + key }
+    print(total)
+    return 0
+}
+""")
+        instructions = [instruction for block in module.functions[0].blocks
+                        for instruction in block.instructions]
+        self.assertEqual(len([item for item in instructions
+                              if isinstance(item, ir.Slots)]), 1)
+        self.assertEqual(len([item for item in instructions
+                              if isinstance(item, ir.Live)]), 1)
+        reads = [item for item in instructions if isinstance(item, ir.KeyAt)]
+        self.assertEqual(len(reads), 1)
+        # A map iterates its keys, so the walk binds the key type and not the value.
+        self.assertEqual(reads[0].typ, "i64")
+        self.assertEqual(module.tables, ["HashMap(i64, i64)"])
+
+    def test_the_table_states_the_types_it_holds(self):
+        """A module states its tables as it states its structs: both backends read it."""
+        module = lower_source(fixture_text("map_basics"))
+        self.assertEqual(module.tables, ["HashMap(str, i64)"])
+        self.assertIn("Option(i64)", module.enums)
+        # `Some` is 0 and `None` is 1 because the checker numbered them, and a
+        # `map_get` that answers the other way round would match the wrong arm.
+        self.assertEqual([name for name, _ in module.enums["Option(i64)"]],
+                         ["Some", "None"])
+
+
+class NativeVectorTests(unittest.TestCase):
+    """`Vec(T)` — the one container whose size is not known when it is declared.
+
+    A vector is the same value on both backends — a handle to a buffer with a
+    length and a capacity — and it is the only one that *grows*: `push` doubles the
+    capacity and copies the elements across. That is one loop in each backend and
+    the two have to agree on the elements afterwards, on the capacity a run of
+    pushes reaches, and on the message an index out of range stops with.
+
+    The oracle is the other backend, and the sequences are longer than a fixture
+    because a growth that loses an element loses it on the fourth doubling.
+    """
+
+    def agrees(self, source: str, name: str = "vectors") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def test_a_vector_agrees_with_the_c_backend(self):
+        """Push, `len`, `capacity`, `get`, `set`, `pop` and a `for` over one."""
+        source = """edition 2;
+fn main() -> i64 {
+    let v: Vec(i64) = vec_new()
+    let i = 0
+    while i < 40 {
+        vec_push(v, i * i)
+        i = i + 1
+    }
+    print(vec_len(v))
+    print(vec_capacity(v))
+    print(vec_get(v, 39))
+    vec_set(v, 0, -7)
+    print(vec_get(v, 0))
+    match vec_pop(v) {
+        Option(i64)::Some(last) => { print(last) }
+        Option(i64)::None => { print(-1) }
+    }
+    print(vec_len(v))
+    let total = 0
+    for x in v { total = total + x }
+    print(total)
+    return 0
+}
+"""
+        self.assertEqual(
+            self.agrees(source),
+            ["40", "64", "1521", "-7", "1521", "39", "19012"])
+
+    def test_growth_keeps_every_element(self):
+        """Five doublings later, every element is still where it was pushed."""
+        count = 100
+        lines = ["edition 2;", "", "fn main() -> i64 {", "    let v: Vec(i64) = vec_new()"]
+        lines.append("    let i = 0")
+        lines.append(f"    while i < {count} {{")
+        lines.append("        vec_push(v, i * 3 - 1)")
+        lines.append("        i = i + 1")
+        lines.append("    }")
+        lines.append("    print(vec_len(v))")
+        lines.append("    print(vec_capacity(v))")
+        lines.append("    let mismatched = 0")
+        lines.append("    let at = 0")
+        lines.append(f"    while at < {count} {{")
+        lines.append("        if vec_get(v, at) != at * 3 - 1 { mismatched = mismatched + 1 }")
+        lines.append("        at = at + 1")
+        lines.append("    }")
+        lines.append("    print(mismatched)")
+        lines.append("    return 0")
+        lines.append("}")
+        self.assertEqual(self.agrees("\n".join(lines) + "\n"),
+                         [str(count), "128", "0"])
+
+    def test_the_bounds_trap_is_the_c_runtime_s(self):
+        """`vec_get(v, 5)` on a vector of one: the C message, word for word."""
+        source = """edition 2;
+fn main() -> i64 {
+    let v: Vec(i64) = vec_new()
+    vec_push(v, 1)
+    print(vec_get(v, 5))
+    return 0
+}
+"""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "bounds", source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out[0], "")
+        self.assertEqual(native_out[1],
+                         "nava runtime error: array index 5 is out of bounds for length 1\n")
+        self.assertEqual(c_out[1], native_out[1])
+        self.assertEqual(c_out[2], 1)
+        self.assertEqual(native_out[2], 1)
+
+    def test_pop_on_an_empty_vector_answers_none(self):
+        """The `Option` a `pop` answers is the checker's, tags and all."""
+        source = """edition 2;
+fn main() -> i64 {
+    let v: Vec(i64) = vec_new()
+    match vec_pop(v) {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(-1) }
+    }
+    vec_push(v, 8)
+    match vec_pop(v) {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(-1) }
+    }
+    match vec_pop(v) {
+        Option(i64)::Some(value) => { print(value) }
+        Option(i64)::None => { print(-1) }
+    }
+    return 0
+}
+"""
+        self.assertEqual(self.agrees(source), ["-1", "8", "-1"])
+
+    def test_a_vector_of_strings_agrees(self):
+        """An element that is a pointer: pushed, read back and walked."""
+        source = """edition 2;
+fn main() -> i64 {
+    let v: Vec(str) = vec_new()
+    vec_push(v, "one")
+    vec_push(v, "two")
+    vec_push(v, "three")
+    print(vec_len(v))
+    print(vec_get(v, 2))
+    let joined = ""
+    for item in v { joined = str_concat(joined, item) }
+    print(joined)
+    vec_set(v, 1, "TWO")
+    print(vec_get(v, 1))
+    return 0
+}
+"""
+        self.assertEqual(self.agrees(source),
+                         ["3", "three", "onetwothree", "TWO"])
+
+    def test_a_for_over_a_vector_is_the_same_walk_as_over_an_array(self):
+        """A `for` over either is one `len` and one `index`; the handle is the type.
+
+        `v[0]` is not the language's syntax for a vector (`E0329`) and `len(v)` is
+        not its length (`E0338`) — a vector answers `vec_get` and `vec_len`. What a
+        `for` lowers to is therefore the one place the IR has to know that a vector
+        keeps its length in the second word of its handle and not the first.
+        """
+        module = lower_source("""edition 2;
+fn main() -> i64 {
+    let a: [i64] = [1, 2, 3]
+    let v: Vec(i64) = vec_new()
+    vec_push(v, 4)
+    let from_array = 0
+    for x in a { from_array = from_array + x }
+    let from_vector = 0
+    for y in v { from_vector = from_vector + y }
+    print(from_array + from_vector)
+    return 0
+}
+""")
+        instructions = [instruction for block in module.functions[0].blocks
+                        for instruction in block.instructions]
+        lengths = [item for item in instructions if isinstance(item, ir.Length)]
+        reads = [item for item in instructions if isinstance(item, ir.Index)]
+        self.assertEqual(len(lengths), 2)
+        self.assertEqual(len(reads), 2)
+        self.assertEqual(reads[0].typ, "i64")
+        self.assertEqual(module.vectors, ["Vec(i64)"])
+
+
 class NativeF64Tests(unittest.TestCase):
     """`f64` is printed as the shortest decimal that reads back as the same double.
 

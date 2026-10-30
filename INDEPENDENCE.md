@@ -136,7 +136,7 @@ the guard, and the two implementations must agree on every entry.
 | N11 | Memory, collections, strings | N10 | Collections and strings are safe under fuzz, leak detection and sanitizers; unsafe patterns are rejected, not tolerated | **Specified** |
 | N12 | A standard library with contracts | N11 | Every public name has a contract and a test; documentation examples execute in CI | **Under way** — N12a–N12c delivered; the remaining modules and determinism across backends are not |
 | N13 | Projects, packages, reproducibility | N12 | A lockfile reproduces a build on another machine; a tampered package fails the build | **Delivered** — N13a–N13d: the manifest, vendored packages by digest, the lockfile with its tamper checks, a build that takes its modules from the lockfile, and build records that make two builds comparable byte for byte |
-| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14j delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic, comparison *and printing*, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?`, slices and arrays of structs are compiled natively — 29 of the 32 fixtures build and run identically through both backends — while the collections, `String`/`Vec`, a function used as a value and the remaining builtins are still refused by name, and the AST walk is still what prints them |
+| N14 | Own backend: Nava to x86-64 ELF without `cc` | N10, N11 | Behaviour differential against the C backend on the whole corpus; builds and runs where `cc` and `ld` do not exist | **Under way** — N14a–N14j delivered: a working backend for `i64`/`bool`/`str`/`f64` and arrays of them, struct values with cells and field writes, text operations and number conversions, whole programs, and **one representation both backends read**, with a three-way differential (C from the IR, C from the AST, native); `f64` arithmetic, comparison *and printing*, struct values, text comparison, the eight builtins the runtime has, enums with `match`, `defer` and `?`, slices, arrays of structs, `Vec`, `HashMap` and `HashSet` are compiled natively — **31 of the 32 fixtures** build and run identically through both backends — while `String`, a function used as a value and the remaining builtins are still refused by name, and the AST walk is still what prints the one fixture that needs them |
 | N15 | Self-hosting and bootstrap | N10–N14 | A Nava-written compiler compiles itself; stage2 and stage3 are byte-identical; the suite passes under stage2 | **Specified** |
 | N16 | Zero dependencies, reproducible delivery | N14, N15 | `nava` builds and runs programs in a kernel-only container; rebuilds are byte-identical; no network syscalls | **Specified** |
 | N17 | The language as a contract | N12, N15 | The conformance set is normative and both implementations pass it; editions and deprecation are enforced by the guard | **Specified** |
@@ -1363,6 +1363,7 @@ the differential records.
 | N14h | **Cleanup and early return through one IR**: `defer` lowered at every exit of the block that registered it, `?` as a tag test with an early return of the failure value and one payload read, both fixture families closed, and the two shapes this backend cannot hold refused by name | **Delivered** (record below) |
 | N14i | **Slices and arrays of structs through one IR**: a slice as one instruction that answers a *view* into the parent's elements after the C runtime's two bound checks, and an array of structs as the same six array instructions with a one-word element that is copied as it enters the array | **Delivered** (record below) |
 | N14j | **`print f64` through one IR**: the shortest decimal the C runtime prints for a double, generated on base-10^9 bignums with no `strtod` and no `snprintf`, with the stop condition and the tie-break that make the two backends agree digit for digit, a 12 330-value corpus as the differential's input, and `floats` as the fixture that leaves the AST walk | **Delivered** (record below) |
+| N14k | **`Vec`, `HashMap` and `HashSet` through one IR**: the two containers that grow — a vector that doubles its buffer, and a table of slots probed by a hash of the key, with the tombstone that keeps the chain of a key that collided with a removed one — generated per type rather than switched on at run time, with `slots`/`live`/`key` as the walk over a table's storage and two fixtures leaving the AST walk | **Delivered** (record below) |
 | N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
@@ -1910,6 +1911,88 @@ place, no benchmark was run, so what it costs against the C library is not state
 all; or that the corpus covers the space — it is 12 330 values
 of some 2^64, chosen for the families that fail differently, and the argument for the rule
 is the rule, not the sample.
+
+---
+
+#### Delivery record N14k (2026-10-30)
+
+**`Vec(T)`, `HashMap(K, V)` and `HashSet(T)` — the two containers that grow.** A fixed
+array is one allocation and an array of structs is one word per element; a vector and a
+table are the first containers whose *size is not known when they are declared*, and
+they are the first whose representation has an invariant that outlives one operation: a
+table's probe chain. Get the growth right and a thousand pushes work; get the tombstone
+wrong and a program prints a different order on the two backends while every small
+fixture agrees.
+
+A vector is a handle to three words — capacity, length, elements — and `push` doubles
+the capacity until it fits, copying the elements across by hand because a `memcpy` is a
+library call and this runtime makes none. A table is a power-of-two array of slots,
+probed linearly from `hash(key) & (capacity - 1)`, grown at three quarters full counting
+tombstones, and rehashed by probing every live key into the new slots again. A removal
+marks its slot `state = 2` rather than emptying it, because an empty slot ends the search
+and a key that had collided with the one taken out would then be reported as absent.
+
+The one design decision worth stating is that **the family is generated per type** —
+`nv_map_str_i64_set`, `nv_set_i64_add`, `nv_vec_i64_push` — rather than being one runtime
+that switches on a type tag at run time. The slot layout, the hash and the equality are
+facts about the key: a `str` key is FNV-1a over the bytes and compares by value, an `i64`
+key is the C runtime's 64-bit mixer and compares with one instruction. Which types a
+program uses is a fact about the program, so the module states its tables the way it
+already stated its structs, and a routine nothing calls is not emitted at all — which is
+why a vector nobody pops from does not drag the `Option` a `pop` answers into the module.
+
+An `Option` is worth a word of its own: `map_get` and `vec_pop` answer one, and its two
+tags are **the checker's**, read from the module's enum layouts rather than assumed. A
+`Some` numbered 0 in one backend and 1 in the other would match the wrong arm, and the
+tags are a fact about the program.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A vector grows and keeps every element | `NativeVectorTests.test_growth_keeps_every_element` | 100 pushes, five doublings, then every element read back and compared: `100 128 0` on both backends |
+| `len`, `capacity`, `get`, `set`, `pop` and a walk | `test_a_vector_agrees_with_the_c_backend` | `40 64 1521 -7 1521 39 19012` — the same capacity, the same popped value and the same sum through both |
+| An index out of range stops the C way | `test_the_bounds_trap_is_the_c_runtime_s` | `nava runtime error: array index 5 is out of bounds for length 1`, empty stdout, exit 1 — byte for byte, on both |
+| `pop` on an empty vector answers `None` | `test_pop_on_an_empty_vector_answers_none` | `-1 8 -1`: a `None` before anything was pushed, the pushed value, then a `None` again |
+| A `Vec(str)` holds pointers the same way | `test_a_vector_of_strings_agrees` | `3 three onetwothree TWO` |
+| The two fixtures left the AST walk | `NativeTableTests.test_the_two_fixtures_agree_with_the_c_backend` | `map_basics` and `set_basics` build and run identically; both are now printed from the IR as well |
+| Sequences, not fixtures | `test_a_generated_sequence_agrees_on_every_answer` | three seeded programs of 120 inserts, 40 removals, a walk, a lookup per key and a clear — every answer identical, and the map and the set always hold the same number of keys |
+| The order a table is walked in | `test_the_iteration_order_is_the_table_s_own_and_the_two_agree` | 300 adds, 75 removals, 75 more adds: the printed order is not sorted and not insertion order, it is the slots' — and it is the same 1 416 bytes on both backends |
+| A `str` key compares by value | `test_a_str_key_compares_by_value_and_not_by_its_address` | a key built by `str_from_i64` and the same key built by `str_concat` are one key: `true true`, and a removal by a newly built string removes it |
+| A removal does not bury a colliding key | `test_a_removed_key_does_not_bury_one_that_collided_with_it` | remove key 2 of six, and 0, 1, 3, 4, 5 are all still there; put 2 back and it reads 999 |
+| A `for` over a table is three instructions | `test_a_for_over_a_table_is_slots_live_and_key` | exactly one `slots`, one `live`, one `key` in the IR, and the key's type is the map's key type |
+| A `for` over a vector is the same walk as over an array | `NativeVectorTests.test_a_for_over_a_vector_is_the_same_walk_as_over_an_array` | one `len` and one `index` per loop; what differs is which word of the handle the length is read from |
+| The C backend prints the same programs | `CFromIRTests` (`map_basics` and `set_basics` joined `IN_THE_SUBSET`) | both carry the marker; `OUTSIDE_THE_SUBSET` is down to one fixture |
+| The corpus grows | the fixture sweep | **31 of 32** fixtures build and run identically through both backends (29 at N14j), **0 differ**, 1 refused by name (`self_test`) |
+
+Two bugs came out of running, and both are the kind a fixture cannot find. **The growth
+loop jumped into the middle of the copy loop**: the label a `jge` left the doubling loop
+by was the label of the inner copy loop rather than of the block after it, so the first
+`push` on any vector stored through a register that had never been loaded and the program
+died with a segmentation fault — a `Vec(i64)` of one element was enough to show it. And
+**an empty slot answered the wrong position**: `find` returns the first tombstone it
+passed when it reaches an empty slot, because that is where a key belongs, and the first
+version returned the empty slot instead. Nothing about the *contents* changed, so the
+lengths, the sums and every fixture were identical; only the order a `for` visited
+differed — and only after 300 operations had grown the table five times and left
+tombstones behind for the next insert to walk into. The generated sequences are what
+found it, which is the argument for them.
+
+The audit is re-measured: **21 684 lines, 27 modules, 766 functions** (20 173 / 27 / 716
+at N14j) — no new module, 50 functions: the two container families, the two hashes, and
+the four instruction handlers. The suite is **1 074 tests, 1 631 subtests**,
+`tests/registry.py` reports 1 004 registered tests with the same 11 tasks, 76 cases, 192
+spec fixtures and 173 diagnostic codes, and the overhead record is re-measured rather
+than assumed: **108 832 tokens**, unchanged, because the guide describes the language
+and this increment changed which backend compiles which part of it.
+
+What this increment does **not** claim: that the AST walk is gone — 1 of the 32 fixtures
+still needs it (`self_test`, for a function used as a value and `String`); that a
+container is ever released (the arena does not give memory back, so a `Vec` in a loop
+grows the arena until the program exits — which the C backend does not do, and which no
+output can show); that the growth and the rehash are fast (no benchmark was run); that
+the per-type families are small (a program with ten map types gets ten families, which
+is a size the C backend pays too); or that a `Vec` of structs, a map with a struct value
+or a table keyed by anything but `i64` and `str` works — each is refused by name, with
+the type in the message, rather than half-compiled.
 
 ---
 

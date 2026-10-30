@@ -42,6 +42,8 @@ from ..model import (
     Unary, Variable, Variant, VariantValue, While,
 )
 from ..checker import BUILTINS
+from ..model import (is_map, is_set, is_string, is_vec, map_parts, set_element,
+                     vec_element)
 from . import ir
 
 #: Types `print` can write in the native backend.
@@ -92,6 +94,14 @@ def enum_layouts(program: Program) -> dict[str, tuple]:
             key = node.instance or node.declared.name
             layouts[key] = tuple((item.name, tuple(item.types))
                                  for item in node.declared.variants)
+    # The checker instantiates a prelude enum for a builtin that answers one —
+    # `map_get` and `vec_pop` answer `Option(V)` — and no `VariantValue` node is
+    # written for it, so the instances are what puts the layout in the module. The
+    # tags are the checker's, so `Some` is 0 and `None` is 1 here because they are
+    # there, not because this backend assumes it.
+    for key, decl in program.instances.items():
+        layouts.setdefault(key, tuple((item.name, tuple(item.types))
+                                      for item in decl.variants))
     return layouts
 
 
@@ -123,6 +133,33 @@ def is_array(typ: object) -> bool:
 def element_of(typ: str) -> str:
     """`[i64]` -> `i64`."""
     return typ[1:-1].strip()
+
+
+def container_element(typ: str) -> str:
+    """The element type of an array or a `Vec`, or the type itself.
+
+    A `Vec` and an array differ in what they are (a vector grows and owns a
+    capacity, an array cannot) but not in what one element is: one word. So the two
+    share every instruction that reads or writes an element, and the type is what
+    tells a backend which helper to call.
+    """
+    if is_vec(typ):
+        return vec_element(typ)
+    return element_of(typ)
+
+
+def is_sequence(typ: object) -> bool:
+    """An array or a `Vec`: the two things a `for` walks by index.
+
+    Not the same set as what can be *indexed*, which is an array alone (`E0329`),
+    nor as what answers a `len`, which is an array and a table (`E0338`).
+    """
+    return is_array(typ) or is_vec(typ)
+
+
+def is_table(typ: object) -> bool:
+    """A `HashMap` or a `HashSet`: a value you walk by position, not by index."""
+    return is_map(typ) or is_set(typ)
 
 
 class Refused(Exception):
@@ -429,13 +466,28 @@ class Builder:
 
     # -- arrays --------------------------------------------------------------
     def check_element(self, typ: str, loc) -> None:
-        """An array element is one word here: a scalar, or a struct that is a record.
+        """An element is one word here: a scalar, or a struct that is a record.
 
         A struct element is the address of its record, because a struct *is* a record on
         this backend — so the array copies a pointer where C copies the struct, and the
         value semantics are kept where the language can observe them (a read gives a
         value that goes into a cell, and a cell copies).
         """
+        if is_vec(typ):
+            element = vec_element(typ)
+            if element not in ELEMENT_TYPES and element != "f64":
+                # A vector of structs would need the copy an element of an array of
+                # structs already has, and a vector that reallocates on push would
+                # have to copy every element with it; that is its own increment.
+                raise Refused(f"a 'Vec({element})'", loc)
+            return
+        if is_map(typ) or is_set(typ):
+            key = map_parts(typ)[0] if is_map(typ) else set_element(typ)
+            if key not in ("i64", "str"):
+                raise Refused(f"a '{typ}' keyed by a {key}", loc)
+            if is_map(typ) and map_parts(typ)[1] not in ELEMENT_TYPES + ("f64",):
+                raise Refused(f"a '{typ}' holding a {map_parts(typ)[1]}", loc)
+            return
         if not is_array(typ):
             raise Refused(f"the array type '{typ}'", loc)
         element = element_of(typ)
@@ -697,7 +749,7 @@ class Builder:
                 if len(node.args) != 1:
                     raise Refused("a len without one argument", node.loc)
                 base, base_type, block = self.expression(node.args[0], block, env)
-                if not is_array(base_type):
+                if not (is_array(base_type) or is_table(base_type)):
                     raise Refused(f"len of a {base_type}", node.loc)
                 value = self.value()
                 self.emit(block, ir.Length(value, base))
@@ -1115,19 +1167,26 @@ class Builder:
         return self.range_loop(statement, block, env)
 
     def element_loop(self, statement: For, block: ir.Block, env: dict) -> ir.Block:
-        """`for x in array`: the element is a checked read on every turn.
+        """`for x in array`, `in vec`, `in map`, `in set`.
 
         The index is a block parameter of the header, exactly as in a range loop,
         and the element is one `index` instruction in the body — so a `continue`
         inside the loop is an early back edge like any other, and a `break` leaves
         through the same exit block.
+
+        A table is walked over its *storage* instead: the bound is `slots` and a
+        position is skipped unless `live` says it holds an entry, which is the same
+        order the C backend's `for` over `slots[index].state` visits and therefore
+        the same output.
         """
         base, base_type, block = self.expression(statement.iterable, block, env)
-        if not is_array(base_type):
-            raise Refused("a 'for' over anything but a range or an array",
+        if not (is_sequence(base_type) or is_table(base_type)):
+            raise Refused("a 'for' over anything but a range, a sequence or a table",
                           statement.loc)
         self.check_element(base_type, statement.loc)
-        element = element_of(base_type)
+        if is_table(base_type):
+            return self.table_loop(statement, block, env, base, base_type)
+        element = container_element(base_type)
         length = self.value()
         self.emit(block, ir.Length(length, base))
         zero = self.value()
@@ -1160,6 +1219,78 @@ class Builder:
             return current
 
         loop = Loop(exit_block.label, names, statement.label, back_edge,
+                    frame=len(self.frames))
+        self.loops.append(loop)
+        if statement.label:
+            self.labels[statement.label] = loop
+        try:
+            tail = self.body(statement.body, body_block, body_env)
+            if tail.terminator is None:
+                back_edge(self, tail, body_env)
+        finally:
+            self.loops.pop()
+            if statement.label:
+                self.labels.pop(statement.label, None)
+        for index, name in enumerate(names):
+            env[name] = (exit_block.params[index][0], env[name][1])
+        return exit_block
+
+    def table_loop(self, statement: For, block: ir.Block, env: dict,
+                   base: str, base_type: str) -> ir.Block:
+        """`for key in map`, `for x in set`: every live position, in slot order.
+
+        The header carries the position, and the body starts with a `live` test that
+        jumps straight back to the header — which is what makes a dead slot cost one
+        compare instead of a branch out of the loop, and what makes the order the
+        table's own rather than a sorted one.
+        """
+        key_type = map_parts(base_type)[0] if is_map(base_type) else set_element(base_type)
+        slots = self.value()
+        self.emit(block, ir.Slots(slots, base))
+        zero = self.value()
+        self.emit(block, ir.Const(zero, "i64", 0))
+        names = [name for name in sorted(assigned_names(statement.body)) if name in env]
+        header = self.block("for_head", [(self.value(), "i64")]
+                            + [(self.value(), env[name][1]) for name in names])
+        advance = self.block("for_next")
+        exit_block = self.block("for_exit", [(self.value(), env[name][1]) for name in names])
+        body_block = self.block("for_body")
+        self.emit(block, ir.Jump(header.label, [zero, *[env[name][0] for name in names]]))
+        header_env = dict(env)
+        for index, name in enumerate(names):
+            header_env[name] = (header.params[index + 1][0], env[name][1])
+        condition = self.value()
+        self.emit(header, ir.Cmp(condition, "lt", header.params[0][0], slots))
+        self.emit(header, ir.Branch(condition, advance.label, [],
+                                    exit_block.label,
+                                    [header_env[name][0] for name in names]))
+        # A dead position is not an iteration: the loop moves to the next one, which
+        # is the same step the end of the body takes.
+        bump = self.block("for_bump")
+        live = self.value()
+        self.emit(advance, ir.Live(live, base, header.params[0][0]))
+        self.emit(advance, ir.Branch(live, body_block.label, [], bump.label, []))
+        one = self.value()
+        self.emit(bump, ir.Const(one, "i64", 1))
+        stepped = self.value()
+        self.emit(bump, ir.Bin(stepped, "add", header.params[0][0], one))
+        self.emit(bump, ir.Jump(header.label,
+                                [stepped, *[header_env[name][0] for name in names]]))
+        element_value = self.value()
+        self.emit(body_block, ir.KeyAt(element_value, base, header.params[0][0], key_type))
+        body_env = {**header_env, statement.name: (element_value, key_type)}
+
+        def back_edge(builder, current: ir.Block, current_env: dict) -> ir.Block:
+            one = builder.value()
+            self.emit(current, ir.Const(one, "i64", 1))
+            next_index = builder.value()
+            self.emit(current, ir.Bin(next_index, "add", header.params[0][0], one))
+            self.emit(current, ir.Jump(
+                header.label, [next_index, *[current_env[name][0] for name in names]]))
+            return current
+
+        step = back_edge
+        loop = Loop(exit_block.label, names, statement.label, step,
                     frame=len(self.frames))
         self.loops.append(loop)
         if statement.label:
@@ -1370,7 +1501,28 @@ def lower(program: Program) -> ir.Module:
     for function in functions:
         for block in function.blocks:
             for instruction in block.instructions:
-                name = getattr(instruction, "enum", None)
-                if name in enum_tables:
-                    used_enums[name] = enum_tables[name]
-    return ir.Module(functions, structs=used, enums=used_enums)
+                # A builtin that answers an enum names it as the type of the value it
+                # defines (`map_get` answers `Option(V)`), so the type is an enum a
+                # value has even when nothing matches on it here.
+                for name in (getattr(instruction, "enum", None),
+                             getattr(instruction, "typ", None)):
+                    if name in enum_tables:
+                        used_enums[name] = enum_tables[name]
+    # A container is stated when an instruction names one: a `Vec(i64)` the program
+    # only declared would be a family of helpers nobody calls, and the backend has no
+    # reason to emit one.
+    used_vectors: list[str] = []
+    used_tables: list[str] = []
+    for function in functions:
+        for block in function.blocks:
+            for instruction in block.instructions:
+                for name in (getattr(instruction, "typ", None),
+                             getattr(instruction, "base_type", None)):
+                    if not isinstance(name, str):
+                        continue
+                    if is_vec(name) and name not in used_vectors:
+                        used_vectors.append(name)
+                    elif is_table(name) and name not in used_tables:
+                        used_tables.append(name)
+    return ir.Module(functions, structs=used, enums=used_enums,
+                     vectors=used_vectors, tables=used_tables)

@@ -32,8 +32,9 @@ Four decisions worth stating:
 """
 from __future__ import annotations
 
-from .cgen import c_string
+from .cgen import c_string, map_tag, set_tag, vec_tag
 from .checker import mangle
+from .model import is_map, is_set, is_vec, map_parts, set_element, vec_element
 from .native import ir
 
 #: The C spelling of a scalar IR type. `void` is here for a function that returns
@@ -61,6 +62,22 @@ BINARY_HELPERS = {"add": "nv_add", "sub": "nv_sub", "mul": "nv_mul",
 FLOAT_OPERATORS = {"add": "+", "sub": "-", "mul": "*", "div": "/"}
 #: Comparisons are the machine's: an `i64` or a `bool` compares by value.
 COMPARE_OPERATORS = {"eq": "==", "ne": "!=", "lt": "<", "le": "<=", "gt": ">", "ge": ">="}
+#: The builtins whose C name depends on the type of their first argument: the vector,
+#: map and set families are generated per element type, so `vec_push` is
+#: `nv_vec_i64_push` for a `Vec(i64)` and `nv_vec_str_push` for a `Vec(str)`. The
+#: argument count is stated here and the helper name is derived from the value's type
+#: in `container_builtin`.
+CONTAINER_BUILTINS = {
+    "vec_new": 0, "vec_len": 1, "vec_capacity": 1, "vec_push": 2, "vec_pop": 1,
+    "vec_get": 2, "vec_set": 3,
+    "map_new": 0, "map_len": 1, "map_contains": 2, "map_get": 2, "map_set": 3,
+    "map_remove": 2, "map_clear": 1,
+    "set_new": 0, "set_len": 1, "set_contains": 2, "set_add": 2, "set_remove": 2,
+    "set_clear": 1,
+}
+#: The container builtins that answer nothing: they are statements, not values.
+CONTAINER_STATEMENTS = {"vec_push", "vec_set", "map_set", "map_clear", "set_add",
+                        "set_clear"}
 #: The builtins the C printer can print: an IR `builtin` name -> the runtime function
 #: that implements it, with how many arguments it takes. The native backend has its own
 #: list, and a builtin that is on only one list is a gap in one backend — which is a
@@ -88,7 +105,7 @@ SUPPORTED = (
     ir.Print, ir.ArrayLiteral, ir.ArrayZeros, ir.Index, ir.CheckIndex, ir.IndexStore,
     ir.Length, ir.Release, ir.SlotLoad, ir.SlotStore, ir.StructNew, ir.Field,
     ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Slice, ir.Jump,
-    ir.Branch, ir.Ret, ir.Unreachable,
+    ir.Branch, ir.Ret, ir.Unreachable, ir.Slots, ir.Live, ir.KeyAt,
 )
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
@@ -134,6 +151,14 @@ def c_type(typ: str, structs: dict | None = None,
         return STRUCT_PREFIX + typ
     if enums is not None and typ in enums:
         return ENUM_PREFIX + mangle(typ)
+    # A container is a pointer to its own handle type, which the generated family
+    # declares; the printer only has to name it.
+    if is_vec(typ):
+        return f"nv_vec_{vec_tag(typ)} *"
+    if is_map(typ):
+        return f"nv_map_{map_tag(typ)} *"
+    if is_set(typ):
+        return f"nv_set_{set_tag(typ)} *"
     raise KeyError(typ)
 
 
@@ -149,8 +174,18 @@ def is_struct(typ: str, structs: dict | None = None) -> bool:
 def spellable(typ: str, structs: dict | None = None,
               enums: dict | None = None) -> bool:
     """Whether `c_type` can name this type."""
-    return (typ in SCALAR_TYPES or array_element(typ, structs) is not None
-            or is_struct(typ, structs) or (enums is not None and typ in enums))
+    if typ in SCALAR_TYPES or array_element(typ, structs) is not None:
+        return True
+    if is_struct(typ, structs) or (enums is not None and typ in enums):
+        return True
+    if is_vec(typ):
+        return spellable(vec_element(typ), structs, enums)
+    if is_map(typ):
+        key, value = map_parts(typ)
+        return spellable(key, structs, enums) and spellable(value, structs, enums)
+    if is_set(typ):
+        return spellable(set_element(typ), structs, enums)
+    return False
 
 
 def variable(value: str) -> str:
@@ -177,51 +212,44 @@ def constant(payload, typ: str) -> str:
     return f"INT64_C({number})"
 
 
-def value_types(function: ir.Function) -> dict[str, str]:
-    """The type of every value the function defines, block parameters included.
+def _is_container(typ: str | None) -> bool:
+    """Is this a handle — a vector, a map or a set — rather than a value?"""
+    return bool(typ) and (is_vec(typ) or is_map(typ) or is_set(typ))
 
-    A `Copy` takes its type from its operand, which is why the parameters of every
-    block are collected before any instruction is looked at: a block parameter is
-    what an edge assigns, so its type is part of the block's signature.
+
+def container_prefix(name: str, typ: str | None) -> str | None:
+    """`vec_push` on a `Vec(i64)` -> `nv_vec_i64`: the family the call belongs to.
+
+    A vector, a map and a set are three families of generated helpers, one set per
+    element type, so the name of the function a builtin calls is a fact about the
+    *type of the value* — which the IR states, because the value came from somewhere
+    that had to name it.
     """
-    types: dict[str, str] = {}
-    for name, typ in function.params:
-        types[name] = typ
-    for block in function.blocks:
-        for name, typ in block.params:
-            types[name] = typ
-    for block in function.blocks:
-        for instruction in block.instructions:
-            if isinstance(instruction, ir.Const):
-                types[instruction.value] = instruction.typ
-            elif isinstance(instruction, ir.Str):
-                types[instruction.value] = ir.STRING_TYPE
-            elif isinstance(instruction, (ir.Bin, ir.Neg)):
-                types[instruction.value] = instruction.typ
-            elif isinstance(instruction, ir.Length):
-                types[instruction.value] = "i64"
-            elif isinstance(instruction, (ir.Not, ir.Cmp, ir.TextCompare)):
-                types[instruction.value] = "bool"
-            elif isinstance(instruction, ir.Builtin):
-                types[instruction.value] = instruction.typ
-            elif isinstance(instruction, ir.Copy):
-                types[instruction.value] = types[instruction.operand]
-            elif isinstance(instruction, ir.Call):
-                if instruction.returns != "void":
-                    types[instruction.value] = instruction.returns
-            elif isinstance(instruction, ir.Variant):
-                # The type of a variant value is the enum it belongs to, written the
-                # way the program writes it (`Shape`, `Result(i64, str)`).
-                types[instruction.value] = instruction.enum
-            elif isinstance(instruction, (ir.ArrayLiteral, ir.ArrayZeros, ir.Index,
-                                          ir.SlotLoad, ir.StructNew, ir.Field,
-                                          ir.Payload, ir.Slice)):
-                types[instruction.value] = instruction.typ
-            elif isinstance(instruction, ir.Tag):
-                # A tag is an `i64`: the checker numbered the variants, and a `match`
-                # compares that number.
-                types[instruction.value] = "i64"
-    return types
+    if typ is None:
+        return None
+    if name.startswith("vec_") and is_vec(typ):
+        return f"nv_vec_{vec_tag(typ)}"
+    if name.startswith("map_") and is_map(typ):
+        return f"nv_map_{map_tag(typ)}"
+    if name.startswith("set_") and is_set(typ):
+        return f"nv_set_{set_tag(typ)}"
+    return None
+
+
+def container_element_type(typ: str) -> str | None:
+    """The element type of a `Vec`, or the key type of a map or a set."""
+    if is_vec(typ):
+        return vec_element(typ)
+    if is_map(typ):
+        return map_parts(typ)[0]
+    if is_set(typ):
+        return set_element(typ)
+    return None
+
+
+def value_types(function: ir.Function) -> dict[str, str]:
+    """The type of every value a function defines: a fact about the IR, kept there."""
+    return ir.value_types(function)
 
 
 def supports(module: ir.Module) -> bool:
@@ -259,6 +287,15 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
         # a `Cmp`: the lowering states it as `TextCompare`, which prints as `strcmp`.
         return types.get(instruction.left) != ir.STRING_TYPE
     if isinstance(instruction, ir.Builtin):
+        arity = CONTAINER_BUILTINS.get(instruction.name)
+        if arity is not None:
+            if arity != len(instruction.args):
+                return False
+            if arity == 0:
+                # A constructor states the container in its own type.
+                return spellable(instruction.typ, structs, enums)
+            return container_prefix(instruction.name, types.get(instruction.args[0])) \
+                is not None
         routine = BUILTIN_HELPERS.get(instruction.name)
         return routine is not None and routine[1] == len(instruction.args)
     if isinstance(instruction, ir.Bin):
@@ -279,6 +316,11 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
         # element may be a struct, whose C type is a struct value the array copies.
         return (instruction.typ in ELEMENT_NAMES or is_struct(instruction.typ, structs)
                 or (enums is not None and instruction.typ in enums))
+    if isinstance(instruction, (ir.Slots, ir.Live, ir.KeyAt)):
+        # A table's storage is walked by position; the value has to be a table whose
+        # family of helpers exists, which `spellable` already says for every type this
+        # printer can name.
+        return types.get(instruction.base) is not None
     if isinstance(instruction, ir.Release):
         return array_element(instruction.typ, structs) is not None
     if isinstance(instruction, (ir.Variant, ir.Tag, ir.Payload)):
@@ -456,6 +498,50 @@ class Printer:
                    if instruction.args else "")
         return f"({name}){{ ._tag = {instruction.tag},{payload} }}"
 
+    def table_line(self, instruction) -> str:
+        """One line of a walk over a table's storage: its capacity, a slot's state, a key.
+
+        The three are what a `for` over a map or a set is made of on this backend — the
+        same three questions the C runtime's own loop asks, in the same order, which is
+        why the two backends visit the entries in the same order.
+        """
+        base = variable(instruction.base)
+        if isinstance(instruction, ir.Slots):
+            return f"{variable(instruction.value)} = {base}->cap;"
+        index = variable(instruction.index)
+        if isinstance(instruction, ir.Live):
+            return f"{variable(instruction.value)} = {base}->slots[{index}].state == 1;"
+        return f"{variable(instruction.value)} = {base}->slots[{index}].key;"
+
+    def container_call(self, instruction: ir.Builtin, types: dict[str, str]) -> str:
+        """The C line of a vector, map or set builtin.
+
+        The family comes from the type of the value, and the shape from the builtin: a
+        constructor answers a new handle, a query answers a value, and a mutation is a
+        statement. `len` and `capacity` read the handle's own fields — one load, no
+        call — which is what the AST path prints too.
+        """
+        name = instruction.name
+        arity = CONTAINER_BUILTINS[name]
+        if arity == 0:
+            prefix = (f"nv_vec_{vec_tag(instruction.typ)}" if name.startswith("vec_")
+                      else f"nv_map_{map_tag(instruction.typ)}" if name.startswith("map_")
+                      else f"nv_set_{set_tag(instruction.typ)}")
+            return f"{variable(instruction.value)} = {prefix}_new();"
+        container = variable(instruction.args[0])
+        prefix = container_prefix(name, types.get(instruction.args[0]))
+        assert prefix is not None, f"{name} on a value this printer cannot name"
+        arguments = ", ".join(variable(argument) for argument in instruction.args[1:])
+        if name in ("vec_len", "map_len", "set_len"):
+            return f"{variable(instruction.value)} = {container}->len;"
+        if name == "vec_capacity":
+            return f"{variable(instruction.value)} = {container}->cap;"
+        call = f"{prefix}_{name.split('_', 1)[1]}({container}"
+        call += f", {arguments});" if arguments else ");"
+        if name in CONTAINER_STATEMENTS:
+            return call
+        return f"{variable(instruction.value)} = {call};"
+
     def block_label(self, function: ir.Function, label: str) -> str:
         """A block label qualified by its function: two functions may both say `entry`."""
         return f"{self.names[ir.symbol(function)]}_{label}"
@@ -506,6 +592,8 @@ class Printer:
         if isinstance(instruction, ir.Copy):
             return [f"    {variable(instruction.value)} = {variable(instruction.operand)};"]
         if isinstance(instruction, ir.Builtin):
+            if instruction.name in CONTAINER_BUILTINS:
+                return [f"    {self.container_call(instruction, types)}"]
             helper, _arity = BUILTIN_HELPERS[instruction.name]
             arguments = ", ".join(variable(argument) for argument in instruction.args)
             call = f"{helper}({arguments})"
@@ -529,7 +617,15 @@ class Printer:
             return [f"    {variable(instruction.value)} = nv_arr_{element}_new("
                     f"{variable(instruction.count)});"]
         if isinstance(instruction, ir.Index):
-            return [f"    {variable(instruction.value)} = nv_arr_{instruction.typ}_get("
+            base_type = types.get(instruction.base)
+            if is_vec(base_type or ""):
+                family = f"nv_vec_{vec_tag(base_type)}"
+            elif is_map(base_type or "") or is_set(base_type or ""):
+                family = (f"nv_map_{map_tag(base_type)}" if is_map(base_type)
+                          else f"nv_set_{set_tag(base_type)}")
+            else:
+                family = f"nv_arr_{instruction.typ}"
+            return [f"    {variable(instruction.value)} = {family}_get("
                     f"{variable(instruction.base)}, {variable(instruction.index)});"]
         if isinstance(instruction, ir.CheckIndex):
             # The check on its own, before the value being stored is evaluated. The
@@ -538,7 +634,12 @@ class Printer:
             return [f"    (void)nv_check_index({variable(instruction.index)}, "
                     f"{variable(instruction.base)}.len);"]
         if isinstance(instruction, ir.IndexStore):
-            element = array_element(types[instruction.base], self.module.structs)
+            base_type = types[instruction.base]
+            if is_vec(base_type):
+                return [f"    nv_vec_{vec_tag(base_type)}_set({variable(instruction.base)}, "
+                        f"{variable(instruction.index)}, "
+                        f"{variable(instruction.value)});"]
+            element = array_element(base_type, self.module.structs)
             return [f"    nv_arr_{element}_set(&{variable(instruction.base)}, "
                     f"{variable(instruction.index)}, {variable(instruction.value)});"]
         if isinstance(instruction, ir.Slice):
@@ -547,8 +648,14 @@ class Printer:
                     f"nv_arr_{tag}_slice({variable(instruction.base)}, "
                     f"{variable(instruction.start)}, {variable(instruction.end)});"]
         if isinstance(instruction, ir.Length):
+            # An array is a value, so its length is read through `.`; a vector, a map
+            # and a set are handles, so theirs is a field of the pointed-to record.
+            base_type = types.get(instruction.base)
+            arrow = "->" if _is_container(base_type) else "."
             return [f"    {variable(instruction.value)} = "
-                    f"{variable(instruction.base)}.len;"]
+                    f"{variable(instruction.base)}{arrow}len;"]
+        if isinstance(instruction, (ir.Slots, ir.Live, ir.KeyAt)):
+            return [f"    {self.table_line(instruction)}"]
         if isinstance(instruction, ir.Release):
             element = array_element(instruction.typ, self.module.structs)
             return [f"    nv_arr_{element}_free(&{variable(instruction.operand)});"]

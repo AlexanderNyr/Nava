@@ -29,6 +29,27 @@ with integers only.
   value, and the builtins the runtime does not have (`chars_len`, `str_from_f64`,
   `read_f64`, the filesystem and the argument functions).
 
+N14k: **`Vec(T)`, `HashMap(K, V)` and `HashSet(T)`** — the two containers that grow.
+
+- A vector is a handle to a buffer with a length and a capacity, and `push` doubles
+  the capacity and copies the elements across. A table is a power-of-two array of
+  slots probed by a hash of the key, growing at three quarters full; a removal marks
+  its slot instead of emptying it, because an empty slot would end the probe chain
+  of a key that had collided with the one taken out.
+- Both are *per type* rather than one runtime that switches on a type at run time:
+  the slot layout, the hash and the equality are facts about the key, so `nv_map_
+  str_i64_set` and `nv_set_i64_add` are generated from the program's types. The
+  module states which tables a program uses, the way it already stated its structs.
+- `for x in v` and `for key in m` are the same walk as `for x in a` for the vector,
+  and three new instructions for a table — `slots`, `live` and `key` — because a
+  table is walked over its *storage*, skipping the empty and tombstoned positions.
+  The order is the slots', which is why the two backends agreeing on it is evidence
+  and not a coincidence.
+- `map_basics` and `set_basics` left the AST walk: **31 of 32** fixtures build and
+  run identically through both backends, and the only one left is `self_test`.
+- Still refused by name: `String`, a function used as a value, `str_from_f64`,
+  `read_f64`, `chars_len`, the filesystem and the argument functions.
+
 N14i: **slices and arrays of structs through one IR** — a view that owns nothing, and an
 element that is one word.
 

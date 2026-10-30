@@ -183,6 +183,16 @@ class Assembler:
         self.emit(_rex(w=True, b=register) + b"\xC1" + _modrm(3, 5, register)
                   + bytes([value & 0xFF]))
 
+    def and_reg(self, destination: int, source: int) -> None:
+        """`and r64, r64`: REX.W + 21 /r — a mask that is only known at run time.
+
+        A table's probe wraps with `index & (capacity - 1)`, and the capacity is a
+        field of the handle rather than a constant, so the mask cannot be an
+        immediate the way an alignment mask can.
+        """
+        self.emit(_rex(w=True, r=source, b=destination) + b"\x21"
+                  + _modrm(3, source, destination))
+
     def and_imm32(self, register: int, value: int) -> None:
         """`and r64, imm32`: REX.W + 81 /4 id — sign-extended, so -16 aligns."""
         self.emit(_rex(w=True, b=register) + b"\x81" + _modrm(3, 4, register))

@@ -3622,11 +3622,30 @@ def array_helpers(program: Program) -> str:
     return "".join(line + "\n" for line in generator.lines)
 
 
+def container_helpers(program: Program) -> str:
+    """The vector, map and set families a body printed from the IR calls by name.
+
+    `array_helpers` did the arrays; this is the same argument for the three containers,
+    which are generated per element type rather than living in the runtime: the IR
+    prints `nv_vec_i64_push`, and the function that name refers to has to exist in the
+    translation unit whichever path wrote the call. The declarations come first because
+    a prototype needs the element type, and the element types are the program's.
+    """
+    generator = CGenerator(program)
+    # The map and set handles are named before a vector is emitted, because a
+    # vector's elements may be handles and a prototype only needs the name.
+    generator.emit_map_declarations()
+    generator.emit_vectors()
+    generator.emit_maps()
+    return "".join(line + "\n" for line in generator.lines)
+
+
 def generate(program: Program, capabilities=None) -> str:
     module = ir_module(program)
     if module is not None:
         from . import cgen_ir
 
-        return assemble_body(cgen_ir.body(module, c_names(program), array_helpers(program)),
+        helpers = array_helpers(program) + container_helpers(program)
+        return assemble_body(cgen_ir.body(module, c_names(program), helpers),
                              capabilities)
     return CGenerator(program, capabilities).generate()

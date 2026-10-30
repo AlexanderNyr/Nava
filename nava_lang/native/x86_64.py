@@ -46,6 +46,7 @@ from pathlib import Path
 
 from .. import limits
 from ..diagnostics import make
+from ..model import (is_map, is_set, is_vec, map_parts, set_element, vec_element)
 from . import ir, linker
 from .unit import DATA, RODATA, UnitBuilder
 from .x86 import (
@@ -97,6 +98,18 @@ BUILTIN_ROUTINES = {
 #: How many bytes one word of a struct takes. A struct is a record of words — an
 #: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
 FIELD_SIZE = 8
+#: A `Vec(T)` is a handle to three words: how many elements the buffer holds, how
+#: many of them the program has, and where they are. `capacity` is at 0 so that a
+#: table and a vector read their count from the same place.
+VEC_CAPACITY, VEC_LENGTH, VEC_DATA, VEC_SIZE = 0, 8, 16, 24
+#: A `HashMap(K, V)` and a `HashSet(T)` are the same handle: a power-of-two capacity,
+#: how many entries are live, how many of the rest are tombstones, and the slots.
+TABLE_CAPACITY, TABLE_LENGTH, TABLE_TOMBS, TABLE_SLOTS, TABLE_SIZE = 0, 8, 16, 24, 32
+#: One position of a map holds a key, the value it maps to and its state; a set
+#: holds a key and the state. The state is one byte: 0 empty, 1 live, 2 removed.
+MAP_KEY, MAP_VALUE, MAP_STATE, MAP_SLOT = 0, 8, 16, 24
+SET_KEY, SET_STATE, SET_SLOT = 0, 8, 16
+EMPTY, LIVE, TOMBSTONE = 0, 1, 2
 
 COMPARISONS = {"eq": "e", "ne": "ne", "lt": "l", "le": "le", "gt": "g", "ge": "ge"}
 #: `ucomisd` sets `cf`, `zf` and `pf`, and says nothing about `sf` or `of`, so the
@@ -120,7 +133,12 @@ class Generator:
         self.strings: dict[str, str] = {}
         self.rawns: dict[str, str] = {}
         self.slots: dict[str, int] = {}
+        self.types: dict[str, str] = {}
         self.current: ir.Function | None = None
+        #: Which builtins the program actually calls, cached: a routine that nothing
+        #: calls is not emitted, which is why `vec_pop` on a vector nobody pops from
+        #: does not drag the `Option` it answers into the module.
+        self._builtins: set[str] | None = None
         self._next_label = 0
 
     # -- units ---------------------------------------------------------------
@@ -214,6 +232,11 @@ class Generator:
             )
         self.current = function
         self.slots = self.assign_slots(function)
+        #: The type of every value this function defines, so an instruction can ask
+        #: what it is holding: an array and a vector read their length from different
+        #: words of their handle, and a container builtin's name is a fact about the
+        #: type of the value it is called on.
+        self.types = ir.value_types(function)
         symbol = ir.symbol(function)
         label = self.local("fn")
         self.code.label(label)
@@ -259,7 +282,8 @@ class Generator:
                                             ir.ArrayZeros, ir.Index, ir.Length,
                                             ir.SlotLoad, ir.StructNew, ir.Field,
                                             ir.Builtin, ir.TextCompare, ir.Variant,
-                                            ir.Tag, ir.Payload, ir.Slice)):
+                                            ir.Tag, ir.Payload, ir.Slice, ir.Slots,
+                                            ir.Live, ir.KeyAt)):
                     if value and value not in slots:
                         slots[value] = len(slots)
         return slots
@@ -353,6 +377,16 @@ class Generator:
             return
         if isinstance(instruction, ir.Length):
             self.length(instruction)
+            return
+        if isinstance(instruction, ir.Slots):
+            # `slots`, not `self.slots`: the frame's slots are the other `slots`.
+            self.table_slots(instruction)
+            return
+        if isinstance(instruction, ir.Live):
+            self.live(instruction)
+            return
+        if isinstance(instruction, ir.KeyAt):
+            self.key_at(instruction)
             return
         if isinstance(instruction, ir.Release):
             # The arena is never given memory back, so releasing is not an
@@ -613,14 +647,38 @@ class Generator:
         code.movzx_byte(RAX, RAX)
         self.store(instruction.value, RAX)
 
+    #: The container builtins, with how many arguments each takes and what it
+    #: answers. A name on this list and not on the native runtime's own list is a
+    #: gap in one backend, which is a refusal with the builtin's name.
+    CONTAINER_BUILTINS = {
+        "vec_new": 0, "vec_len": 1, "vec_capacity": 1, "vec_push": 2, "vec_pop": 1,
+        "vec_get": 2, "vec_set": 3,
+        "map_new": 0, "map_len": 1, "map_contains": 2, "map_get": 2, "map_set": 3,
+        "map_remove": 2, "map_clear": 1,
+        "set_new": 0, "set_len": 1, "set_contains": 2, "set_add": 2, "set_remove": 2,
+        "set_clear": 1,
+    }
+
     def builtin(self, instruction: ir.Builtin) -> None:
-        """One call, with the arguments in the ABI's registers, exactly like a function."""
-        routine = BUILTIN_ROUTINES.get(instruction.name)
+        """One call, with the arguments in the ABI's registers, exactly like a function.
+
+        A container builtin's name is a fact about the type of the value it is
+        called on: `vec_push` on a `Vec(i64)` and on a `Vec(str)` are two different
+        functions, because the element and the hash are known here rather than at
+        run time. Two of them — `len` and `capacity` — read a word of the handle and
+        cost no call at all, which is what the C backend prints for them too.
+        """
+        name = instruction.name
+        arity = self.CONTAINER_BUILTINS.get(name)
+        if arity is not None:
+            self.container_builtin(instruction, arity)
+            return
+        routine = BUILTIN_ROUTINES.get(name)
         if routine is None:
             raise make(
                 "E0901",
                 f"the native backend does not implement the builtin "
-                f"'{instruction.name}'",
+                f"'{name}'",
                 None,
                 hint="build with the C backend (the default): `nava build` without "
                      "--backend native",
@@ -628,13 +686,60 @@ class Generator:
         symbol, arity = routine
         if len(instruction.args) != arity:
             raise AssertionError(
-                f"the IR states {instruction.name} with {len(instruction.args)} "
+                f"the IR states {name} with {len(instruction.args)} "
                 f"argument(s); the runtime implements {arity}")
         for index, argument in enumerate(instruction.args):
             self.load(argument, ARGUMENT_REGISTERS[index])
         self.code.call(symbol)
         if instruction.typ != "void":
             self.store(instruction.value, RAX)
+
+    def container_builtin(self, instruction: ir.Builtin, arity: int) -> None:
+        """A `Vec`, `HashMap` or `HashSet` builtin: the family is the value's type."""
+        code = self.code
+        name = instruction.name
+        if len(instruction.args) != arity:
+            raise AssertionError(
+                f"the IR states {name} with {len(instruction.args)} argument(s); "
+                f"the runtime implements {arity}")
+        typ = (self.types.get(instruction.args[0]) if arity else instruction.typ)
+        if not (is_vec(typ) or is_map(typ) or is_set(typ)):
+            raise make(
+                "E0901",
+                f"the native backend does not implement '{name}' on a {typ}",
+                None,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
+        if arity == 0:
+            symbol = (f"nv_vec_{self.vector_tag(typ)}_new" if is_vec(typ)
+                      else self.table_symbol(typ, "new"))
+            code.call(symbol)
+            self.store(instruction.value, RAX)
+            return
+        if name in ("vec_len", "map_len", "set_len"):
+            self.load(instruction.args[0], RAX)
+            code.load(RAX, RAX, VEC_LENGTH)
+            self.store(instruction.value, RAX)
+            return
+        if name == "vec_capacity":
+            self.load(instruction.args[0], RAX)
+            code.load(RAX, RAX, VEC_CAPACITY)
+            self.store(instruction.value, RAX)
+            return
+        for index, argument in enumerate(instruction.args):
+            self.load(argument, ARGUMENT_REGISTERS[index])
+        code.call(self.container_routine(name, typ))
+        if instruction.typ != "void":
+            self.store(instruction.value, RAX)
+
+    def container_routine(self, name: str, typ: str) -> str:
+        """The symbol of one container builtin on one container type."""
+        kind = "vec" if is_vec(typ) else ("map" if is_map(typ) else "set")
+        routine = name[len(kind) + 1:]
+        if kind == "vec":
+            return f"nv_vec_{self.vector_tag(typ)}_{routine}"
+        return self.table_symbol(typ, "set" if routine == "set" else routine)
 
     def copy_helper_body(self, typ: str) -> None:
         """`nv_copy_<T>(rdi = record)` -> a copy of it, fields and nested structs.
@@ -774,18 +879,32 @@ class Generator:
         self.store(instruction.value, RAX)
 
     def length(self, instruction: ir.Length) -> None:
+        """How many elements: the first word of an array's handle, or a vector's second.
+
+        An array is `[length][elements]` and a vector, a map and a set are
+        `[capacity][length]…`, so where the count lives is a fact about the type and
+        this is the one place that knows it.
+        """
         self.load(instruction.base, RAX)
-        self.code.load(RAX, RAX, 0)
+        self.code.load(RAX, RAX, self.count_offset(self.types.get(instruction.base)))
         self.store(instruction.value, RAX)
+
+    @staticmethod
+    def count_offset(typ: str | None) -> int:
+        """Where a handle keeps the number of elements it holds."""
+        return 0 if typ is not None and typ.startswith("[") else VEC_LENGTH
 
     def index(self, instruction: ir.Index) -> None:
         code = self.code
+        base_type = self.types.get(instruction.base)
+        length_at = self.count_offset(base_type)
+        data_at = 8 if base_type is not None and base_type.startswith("[") else VEC_DATA
         self.load(instruction.base, RAX)
-        code.load(R11, RAX, 0)                  # the length
+        code.load(R11, RAX, length_at)          # the length
         self.load(instruction.index, R10)       # the index
         self.array_bounds()
         self.load(instruction.base, RAX)
-        code.load(R11, RAX, 8)                  # the elements
+        code.load(R11, RAX, data_at)            # the elements
         code.mov_imm(R9, ELEMENT_SIZE)
         code.imul_reg(R10, R9)
         code.add_reg(R11, R10)
@@ -794,8 +913,11 @@ class Generator:
 
     def index_store(self, instruction: ir.IndexStore) -> None:
         code = self.code
+        base_type = self.types.get(instruction.base)
+        length_at = self.count_offset(base_type)
+        data_at = 8 if base_type is not None and base_type.startswith("[") else VEC_DATA
         self.load(instruction.base, RAX)
-        code.load(R11, RAX, 0)
+        code.load(R11, RAX, length_at)
         self.load(instruction.index, R10)
         self.array_bounds()
         self.load(instruction.value, R9)
@@ -807,7 +929,7 @@ class Generator:
         # The copy is a call, and a call keeps nothing caller-saved: the base, the index
         # and the pointer into the elements are all read again afterwards.
         self.load(instruction.base, RAX)
-        code.load(R11, RAX, 8)
+        code.load(R11, RAX, data_at)
         self.load(instruction.index, R10)
         code.mov_imm(R8, ELEMENT_SIZE)
         code.imul_reg(R10, R8)
@@ -818,9 +940,44 @@ class Generator:
         """`check a[i]`: the bounds check on its own, so an order can be stated."""
         code = self.code
         self.load(instruction.base, RAX)
-        code.load(R11, RAX, 0)
+        code.load(R11, RAX, self.count_offset(self.types.get(instruction.base)))
         self.load(instruction.index, R10)
         self.array_bounds()
+
+    def table_slots(self, instruction: ir.Slots) -> None:
+        """How many positions a table has: the first word of its handle."""
+        self.load(instruction.base, RAX)
+        self.code.load(RAX, RAX, TABLE_CAPACITY)
+        self.store(instruction.value, RAX)
+
+    def live(self, instruction: ir.Live) -> None:
+        """Is there an entry in that position? The state byte says which."""
+        code = self.code
+        _key, _size, state = self.table_parts(self.types[instruction.base])
+        self.slot_address(instruction.base, instruction.index)
+        code.load_byte(RAX, R11, state)
+        code.mov_imm(R10, LIVE)
+        code.cmp_reg(RAX, R10)
+        code.setcc("e", RAX)
+        code.movzx_byte(RAX, RAX)
+        self.store(instruction.value, RAX)
+
+    def key_at(self, instruction: ir.KeyAt) -> None:
+        """The key stored in that position — the word a `for` over a table binds."""
+        self.slot_address(instruction.base, instruction.index)
+        self.code.load(RAX, R11, 0)
+        self.store(instruction.value, RAX)
+
+    def slot_address(self, base: str, index: str) -> None:
+        """R11 = the address of one slot: `slots + index * slot_size`."""
+        code = self.code
+        _key, size, _state = self.table_parts(self.types[base])
+        self.load(base, RAX)
+        code.load(R11, RAX, TABLE_SLOTS)
+        self.load(index, RCX)
+        code.mov_imm(R10, size)
+        code.imul_reg(RCX, R10)
+        code.add_reg(R11, RCX)
 
     def array_bounds(self) -> None:
         """The language's `Index` is checked: `0 <= index < length` or the program stops.
@@ -931,6 +1088,921 @@ class Generator:
         self.code.syscall()
 
     # -- the runtime ---------------------------------------------------------
+    # -- containers ---------------------------------------------------------
+    #
+    # A `Vec(T)` and a `HashMap`/`HashSet` are the two owning containers the
+    # language has, and they are the same shape here as in the C runtime: a
+    # handle to a buffer, and a table of slots probed by a hash of the key.
+    # What is generated per type is the family of routines, because the slot
+    # layout, the hash and the equality are facts about the key, not about the
+    # machine — and the alternative, a runtime that switches on a type tag at
+    # run time, would be a third implementation of the language's types.
+
+    def _mangled(self, text: str) -> str:
+        """`Vec(i64)` -> `Vec_i64`: the identifier-safe form of a type."""
+        return ("".join(character if character.isalnum() else "_" for character in text)
+                .replace("__", "_").strip("_"))
+
+    def vector_tag(self, typ: str) -> str:
+        return self._mangled(vec_element(typ))
+
+    def map_tag(self, typ: str) -> str:
+        key, value = map_parts(typ)
+        return f"{self._mangled(key)}_{self._mangled(value)}"
+
+    def set_tag(self, typ: str) -> str:
+        return self._mangled(set_element(typ))
+
+    def table_parts(self, typ: str) -> tuple[str, int, int]:
+        """A table's key type, its slot's size and where the state byte sits."""
+        if is_map(typ):
+            return map_parts(typ)[0], MAP_SLOT, MAP_STATE
+        return set_element(typ), SET_SLOT, SET_STATE
+
+    def enum_tag(self, enum: str, variant: str) -> int:
+        """The number the checker gave a variant — the module states the layout."""
+        variants = self.module.enums.get(enum)
+        if variants is None:
+            raise AssertionError(f"the module does not lay out the enum '{enum}'")
+        for index, (name, _types) in enumerate(variants):
+            if name == variant:
+                return index
+        raise AssertionError(f"the enum '{enum}' has no variant '{variant}'")
+
+    def option_record(self, enum: str, some: bool, value_slot: int = 0) -> None:
+        """An `Option(T)` as a record: the tag first, then the payload word.
+
+        The value is read from a slot of the caller's frame, because `nv_alloc`
+        keeps nothing caller-saved and the payload has to survive the call.
+        """
+        code = self.code
+        code.push(RDI)
+        code.mov_imm(RDI, FIELD_SIZE * 2)
+        code.call("nv_alloc")
+        code.pop(RDI)
+        code.mov_imm(R10, self.enum_tag(enum, "Some" if some else "None"))
+        code.store(RAX, 0, R10)
+        if some:
+            code.load(R11, RBP, value_slot)
+            code.store(RAX, FIELD_SIZE, R11)
+
+    def hash_key(self, key: str, register: int) -> None:
+        """`nv_hash_i64` or `nv_hash_str`: the C runtime's two functions, in asm."""
+        code = self.code
+        code.mov_reg(RDI, register)
+        code.call("nv_hash_str" if key == "str" else "nv_hash_i64")
+
+    def keys_equal(self, key: str, left: int, right: int) -> None:
+        """Set ZF when two keys are the same key, by value, however they are stored."""
+        code = self.code
+        if key == "str":
+            code.push(RDI)
+            code.push(RSI)
+            code.mov_reg(RDI, left)
+            code.mov_reg(RSI, right)
+            code.call("nv_str_cmp")
+            code.mov_reg(R11, RAX)
+            code.pop(RSI)
+            code.pop(RDI)
+            code.mov_imm(R10, 0)
+            code.cmp_reg(R11, R10)
+            return
+        code.cmp_reg(left, right)
+
+    # -- the vector family ---------------------------------------------------
+    def vec_new(self, typ: str) -> None:
+        """`nv_vec_T_new(void)`: an empty handle, zeroed by the arena."""
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.mov_imm(RDI, VEC_SIZE)
+        code.call("nv_alloc")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def vec_reserve(self, typ: str) -> None:
+        """`nv_vec_T_reserve(rdi = vector, rsi = needed)`: grow by doubling.
+
+        The capacity doubles until it holds what is needed, which is what makes a
+        run of pushes cost amortised constant time per element. The new buffer is
+        zeroed by the arena, and the elements are copied across by hand — a
+        `memcpy` is a library call and this runtime makes none.
+        """
+        code = self.code
+        sized, grow, sized_ok, move, copied, done = (
+            self.local("vec_sized"), self.local("vec_grow"), self.local("vec_alloc"),
+            self.local("vec_move"), self.local("vec_copied"), self.local("vec_done"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)                # the vector
+        code.store(RBP, -16, RSI)               # how many elements are needed
+        code.load(R11, RDI, VEC_CAPACITY)
+        code.cmp_reg(RSI, R11)
+        code.jcc("le", done)
+        code.load(R10, RBP, -8)
+        code.load(R10, R10, VEC_CAPACITY)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(R10, R11)
+        code.jcc("g", sized)
+        code.mov_imm(R10, 4)                    # the first capacity
+        code.label(sized)
+        code.label(grow)
+        code.load(R11, RBP, -16)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", sized_ok)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, 2)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(R10, RAX)
+        code.jmp(grow)
+        code.label(sized_ok)
+        # The limit is the array's: a buffer is an array of elements, and the
+        # message the C runtime prints for one that is too long is the language's.
+        within = self.local("grow_within")
+        code.mov_imm(R11, MAX_ELEMENTS)
+        code.cmp_reg(R10, R11)
+        code.jcc("le", within)
+        code.mov_reg(RDI, R10)
+        code.mov_imm(RSI, MAX_ELEMENTS)
+        code.mov_imm(RDX, 1)
+        code.call("nv_fail_pair")
+        code.label(within)
+        code.store(RBP, -24, R10)               # the capacity
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, ELEMENT_SIZE)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(RDI, RAX)
+        code.call("nv_alloc")
+        code.store(RBP, -32, RAX)               # the new buffer
+        code.load(R8, RBP, -32)                 # where the elements go
+        code.load(R9, RBP, -8)
+        code.load(RCX, R9, VEC_DATA)            # the old buffer
+        code.load(R11, R9, VEC_LENGTH)          # how many to move
+        code.label(move)
+        code.test_reg(R11)
+        code.jcc("e", copied)
+        code.load(RAX, RCX, 0)
+        code.store(R8, 0, RAX)
+        code.add_imm8(R8, ELEMENT_SIZE)
+        code.add_imm8(RCX, ELEMENT_SIZE)
+        code.dec(R11)
+        code.jmp(move)
+        code.label(copied)
+        code.load(R9, RBP, -8)
+        code.load(R10, RBP, -32)
+        code.store(R9, VEC_DATA, R10)
+        code.load(R10, RBP, -24)
+        code.store(R9, VEC_CAPACITY, R10)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def vec_push(self, typ: str) -> None:
+        """`nv_vec_T_push(rdi = vector, rsi = value)`: room for one more, then it."""
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(RAX, RDI, VEC_LENGTH)
+        code.mov_imm(R11, 1)
+        code.add_reg(RAX, R11)
+        self.overflow("add")
+        code.mov_reg(RSI, RAX)
+        code.call("nv_vec_" + self.vector_tag(typ) + "_reserve")
+        code.load(R9, RBP, -8)
+        code.load(R10, R9, VEC_DATA)
+        code.load(R11, R9, VEC_LENGTH)
+        code.load(RCX, RBP, -16)
+        code.mov_reg(RAX, R11)
+        code.mov_imm(R8, ELEMENT_SIZE)
+        code.imul_reg(RAX, R8)
+        code.add_reg(R10, RAX)
+        code.store(R10, 0, RCX)
+        code.load(R11, R9, VEC_LENGTH)
+        code.add_imm8(R11, 1)
+        code.store(R9, VEC_LENGTH, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def vec_pop(self, typ: str) -> None:
+        """`nv_vec_T_pop(rdi = vector)`: `Some(last)` or `None` when there is none."""
+        code = self.code
+        empty = self.local("vec_empty")
+        element = vec_element(typ)
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.load(R11, RDI, VEC_LENGTH)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", empty)
+        code.load(R9, RBP, -8)
+        code.load(R11, R9, VEC_LENGTH)
+        code.add_imm8(R11, -1)
+        code.store(R9, VEC_LENGTH, R11)
+        code.load(R10, R9, VEC_DATA)
+        code.mov_reg(RAX, R11)
+        code.mov_imm(R8, ELEMENT_SIZE)
+        code.imul_reg(RAX, R8)
+        code.add_reg(R10, RAX)
+        code.load(RAX, R10, 0)
+        code.store(RBP, -16, RAX)
+        self.option_record(f"Option({element})", True, -16)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(empty)
+        self.option_record(f"Option({element})", False)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def vec_get(self, typ: str) -> None:
+        """`nv_vec_T_get(rdi = vector, rsi = index)`: a checked read of one element."""
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        self.bounded(RSI, RDI, VEC_LENGTH)
+        code.load(R9, RBP, -8)
+        code.load(R10, R9, VEC_DATA)
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R8, ELEMENT_SIZE)
+        code.imul_reg(RAX, R8)
+        code.add_reg(R10, RAX)
+        code.load(RAX, R10, 0)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def vec_set(self, typ: str) -> None:
+        """`nv_vec_T_set(rdi = vector, rsi = index, rdx = value)`: a checked write.
+
+        The index is checked before the value is used, which is the language's
+        order: a write that cannot happen must not be observed doing anything.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.store(RBP, -24, RDX)
+        self.bounded(RSI, RDI, VEC_LENGTH)
+        code.load(R9, RBP, -8)
+        code.load(R10, R9, VEC_DATA)
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R8, ELEMENT_SIZE)
+        code.imul_reg(RAX, R8)
+        code.add_reg(R10, RAX)
+        code.load(RCX, RBP, -24)
+        code.store(R10, 0, RCX)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bounded(self, index: int, handle: int, length_offset: int) -> None:
+        """`0 <= index < length`, or the C runtime's message for the index."""
+        code = self.code
+        trap = self.local("bounded")
+        inside = self.local("inside")
+        code.load(R11, handle, length_offset)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(index, R10)
+        code.jcc("l", trap)
+        code.cmp_reg(index, R11)
+        code.jcc("ge", trap)
+        code.jmp(inside)
+        code.label(trap)
+        code.mov_reg(RDI, index)
+        code.mov_reg(RSI, R11)
+        code.xor_reg(RDX, RDX)
+        code.call("nv_fail_pair")
+        code.label(inside)
+
+    # -- the table family ----------------------------------------------------
+    def table_new(self, typ: str) -> None:
+        """`nv_map_T_new` / `nv_set_T_new`: an empty table, zeroed by the arena."""
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.mov_imm(RDI, TABLE_SIZE)
+        code.call("nv_alloc")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_find(self, typ: str) -> None:
+        """`nv_map_T_find(rdi = table, rsi = key)`: rax = the slot, rdx = whether it is there.
+
+        Linear probing from the hash, with a tombstone remembered on the way: a
+        removal may not break the probe chain of a key that collided with it, so
+        the first tombstone passed is where a new key goes and the search keeps
+        going until an empty slot says the key is not in the table.
+        """
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        probe, tomb, check, hit, gone = (self.local("find_probe"),
+                                         self.local("find_tomb"), self.local("find_check"),
+                                         self.local("find_hit"), self.local("find_gone"))
+        found, onward, missed = (self.local("find_found"), self.local("find_on"),
+                                 self.local("find_missed"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)                # the table
+        code.store(RBP, -16, RSI)               # the key
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.store(RBP, -24, R11)               # the capacity
+        code.add_imm8(R11, -1)
+        code.store(RBP, -32, R11)               # the mask
+        code.mov_imm(R11, -1)
+        code.store(RBP, -40, R11)               # the tombstone, or -1
+        code.mov_imm(R11, 0)
+        code.store(RBP, -48, R11)               # the step
+        self.hash_key(key, RSI)
+        code.mov_reg(R10, RAX)
+        code.load(R11, RBP, -32)
+        code.and_reg(R10, R11)
+        code.store(RBP, -56, R10)               # where the probe starts
+        code.label(probe)
+        code.load(R10, RBP, -48)
+        code.load(R11, RBP, -24)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", missed)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.load(R10, RBP, -56)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.store(RBP, -64, R9)                # the slot
+        code.load_byte(RAX, R9, state)
+        code.mov_imm(R11, EMPTY)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", gone)
+        code.mov_imm(R11, TOMBSTONE)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", tomb)
+        code.load(RDI, R9, 0)                   # the stored key
+        code.load(RSI, RBP, -16)
+        self.keys_equal(key, RDI, RSI)
+        code.jcc("e", found)
+        code.label(onward)
+        code.load(R10, RBP, -56)
+        code.add_imm8(R10, 1)
+        code.load(R11, RBP, -32)
+        code.and_reg(R10, R11)
+        code.store(RBP, -56, R10)
+        code.load(R10, RBP, -48)
+        code.add_imm8(R10, 1)
+        code.store(RBP, -48, R10)
+        code.jmp(probe)
+        code.label(tomb)
+        code.load(R11, RBP, -40)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("ge", onward)
+        code.load(R10, RBP, -56)
+        code.store(RBP, -40, R10)
+        code.jmp(onward)
+        code.label(gone)
+        # An empty slot ends the search: the key is not here, and it belongs where
+        # the first tombstone on the way was — not here, because a tombstone is
+        # where a key that collided with it would have probed first.
+        code.load(RAX, RBP, -40)                # the first tombstone, or -1
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ge", check)
+        code.load(RAX, RBP, -56)                # no tombstone: the empty slot
+        code.label(check)
+        code.mov_imm(RDX, 0)
+        code.jmp(hit)
+        code.label(found)
+        code.load(RAX, RBP, -56)
+        code.mov_imm(RDX, 1)
+        code.jmp(hit)
+        code.label(missed)
+        code.load(RAX, RBP, -40)
+        code.mov_imm(RDX, 0)
+        code.label(hit)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_reserve(self, typ: str) -> None:
+        """`nv_map_T_reserve(rdi = table, rsi = wanted)`: grow and rehash.
+
+        Three quarters full, counting tombstones, is when the table doubles. The
+        live entries are moved by probing again into the new slots, so a key
+        whose chain was broken by a removal finds its place; nothing is copied
+        twice and the old slots are simply left to the arena.
+        """
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        sized, grow, move, skip, scan, moved, done = (
+            self.local("res_sized"), self.local("res_grow"), self.local("res_move"),
+            self.local("res_skip"), self.local("res_scan"), self.local("res_moved"),
+            self.local("res_done"))
+        have, within = self.local("res_have"), self.local("res_within")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(80)
+        code.store(RBP, -8, RDI)                # the table
+        code.store(RBP, -16, RSI)               # how many entries are wanted
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", sized)
+        code.load(R9, RBP, -8)
+        code.load(RAX, R9, TABLE_LENGTH)
+        code.load(R11, R9, TABLE_TOMBS)
+        code.add_reg(RAX, R11)
+        code.add_imm8(RAX, 1)
+        code.mov_imm(R11, 4)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(R10, RAX)
+        code.load(RAX, R9, TABLE_CAPACITY)
+        code.mov_imm(R11, 3)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.cmp_reg(R10, RAX)
+        code.jcc("le", done)
+        code.label(sized)
+        code.load(R10, RBP, -8)
+        code.load(R10, R10, TABLE_CAPACITY)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(R10, R11)
+        code.jcc("g", have)
+        code.mov_imm(R10, 8)                    # the first capacity
+        code.label(have)
+        code.label(grow)
+        code.load(R9, RBP, -8)
+        code.load(RAX, RBP, -16)
+        code.load(R11, R9, TABLE_TOMBS)
+        code.add_reg(RAX, R11)
+        code.add_imm8(RAX, 1)
+        code.mov_imm(R11, 4)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(RCX, R10)
+        code.mov_imm(R11, 3)
+        code.imul_reg(RCX, R11)
+        self.overflow("mul")
+        code.cmp_reg(RAX, RCX)
+        code.jcc("le", move)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, 2)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(R10, RAX)
+        code.jmp(grow)
+        code.label(move)
+        code.mov_imm(R11, MAX_ELEMENTS)
+        code.cmp_reg(R10, R11)
+        code.jcc("le", within)
+        code.mov_reg(RDI, R10)
+        code.mov_imm(RSI, MAX_ELEMENTS)
+        code.mov_imm(RDX, 1)
+        code.call("nv_fail_pair")
+        code.label(within)
+        code.store(RBP, -24, R10)               # the capacity
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(RDI, RAX)
+        code.call("nv_alloc")
+        code.store(RBP, -32, RAX)               # the new slots
+        code.load(R9, RBP, -8)
+        code.load(R11, R9, TABLE_SLOTS)
+        code.store(RBP, -40, R11)               # the old slots
+        code.load(R11, R9, TABLE_CAPACITY)
+        code.store(RBP, -48, R11)               # the old capacity
+        code.load(R10, RBP, -32)
+        code.store(R9, TABLE_SLOTS, R10)
+        code.load(R10, RBP, -24)
+        code.store(R9, TABLE_CAPACITY, R10)
+        code.mov_imm(R10, 0)
+        code.store(R9, TABLE_TOMBS, R10)
+        code.store(RBP, -56, R10)               # the index
+        code.label(scan)
+        code.load(R10, RBP, -56)
+        code.load(R11, RBP, -48)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", moved)
+        code.load(R9, RBP, -40)
+        code.load(R10, RBP, -56)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.store(RBP, -64, R9)                # the old slot
+        code.load_byte(RAX, R9, state)
+        code.mov_imm(R11, LIVE)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", skip)
+        code.load(RDI, RBP, -8)
+        code.load(RSI, R9, 0)
+        code.call(self.table_symbol(typ, "find"))
+        code.load(R9, RBP, -64)
+        code.load(R10, RBP, -32)
+        code.mov_reg(R11, RAX)
+        code.mov_imm(R8, size)
+        code.imul_reg(R11, R8)
+        code.add_reg(R10, R11)
+        code.load(RCX, R9, 0)
+        code.store(R10, MAP_KEY, RCX)
+        if is_map(typ):
+            code.load(RCX, R9, MAP_VALUE)
+            code.store(R10, MAP_VALUE, RCX)
+        code.load_byte(RCX, R9, state)
+        code.store_byte(R10, state, RCX)
+        code.label(skip)
+        code.load(R10, RBP, -56)
+        code.add_imm8(R10, 1)
+        code.store(RBP, -56, R10)
+        code.jmp(scan)
+        code.label(moved)
+        code.jmp(done)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_set(self, typ: str) -> None:
+        """`nv_map_T_set(rdi = table, rsi = key, rdx = value)`: an insert or an overwrite."""
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        known, place = self.local("set_known"), self.local("set_place")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.store(RBP, -24, RDX)
+        code.load(RAX, RDI, TABLE_LENGTH)
+        code.add_imm8(RAX, 1)
+        self.overflow("add")
+        code.mov_reg(RSI, RAX)
+        code.call(self.table_symbol(typ, "reserve"))
+        code.load(RDI, RBP, -8)
+        code.load(RSI, RBP, -16)
+        self.call_find(typ)
+        code.store(RBP, -32, RAX)               # the slot index
+        code.store(RBP, -40, RDX)               # whether the key is there
+        code.load(R11, RBP, -40)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("ne", known)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.load(R10, RBP, -32)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.store(RBP, -48, R9)
+        code.load_byte(RAX, R9, state)
+        code.mov_imm(R11, TOMBSTONE)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", place)
+        code.load(R10, RBP, -8)
+        code.load(R11, R10, TABLE_TOMBS)
+        code.add_imm8(R11, -1)
+        code.store(R10, TABLE_TOMBS, R11)
+        code.load(R9, RBP, -48)
+        code.label(place)
+        code.load(RCX, RBP, -16)
+        code.store(R9, MAP_KEY, RCX)
+        if is_map(typ):
+            code.load(RCX, RBP, -24)
+            code.store(R9, MAP_VALUE, RCX)
+        code.mov_imm(RCX, LIVE)
+        code.store_byte(R9, state, RCX)
+        code.load(R10, RBP, -8)
+        code.load(R11, R10, TABLE_LENGTH)
+        code.add_imm8(R11, 1)
+        self.overflow("add")
+        code.store(R10, TABLE_LENGTH, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(known)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.load(R10, RBP, -32)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        if is_map(typ):
+            code.load(RCX, RBP, -24)
+            code.store(R9, MAP_VALUE, RCX)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_get(self, typ: str) -> None:
+        """`nv_map_T_get(rdi = table, rsi = key)`: `Some(value)` or `None`."""
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        missing = self.local("get_missing")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", missing)
+        code.load(RDI, RBP, -8)
+        code.load(RSI, RBP, -16)
+        self.call_find(typ)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RDX, R11)
+        code.jcc("e", missing)
+        code.store(RBP, -24, RAX)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.load(RSI, R9, MAP_VALUE)
+        code.store(RBP, -32, RSI)
+        self.option_record(f"Option({map_parts(typ)[1]})", True, -32)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(missing)
+        self.option_record(f"Option({map_parts(typ)[1]})", False)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_contains(self, typ: str) -> None:
+        """`nv_map_T_contains(rdi = table, rsi = key)`: a bool, and nothing else."""
+        code = self.code
+        missing = self.local("has_missing")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", missing)
+        code.load(RDI, RBP, -8)
+        code.load(RSI, RBP, -16)
+        self.call_find(typ)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RDX, R11)
+        code.setcc("ne", RAX)
+        code.movzx_byte(RAX, RAX)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(missing)
+        code.mov_imm(RAX, 0)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_remove(self, typ: str) -> None:
+        """`nv_map_T_remove(rdi = table, rsi = key)`: a bool — whether it was there.
+
+        The entry becomes a tombstone rather than an empty slot, because an empty
+        slot would end the probe chain of a key that had collided with this one.
+        """
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        missing = self.local("del_missing")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", missing)
+        code.load(RDI, RBP, -8)
+        code.load(RSI, RBP, -16)
+        self.call_find(typ)
+        code.store(RBP, -24, RAX)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RDX, R11)
+        code.jcc("e", missing)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.load(R10, RBP, -24)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.mov_imm(RCX, TOMBSTONE)
+        code.store_byte(R9, state, RCX)
+        code.load(R10, RBP, -8)
+        code.load(R11, R10, TABLE_LENGTH)
+        code.add_imm8(R11, -1)
+        code.store(R10, TABLE_LENGTH, R11)
+        code.load(R11, R10, TABLE_TOMBS)
+        code.add_imm8(R11, 1)
+        self.overflow("add")
+        code.store(R10, TABLE_TOMBS, R11)
+        code.mov_imm(RAX, 1)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(missing)
+        code.mov_imm(RAX, 0)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def table_clear(self, typ: str) -> None:
+        """`nv_map_T_clear(rdi = table)`: every slot empty again, the capacity kept."""
+        code = self.code
+        key, size, state = self.table_parts(typ)
+        wipe = self.local("clear_wipe")
+        wiped = self.local("clear_wiped")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)
+        code.load(R11, RDI, TABLE_CAPACITY)
+        code.store(RBP, -16, R11)
+        code.mov_imm(R11, 0)
+        code.store(RBP, -24, R11)               # the index
+        code.label(wipe)
+        code.load(R10, RBP, -24)
+        code.load(R11, RBP, -16)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", wiped)
+        code.load(R9, RBP, -8)
+        code.load(R9, R9, TABLE_SLOTS)
+        code.load(R10, RBP, -24)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, size)
+        code.imul_reg(RAX, R11)
+        code.add_reg(R9, RAX)
+        code.mov_imm(RCX, EMPTY)
+        code.store_byte(R9, state, RCX)
+        code.load(R10, RBP, -24)
+        code.add_imm8(R10, 1)
+        code.store(RBP, -24, R10)
+        code.jmp(wipe)
+        code.label(wiped)
+        code.load(R9, RBP, -8)
+        code.mov_imm(R10, 0)
+        code.store(R9, TABLE_LENGTH, R10)
+        code.store(R9, TABLE_TOMBS, R10)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def uses_builtin(self, name: str) -> bool:
+        """Does the program call this builtin? Decided by the IR, not by the type."""
+        if self._builtins is None:
+            names: set[str] = set()
+            for function in self.module.functions:
+                for block in function.blocks:
+                    for instruction in block.instructions:
+                        if isinstance(instruction, ir.Builtin):
+                            names.add(instruction.name)
+            self._builtins = names
+        return name in self._builtins
+
+    def table_symbol(self, typ: str, name: str) -> str:
+        """`nv_map_str_i64_find`: one table type's one routine."""
+        kind = "map" if is_map(typ) else "set"
+        tag = self.map_tag(typ) if is_map(typ) else self.set_tag(typ)
+        return f"nv_{kind}_{tag}_{name}"
+
+    def call_find(self, typ: str) -> None:
+        """Call this table's `find`: rax = the slot, rdx = whether the key is there."""
+        self.code.call(self.table_symbol(typ, "find"))
+
+    def table_routines(self, typ: str) -> list[tuple[str, object]]:
+        """The family of routines one table type needs, in the order they are emitted."""
+        if is_map(typ):
+            return [("new", self.table_new), ("find", self.table_find),
+                    ("reserve", self.table_reserve), ("get", self.table_get),
+                    ("set", self.table_set), ("contains", self.table_contains),
+                    ("remove", self.table_remove), ("clear", self.table_clear)]
+        return [("new", self.table_new), ("find", self.table_find),
+                ("reserve", self.table_reserve), ("add", self.table_set),
+                ("contains", self.table_contains), ("remove", self.table_remove),
+                ("clear", self.table_clear)]
+
+    def hash_i64(self) -> None:
+        """`nv_hash_i64(rdi = value)`: the C runtime's mixer, in asm.
+
+        The two hashes are the language's own: a 64-bit mixer for an integer and
+        FNV-1a over the bytes for a string. Which one a key uses is decided by the
+        key's type where the table is emitted, so a table of `str` and a table of
+        `i64` never disagree about where a key went.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.mov_imm(R11, 33)
+        code.load(RAX, RBP, -8)
+        code.shr_imm(RAX, 33)
+        code.load(R11, RBP, -8)
+        code.xor_reg(RAX, R11)
+        code.store(RBP, -8, RAX)
+        code.mov_imm(R11, 0xff51afd7ed558ccd)
+        code.load(RAX, RBP, -8)
+        code.mov_reg(R10, R11)
+        code.imul_reg(RAX, R10)
+        code.store(RBP, -8, RAX)
+        code.load(RAX, RBP, -8)
+        code.shr_imm(RAX, 33)
+        code.load(R11, RBP, -8)
+        code.xor_reg(RAX, R11)
+        code.store(RBP, -8, RAX)
+        code.mov_imm(R11, 0xc4ceb9fe1a85ec53)
+        code.load(RAX, RBP, -8)
+        code.mov_reg(R10, R11)
+        code.imul_reg(RAX, R10)
+        code.store(RBP, -8, RAX)
+        code.load(RAX, RBP, -8)
+        code.shr_imm(RAX, 33)
+        code.load(R11, RBP, -8)
+        code.xor_reg(RAX, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def hash_str(self) -> None:
+        """`nv_hash_str(rdi = string)`: FNV-1a over the bytes, as the C runtime does."""
+        code = self.code
+        loop, done = self.local("hash_loop"), self.local("hash_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)                # the string
+        code.mov_imm(R11, 0xcbf29ce484222325)
+        code.store(RBP, -16, R11)               # the hash
+        code.mov_imm(R11, 0)
+        code.store(RBP, -24, R11)               # the index
+        code.load(R11, RBP, -8)
+        code.mov_imm(R10, 0)
+        code.cmp_reg(R11, R10)
+        code.jcc("e", done)
+        code.load(R11, R11, 0)
+        code.store(RBP, -32, R11)               # the length
+        code.load(R11, RBP, -8)
+        code.lea(R11, R11, 8)
+        code.store(RBP, -40, R11)               # the bytes
+        code.label(loop)
+        code.load(R10, RBP, -24)
+        code.load(R11, RBP, -32)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", done)
+        code.load(RCX, RBP, -40)
+        code.load(R10, RBP, -24)
+        code.mov_reg(RAX, R10)
+        code.add_reg(RCX, RAX)
+        code.load_byte(RAX, RCX, 0)
+        code.load(R11, RBP, -16)
+        code.xor_reg(RAX, R11)
+        code.store(RBP, -16, RAX)
+        code.mov_imm(R11, 0x100000001b3)
+        code.load(RAX, RBP, -16)
+        code.mov_reg(R10, R11)
+        code.imul_reg(RAX, R10)
+        code.store(RBP, -16, RAX)
+        code.load(R10, RBP, -24)
+        code.add_imm8(R10, 1)
+        code.store(RBP, -24, R10)
+        code.jmp(loop)
+        code.label(done)
+        code.load(RAX, RBP, -16)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
     def runtime_unit(self):
         """`_start`, the printers, `nv_fail` and the trace, in their own unit."""
         self.builder = UnitBuilder("runtime")
@@ -962,6 +2034,46 @@ class Generator:
                              ("nv_read_i64", self.read_i64_helper)):
             self.runtime_function(symbol, body)
         self.bn_runtime()
+        # The two hashes are shared: which one a key uses is decided by the key's
+        # type, so a `HashMap(str, i64)` and a `HashSet(i64)` in one program need one
+        # copy of each and no more.
+        keys = {self.table_parts(typ)[0] for typ in self.module.tables}
+        if "i64" in keys:
+            self.runtime_function("nv_hash_i64", self.hash_i64)
+        if "str" in keys:
+            self.runtime_function("nv_hash_str", self.hash_str)
+        for typ in self.module.vectors:
+            # `reserve` is not a builtin the program calls — it is what `push`
+            # needs — so the family is emitted from what the program uses rather
+            # than from the shape of the type.
+            growing = self.uses_builtin("vec_push") or self.uses_builtin("vec_set")
+            for name, body in (("new", self.vec_new), ("reserve", self.vec_reserve),
+                               ("push", self.vec_push), ("pop", self.vec_pop),
+                               ("get", self.vec_get), ("set", self.vec_set)):
+                if name == "reserve" and not growing:
+                    continue
+                if name != "reserve" and not self.uses_builtin(f"vec_{name}"):
+                    continue
+                self.runtime_function(f"nv_vec_{self.vector_tag(typ)}_{name}",
+                                      lambda body=body, typ=typ: body(typ))
+        for typ in self.module.tables:
+            kind = "map" if is_map(typ) else "set"
+            grows = self.uses_builtin(f"{kind}_set" if kind == "map" else "set_add")
+            probes = grows or any(
+                self.uses_builtin(f"{kind}_{name}")
+                for name in ("get", "contains", "remove"))
+            for name, body in self.table_routines(typ):
+                if name == "new":
+                    pass
+                elif name == "reserve" and not grows:
+                    continue
+                elif name == "find" and not probes:
+                    continue
+                elif name not in ("new", "reserve", "find") and \
+                        not self.uses_builtin(f"{kind}_{name}"):
+                    continue
+                self.runtime_function(self.table_symbol(typ, name),
+                                      lambda body=body, typ=typ: body(typ))
         for typ in self.copy_types():
             # One copier per struct type, because a copy is as deep as the type is
             # nested and the depth is known here rather than at run time.

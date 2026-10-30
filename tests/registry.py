@@ -1388,6 +1388,27 @@ REGISTERED_TESTS = {
         "test_the_floats_fixture_agrees_with_the_c_backend",
         "test_the_shortest_form_is_not_the_exact_expansion",
     },
+    #: N14k: `Vec(T)`, `HashMap(K, V)` and `HashSet(T)`. A vector grows by doubling,
+    #: and a table is probed by a hash with a tombstone that keeps the chain of a key
+    #: that collided with a removed one — so the evidence is generated sequences long
+    #: enough to grow the table five times, not fixtures that fit in one table.
+    "NativeVectorTests": {
+        "test_a_vector_agrees_with_the_c_backend",
+        "test_growth_keeps_every_element",
+        "test_the_bounds_trap_is_the_c_runtime_s",
+        "test_pop_on_an_empty_vector_answers_none",
+        "test_a_vector_of_strings_agrees",
+        "test_a_for_over_a_vector_is_the_same_walk_as_over_an_array",
+    },
+    "NativeTableTests": {
+        "test_the_two_fixtures_agree_with_the_c_backend",
+        "test_a_generated_sequence_agrees_on_every_answer",
+        "test_the_iteration_order_is_the_table_s_own_and_the_two_agree",
+        "test_a_str_key_compares_by_value_and_not_by_its_address",
+        "test_a_removed_key_does_not_bury_one_that_collided_with_it",
+        "test_a_for_over_a_table_is_slots_live_and_key",
+        "test_the_table_states_the_types_it_holds",
+    },
     "NativeRuntimeTests": {
         "test_a_bool_prints_as_true_or_false",
         "test_a_string_is_written_byte_for_byte_and_then_a_newline",
@@ -1733,6 +1754,8 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeSliceTests"),
                                (test_native, "NativeStructArrayTests"),
                                (test_native, "NativeF64Tests"),
+                               (test_native, "NativeVectorTests"),
+                               (test_native, "NativeTableTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),
                                (test_native, "NativeLinkerTests"),
