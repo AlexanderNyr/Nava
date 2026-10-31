@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+N14p: **`read_f64`** — a decimal read into a double, with no `strtod` to ask.
+
+- The digits become a base-10^9 bignum and the power of ten the exponent asks for is
+  met with a shift and a whole number of limbs instead of a division, which is exact
+  where a division by ten would not be. What is still too wide is divided down by
+  powers of two until fifty-six bits are left, and those — with the bit that says
+  whether anything fell away below them — decide the rounding, a tie going to the even
+  neighbour.
+- The six refusals are the C runtime's, in its order and with its words, including the
+  one it only reaches after `strtod` has answered: a value above `DBL_MAX` is
+  `f64 input is outside the f64 range` and not `inf`. A token of 512 bytes or more is
+  `f64 input token is too long`, because that is the token the C runtime has.
+- Four bignum routines (`nv_bn_div_small`, `nv_bn_drop_limbs`, `nv_bn_shl`,
+  `nv_bn_bitlen_low`) are the reader's alone and are emitted only for a program that
+  calls `read_f64`.
+
 N14o: **`chars_len` and `str_from_f64`** — characters, and the text of a float.
 
 - `chars_len(s)` counts **characters**, not bytes: it decodes UTF-8 and refuses the

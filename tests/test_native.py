@@ -315,8 +315,10 @@ def build_both(source: pathlib.Path, directory: pathlib.Path) -> tuple[pathlib.P
     return c_binary, native_binary
 
 
-def run_binary(path: pathlib.Path) -> tuple[str, str, int]:
-    result = subprocess.run([str(path)], capture_output=True, text=True, timeout=120)
+def run_binary(path: pathlib.Path, stdin: str = "") -> tuple[str, str, int]:
+    """Run a built binary; `stdin` is what the program reads, if it reads."""
+    result = subprocess.run([str(path)], input=stdin, capture_output=True,
+                            text=True, timeout=120)
     return result.stdout, result.stderr, result.returncode
 
 
@@ -671,10 +673,33 @@ fn main() -> i64 {
     #: refusal is `E0901` with the builtin's own name, from the generator and not from
     #: the lowering: the IR says what the program means, and the backend says what it
     #: cannot compile.
+    #: The filesystem is the next increment after the reader, so the family is
+    #: four strong again the moment `read_f64` leaves it: a refusal that stays a
+    #: refusal is the point of this table, and an empty table would be a pass
+    #: that asserts nothing. `list_dir` is not here only because it carries a
+    #: vector, and the table's own assertion counts the builtins in a program.
     CODEGEN_REFUSALS = {
-        "builtin 'read_f64'": """\
+        "builtin 'read_file'": """\
 fn main() -> i64 {
-    print(read_f64())
+    print(read_file("notes.txt"))
+    return 0
+}
+""",
+        "builtin 'write_file'": """\
+fn main() -> i64 {
+    write_file("notes.txt", "hello")
+    return 0
+}
+""",
+        "builtin 'path_exists'": """\
+fn main() -> i64 {
+    print(path_exists("notes.txt"))
+    return 0
+}
+""",
+        "builtin 'file_size'": """\
+fn main() -> i64 {
+    print(file_size("notes.txt"))
     return 0
 }
 """,
@@ -4428,6 +4453,232 @@ class NativeSplitArgumentClockTests(unittest.TestCase):
         self.assertEqual(native_out, c_out)
         self.assertEqual(native_out[2], 0)
         self.assertTrue(native_out[0].strip(), "self_test printed nothing")
+
+
+class NativeReadFloatTests(unittest.TestCase):
+    """`read_f64`: a decimal read into a double, with no `strtod` to ask.
+
+    This is the mirror of N14j. Printing a float is one decimal conversion
+    written twice — once by `snprintf`, once on base-10^9 bignums — and reading
+    one is the same conversion run backwards: the C runtime validates a token
+    and hands it to `strtod`, and the native runtime has to answer the same
+    double from the same digits with nothing but integer arithmetic. A shortest
+    text is not enough to test that, because the interesting cases are the ones
+    no shortest text ever writes: a tie, where the digit run has to be carried
+    past the fifty-third bit before anyone can say which way it goes; a
+    subnormal, where the bits kept are fewer than the window and the shift is a
+    thousand wide; and a token so long that the power of ten alone is ninety
+    limbs.
+
+    So the oracle is the other backend on a corpus, and Python's own `float` is
+    a third witness on the answers: a value read and printed again has to come
+    back as the value that was written. The refusals are part of the
+    comparison too — six of them, in the C runtime's order and with its words,
+    because a reader that answered `0.0` where the C runtime refuses would agree
+    with nothing and fail no test.
+    """
+
+    EDITION = "edition 2;\n"
+
+    @classmethod
+    def setUpClass(cls):
+        """One program that reads one float, built once and asked many things."""
+        directory = pathlib.Path(tempfile.mkdtemp())
+        cls.addClassCleanup(shutil.rmtree, directory, True)
+        path = write_source(directory, "reader", cls.EDITION + """\
+fn main() -> i64 {
+    print(read_f64())
+    return 0
+}
+""")
+        cls.c_binary, cls.native_binary = build_both(path, directory)
+
+    def reads(self, text: str) -> tuple[str, str, int]:
+        """One token on stdin: the two backends answer, and answer the same."""
+        c_out = run_binary(self.c_binary, text + "\n")
+        native_out = run_binary(self.native_binary, text + "\n")
+        self.assertEqual(native_out, c_out)
+        return native_out
+
+    def reads_as(self, text: str, expected: str) -> None:
+        """One token, and the one answer both backends have to give it."""
+        out = self.reads(text)
+        self.assertEqual(out[2], 0, out[1])
+        self.assertEqual(out[0], expected + "\n")
+
+    def refuses(self, text: str, message: str) -> None:
+        """A token neither backend takes: the same words and the same status."""
+        out = self.reads(text)
+        self.assertEqual(out[2], 1)
+        self.assertEqual(out[0], "")
+        self.assertEqual(out[1], f"nava runtime error: {message}\n")
+
+    def reads_many(self, values: list[str], name: str = "many") -> list[str]:
+        """A corpus in one program, fed on stdin, answered by both backends."""
+        body = "".join("    print(read_f64())\n" for _ in values)
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, self.EDITION + f"""\
+fn main() -> i64 {{
+{body}    return 0
+}}
+""")
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary, "\n".join(values) + "\n")
+            native_out = run_binary(native_binary, "\n".join(values) + "\n")
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0, native_out[1])
+        return native_out[0].splitlines()
+
+    def decimal_corpus(self, count: int) -> list[str]:
+        """`count` seeded decimals: writes of values, and plain random digits."""
+        import random
+
+        rng = random.Random(20261031)
+        values = []
+        # Every power of two in the type's range is a place where the gap below
+        # is half the gap above, which is where a rounding rule shows itself.
+        for exponent in range(-1074, 1024, 3):
+            values.append(repr(2.0 ** exponent if exponent >= -1022
+                               else float.fromhex("0x1p%d" % exponent)))
+        while len(values) < count - count // 2:
+            digits = "".join(rng.choice("0123456789")
+                             for _ in range(rng.randint(1, 38)))
+            if rng.random() < 0.7:
+                point = rng.randint(0, len(digits))
+                digits = digits[:point] + "." + digits[point:]
+            if rng.random() < 0.6:
+                digits += rng.choice("eE") + rng.choice(("", "+", "-")) + \
+                    str(rng.randint(0, 330))
+            values.append(("-" if rng.random() < 0.3 else "") + digits)
+        return values[:count]
+
+    def test_a_corpus_of_decimals_reads_identically(self):
+        """Four hundred seeded decimals, and Python as a third witness.
+
+        The two backends agreeing is the differential; `float(line) == float(text)`
+        is the stronger statement that both are correctly rounded, because
+        CPython's own decimal reader is.
+        """
+        values = self.decimal_corpus(400)
+        lines = self.reads_many(values, name="corpus")
+        self.assertEqual(len(lines), len(values))
+        for text, line in zip(values, lines):
+            with self.subTest(text=text):
+                self.assertEqual(float(line), float(text))
+
+    def test_the_shortest_text_of_a_value_reads_back_as_that_value(self):
+        """`repr(v)` in, `repr(v)` out: the round trip, both directions."""
+        import random
+        import struct
+
+        rng = random.Random(4242)
+        values = [1.0, 0.0, -0.0, 0.1, 1.5, 5e-324, 1.7976931348623157e308,
+                  2.2250738585072014e-308, 1e-300, 1e10, 123456789.123456789]
+        while len(values) < 120:
+            bits = rng.getrandbits(64)
+            value = struct.unpack("<d", struct.pack("<Q", bits))[0]
+            if value == value and abs(value) != float("inf"):
+                values.append(value)
+        texts = [repr(value) for value in values]
+        lines = self.reads_many(texts, name="roundtrip")
+        for value, text, line in zip(values, texts, lines):
+            with self.subTest(text=text):
+                self.assertEqual(float(line), value)
+                self.assertEqual(line, repr(value))
+
+    def test_a_tie_goes_to_the_even_neighbour(self):
+        """The exact half-way decimal, and one digit either side of it.
+
+        `1.0` and the next double after it are one ulp apart, so the decimal
+        exactly between them is a tie, and a tie goes to the even neighbour —
+        which is `1.0`, whose significand ends in a zero. The same question at
+        the bottom of the range is the half of the smallest subnormal, and the
+        even neighbour there is zero.
+        """
+        import math
+        from decimal import Decimal, getcontext
+
+        getcontext().prec = 120
+        one = 1.0
+        up = math.nextafter(one, 2.0)
+        mid = (Decimal(one) + Decimal(up)) / 2
+        self.reads_as(str(mid), "1.0")              # the tie itself
+        self.reads_as(str(mid) + "1", repr(up))     # a hair above it
+        self.reads_as(str(mid)[:-1] + "1", "1.0")   # a hair below it
+        smallest = Decimal(5e-324)
+        half = smallest / 2
+        tiny = Decimal(1).scaleb(-360)
+        self.reads_as(format(half, "f"), "0.0")
+        self.reads_as(format(half + tiny, "f"), "5e-324")
+        self.reads_as(format(half - tiny, "f"), "0.0")
+
+    def test_the_exponent_moves_the_point_and_nothing_else(self):
+        """Fifteen ways to write two values; the digits are the same every time."""
+        for text, expected in (("1.5", "1.5"), ("15e-1", "1.5"),
+                               ("0.15e1", "1.5"), ("0.015e2", "1.5"),
+                               ("1.5e0", "1.5"), ("1.5E0", "1.5"),
+                               ("1.5e+0", "1.5"), ("1.5e-0", "1.5"),
+                               ("+1.5", "1.5"), ("-1.5", "-1.5"),
+                               ("-1.5e-3", "-0.0015"), ("1.", "1.0"),
+                               (".5", "0.5"), ("0001.5000", "1.5"),
+                               ("1e00000000000000000000005", "100000.0")):
+            with self.subTest(text=text):
+                self.reads_as(text, expected)
+
+    def test_the_ways_a_token_is_not_a_float_are_the_same_refusal(self):
+        """The C runtime's six answers, in its order, with its words."""
+        self.refuses("abc", "expected a decimal f64")
+        self.refuses("1.2.3", "invalid character in f64 input")
+        self.refuses("1.5e", "malformed exponent in f64 input")
+        self.refuses("1.5e+", "malformed exponent in f64 input")
+        self.refuses("nan", "expected a decimal f64")
+        self.refuses("0x10", "invalid character in f64 input")
+
+    def test_a_value_past_the_range_is_the_c_runtimes_refusal(self):
+        """Above `DBL_MAX` is not infinity here: it is a failure, as in C."""
+        for text in ("1e309", "-1e309", "1e100000", "1.8e308",
+                     "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792e308"):
+            with self.subTest(text=text[:24]):
+                self.refuses(text, "f64 input is outside the f64 range")
+        # Exactly `DBL_MAX` is inside the range, and the C runtime takes it.
+        self.reads_as("1.7976931348623157e308", "1.7976931348623157e+308")
+
+    def test_a_token_longer_than_the_c_runtimes_is_refused_by_both(self):
+        """512 bytes is where the C runtime stops; the reader stops there too."""
+        # 511 characters is still a token: this one is 10**-509, which
+        # underflows, and underflow is a value rather than a refusal.
+        self.reads_as("0." + "0" * 508 + "1", "0.0")
+        # And 502, of a significand five hundred digits long.
+        self.reads_as("0." + "1" * 500, "0.1111111111111111")
+        for length in (512, 513, 900):
+            with self.subTest(length=length):
+                self.refuses("1" + "0" * (length - 1),
+                             "f64 input token is too long")
+
+    def test_the_end_of_the_input_is_a_refusal_and_not_a_zero(self):
+        """Nothing left to read is not `0.0`; it is the C runtime's own answer."""
+        self.refuses("", "expected an f64, reached end of input")
+
+    def test_a_reading_past_the_last_token_does_not_answer_zero(self):
+        """Two readings, one token: the second is a refusal on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "twice", self.EDITION + """\
+fn main() -> i64 {
+    print(read_f64())
+    print(read_f64())
+    return 0
+}
+""")
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary, "1.5\n")
+            native_out = run_binary(native_binary, "1.5\n")
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[0], "1.5\n")
+        self.assertEqual(native_out[1],
+                         "nava runtime error: expected an f64, reached end of input\n")
+        self.assertEqual(native_out[2], 1)
 
 
 class NativeCharactersFloatTextTests(unittest.TestCase):

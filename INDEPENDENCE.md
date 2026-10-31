@@ -1371,6 +1371,7 @@ the differential records.
 | N14m | **`String` through one IR**: a builder of three words that doubles its buffer from 32, `string_text` as a **copy** into the arena (the buffer moves, so a `str` must never point into it), the two traps a byte can trip, and the same builtins printed from the IR on the C side | **Delivered** (record below) |
 | N14n | **`str_split`, the two argument functions and the three clock readings**: a split that copies each field into the arena and appends it, `arg_count`/`arg_at` with the C runtime's numbered trap, `clock_gettime` as one syscall with the reading checked, and `self_test` — the last fixture printed by the AST walk — printed from the IR | **Delivered** (record below) |
 | N14o | **`chars_len` and `str_from_f64`**: a UTF-8 decoder that refuses the six ways a byte sequence is not a character, and the text of an `f64` taken from the same decimal conversion `print` uses, so the two cannot drift | **Delivered** (record below) |
+| N14p | **`read_f64`**: a decimal read into a double with no `strtod` to ask — the digits as a base-10^9 bignum, the power of ten met with a shift and a whole number of limbs rather than a division, fifty-six bits and a sticky bit deciding the rounding, and the C runtime's six refusals in its order with its words | **Delivered** (record below) |
 | N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
 
 #### Delivery record N14a (2026-10-29)
@@ -2325,6 +2326,102 @@ neither backend can build such a value; or that `read_f64` or the filesystem exi
 natively — `read_f64` is still refused by name, and it is the last builtin the runtime
 lacks before the filesystem.
 
+#### Delivery record N14p (2026-10-31)
+
+**`read_f64` is the one conversion the runtime cannot get approximately right.** `print`
+of a float asks for the *shortest* decimal that reads back as the same double, which is a
+question with many right answers and a rule for choosing between them. Reading a float
+asks the opposite: given a decimal, which double is nearest — and that has exactly one
+right answer, so a reader that is nearly right is wrong. The C runtime reads a token,
+satisfies itself that the token is a plain decimal, and hands it to `strtod`; this
+increment is `strtod`'s replacement, written on the same base-10^9 bignums N14j built for
+the printer.
+
+The digits become a bignum, and the power of ten the exponent asks for is met with a
+**shift and a whole number of limbs** rather than with a division. That is the whole
+design, and it is what makes the answer exact: a limb is nine decimal digits, so a power
+of ten that is a multiple of nine comes off the bottom of the value as an integer number
+of limbs, losing only what falls below them — which is remembered as one bit. The eight
+digits left over are multiplied in. What is still the wrong width is met with a shift of
+two, which is exact where a division by ten would not be. Only then is the value divided
+down by powers of two until fifty-six bits are left, and those fifty-six — with the bit
+that says whether anything at all fell away below them — decide the rounding, a tie going
+to the even neighbour.
+
+Two consequences are worth stating because they are the reasons it took what it took:
+
+* **The capacity had to grow.** The printer's widest intermediate is ten to the 325th,
+  thirty-seven limbs. The reader's is a 511-character token scaled by the power of ten
+  that puts its quotient in range: 2 825 bits, ninety-five limbs. `BN_CAP` is 112, and
+  the five bignums now hang *downward from the top of the frame* rather than stacking on
+  its floor, because a bignum's limbs grow upward from its base and the one based at `o`
+  owns `[o, o + BN_STRIDE)` — the old layout put the highest limb of the highest bignum
+  on top of the scalar slots, which is a crash that arrives one thousand values into a
+  corpus rather than on the first.
+* **A bound on the power of ten is decided without a logarithm.** `10**n` is between
+  `2**(3.321928 n)` and `2**(3.322 n)`, so both bounds are an integer multiply and an
+  integer divide. Far outside the range of the type the two bounds agree, and the answer
+  is a refusal rather than an infinity; between them the arithmetic above decides exactly.
+
+The token is read twice: once to satisfy the C runtime's syntax — a sign, digits, one
+optional point, an optional exponent with its own sign, and nothing else — and once to
+build the value. The six refusals are the C runtime's, in the order it reaches them and
+with its words, including the one it only reaches after `strtod` has answered: a token
+that names a value above `DBL_MAX` is `f64 input is outside the f64 range` and not
+`inf`, because that is what the C runtime does. A token of 512 bytes or more is refused
+for the same reason: `char token[512]` is the size it has.
+
+**The tests are the corpus.** A shortest text is not enough to test this, because the
+interesting cases are ones no shortest text ever writes: a tie, where the digit run has
+to be carried past the fifty-third bit before anyone can say which way it goes; a
+subnormal, where the bits kept are fewer than the window and the shift is a thousand
+wide; and a token whose power of ten alone is ninety limbs. So the suite runs four
+hundred seeded decimals and a hundred and twenty round trips through both backends and
+past Python's own `float` as a third witness, and outside the suite the differential is
+16 207 generated values — every power of two in the range, its neighbours and its
+midpoints, exact decimal expansions, exact half-way decimals, and random digit strings
+with random exponents — read by both backends and compared byte for byte on stdout,
+stderr and exit status, plus 83 values past the range and 959 edge cases (token lengths
+around 512, the tie families, and every syntax the C runtime refuses).
+
+The negative control is the one that matters for a differential this size: with the
+step over a leading `+` removed — one `jcc` — `test_the_exponent_moves_the_point_and_
+nothing_else` fails on `+1.5` and nothing else, which is the claim that the differential
+is reading the answers rather than admiring them.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| A corpus of decimals reads the same | `NativeReadFloatTests.test_a_corpus_of_decimals_reads_identically` | 400 seeded decimals — every third power of two across the whole range, random digit strings with a point and an exponent — identical on both backends, and `float(line) == float(text)` for every one, which is Python's correctly-rounded reader agreeing with both |
+| The shortest text reads back as the value | `test_the_shortest_text_of_a_value_reads_back_as_that_value` | 120 values: `repr(v)` in, `repr(v)` out |
+| A tie goes to the even neighbour | `test_a_tie_goes_to_the_even_neighbour` | the exact half-way decimal between `1.0` and the next double: `1.0` (even); one digit more, the next double; one digit fewer, `1.0`. The same at the bottom: half of the smallest subnormal is `0.0`, a hair above it is `5e-324` |
+| The exponent moves the point and nothing else | `test_the_exponent_moves_the_point_and_nothing_else` | fifteen spellings of two values — `15e-1`, `0.15e1`, `1.5e+0`, `1.5E0`, `-1.5e-3`, `1.`, `.5`, `0001.5000`, twenty-two digits of exponent — one answer each |
+| Six ways not to be a float | `test_the_ways_a_token_is_not_a_float_are_the_same_refusal` | `abc`, `1.2.3`, `1.5e`, `1.5e+`, `nan`, `0x10`: the C runtime's four messages, in its order, status 1, empty stdout, on both |
+| Past the range is not infinity | `test_a_value_past_the_range_is_the_c_runtimes_refusal` | `1e309`, `-1e309`, `1e100000`, `1.8e308` and `DBL_MAX` with one in its last place: `f64 input is outside the f64 range`; exactly `DBL_MAX` is taken |
+| The token the C runtime cannot hold | `test_a_token_longer_than_the_c_runtimes_is_refused_by_both` | 511 characters is a token (`10**-509`, which underflows to `0.0` rather than being refused); 502 characters of significand reads as `0.1111111111111111`; 512, 513 and 900 are `f64 input token is too long` |
+| The end of the input is not a zero | `test_the_end_of_the_input_is_a_refusal_and_not_a_zero` | `expected an f64, reached end of input`, status 1 |
+| A reading past the last token | `test_a_reading_past_the_last_token_does_not_answer_zero` | two readings, one token: `1.5` then the refusal, on both |
+| Outside the suite | a generated corpus of 16 207 values | both backends' stdout, stderr and exit status identical |
+| Outside the suite | 83 values past the range and 959 edge cases | the same refusal, or the same value, on every one; the edge cases are the token lengths around 512, the exact half-way decimals, and every syntax the C runtime refuses |
+| Negative control | one `jcc` removed | the differential fails on `+1.5` |
+
+The audit is re-measured: **23 915 lines, 27 modules, 802 functions** (22 869 / 27 / 792
+at N14o) — no new module, 10 functions, five of them the bignum routines the reader alone
+needs (`nv_bn_div_small`, `nv_bn_drop_limbs`, `nv_bn_shl`, `nv_bn_bitlen_low`, and
+`nv_read_f64` itself), emitted only when a program calls `read_f64`, so a program that
+only writes floats carries none of them. The suite is **1 137 tests** with **2 488
+subtests**, `tests/registry.py` reports **1 067 registered tests** with the same 11 tasks,
+76 cases, 192 spec fixtures and 173 diagnostic codes, and the overhead record is
+re-measured rather than assumed: **108 832 tokens**, unchanged, because the guide
+describes the language and this increment changed no word of it.
+
+What this increment does **not** claim: that the reader is fast — it is a bignum
+conversion, one call per value, and no benchmark was run; that it is a general `strtod`
+(it is not: hex floats, `infinity`, a leading `0x` and a locale's decimal point are all
+refused, exactly as the C runtime refuses them); that the two backends would agree on a
+`str` that is not valid UTF-8, since neither can build one; or that the filesystem exists
+natively — `read_file`, `write_file`, `path_exists`, `file_size` and `list_dir` are still
+refused by name, and they are the last increment of N14.
+
 
 ---
 
@@ -2478,7 +2575,7 @@ honest summary that separates measured from unmeasured.
 
 | Risk | Why it is real | Mitigation written into the plan |
 |---|---|---|
-| **R1. N14 and N15 are simply large** | The current compiler is 20 163 lines and 716 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
+| **R1. N14 and N15 are simply large** | The current compiler is 23 915 lines and 802 functions of Python (`tools/audit_compiler_needs.py`, now counting subpackages); the port is an estimate, not a measurement, and will grow — it grew from 4 394 lines and 141 functions in the first edition-2 phase alone. | Two milestones inside N14; the port proceeds subsystem by subsystem with parity evidence; no date is promised, only gates. |
 | **R2. The native backend will be slower than C at first** | A first-cut code generator with no register allocator loses to `gcc -O2`. | The gate is behavioural equivalence, not speed; regressions are recorded in `BENCHMARK.md` rather than hidden; optimisation becomes its own phase if the numbers justify it. |
 | **R3. No garbage collector may not be enough** | Python's compiler relies on reference counting to reclaim cycles that an arena would retain. | D9: arena first, and a recorded finding if a cycle cannot be broken; a collector would be a separate, measured decision. |
 | **R4. A hand-written linker is a new class of bug** | Relocations and sections fail silently by producing a plausible binary. | Differential against the C backend, our own reader as a second witness, an external `readelf`/`file` as a third, and a fuzz corpus of malformed ELF inputs. |

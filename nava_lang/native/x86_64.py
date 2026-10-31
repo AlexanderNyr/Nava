@@ -120,6 +120,7 @@ BUILTIN_ROUTINES = {
     "str_split": ("nv_str_split", 3),
     "chars_len": ("nv_chars_len", 1),
     "str_from_f64": ("nv_str_from_f64", 1),
+    "read_f64": ("nv_read_f64", 0),
 }
 #: How many bytes one word of a struct takes. A struct is a record of words — an
 #: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
@@ -2142,6 +2143,8 @@ class Generator:
                              ("nv_chars_len", self.chars_len_helper),
                              ("nv_utf8_width", self.utf8_width_helper)):
             self.runtime_function(symbol, body)
+        if self.uses_builtin("read_f64"):
+            self.runtime_function("nv_read_f64", self.read_f64_helper)
         self.bn_runtime()
         for name, body in (("clock_seconds", "seconds"), ("clock_millis", "millis"),
                            ("clock_monotonic_millis", "millis")):
@@ -3622,20 +3625,37 @@ class Generator:
         code.ret()
 
     # -- the decimal text of an `f64` ----------------------------------------
-    #: A decimal bignum in this runtime: a length word and forty-eight base-10^9 limbs,
-    #: little-endian. The widest intermediate of the conversion below is ten to the
-    #: 325th — the whole range of the type — which is thirty-seven limbs, so the
-    #: capacity is that range with room to spare. Base 10^9 keeps a limb product under
-    #: 10^18, inside an `i64`, so the divider does the arithmetic exactly.
-    BN_CAP = 48
+    #: A decimal bignum in this runtime: a length word and base-10^9 limbs,
+    #: little-endian. Two conversions use it and the wider one sets the capacity:
+    #: a double's decimal *text* needs ten to the 325th at its widest — the whole
+    #: range of the type, thirty-seven limbs — while a decimal *read* into a double
+    #: has to hold a token of 511 characters scaled by the power of ten that puts
+    #: its quotient in range, which is 2 825 bits and ninety-five limbs. Base 10^9
+    #: keeps a limb product under 10^18, inside an `i64`, so the divider does the
+    #: arithmetic exactly; it is also what makes a power of ten a shift of limbs.
+    BN_CAP = 112
     BN_BASE = 1_000_000_000
     BN_STRIDE = 8 + 8 * BN_CAP              # a length word, then the limbs
     #: The frame of the conversion: five bignums, then the text, then the digits.
-    # A bignum's limbs grow upward from its base, so each one owns
-    # [base, base + BN_STRIDE); the offsets leave the slots above -144 alone.
-    BN_R, BN_S, BN_MP, BN_MM, BN_T = -536, -928, -1320, -1712, -2104
-    F64_TEXT, F64_DIGITS = -2664, -3264
-    F64_FRAME = 3264
+    # A bignum's limbs grow upward from its base, so the one based at `o` owns
+    # [o, o + BN_STRIDE) — which is why they hang from the top of the frame
+    # instead of stacking on its floor: the highest limb of the highest one has
+    # to stay below -144, where the scalar slots begin. Widening the capacity
+    # moves them down, and the text and the digits follow them.
+    BN_R = -144 - BN_STRIDE
+    BN_S = BN_R - BN_STRIDE
+    BN_MP = BN_S - BN_STRIDE
+    BN_MM = BN_MP - BN_STRIDE
+    BN_T = BN_MM - BN_STRIDE
+    F64_TEXT, F64_DIGITS = BN_T - 560, BN_T - 1160
+    F64_FRAME = -F64_DIGITS
+    #: The frame of the reader: its own slots, the C runtime's token, then the
+    # value it builds and the one constant it is measured against. The slots are
+    # named inside the reader; the token is the last thing above the bignums.
+    R_TOKEN = -768                              # 512 bytes, as the C runtime has
+    R_VALUE = R_TOKEN - BN_STRIDE               # the bignum the digits go into
+    R_LIMIT = R_VALUE - BN_STRIDE               # 2**56, the top of the window
+    READ_FRAME = -(R_LIMIT - BN_STRIDE)
     S_END, S_SIGN, S_MANT, S_MEXP, S_SCALE = -8, -16, -24, -32, -40
     S_LEN, S_FIRST, S_E10, S_DIGIT, S_LOW, S_HIGH = -48, -56, -64, -72, -80, -88
     S_MAG, S_BITLEN, S_TEMP, S_TEMP2, S_CURSOR = -96, -104, -112, -120, -128
@@ -3659,6 +3679,15 @@ class Generator:
                              ("nv_bn_mul_pow2", self.bn_mul_pow2_helper),
                              ("nv_bn_mul_pow10", self.bn_mul_pow10_helper)):
             self.runtime_function(symbol, body)
+        # The reader's four: a division, a whole number of limbs off the bottom,
+        # a shift, and a bound on the width. They are the reader's alone, so a
+        # program that only writes floats does not carry them.
+        if self.uses_builtin("read_f64"):
+            for symbol, body in (("nv_bn_div_small", self.bn_div_small_helper),
+                                 ("nv_bn_drop_limbs", self.bn_drop_limbs_helper),
+                                 ("nv_bn_shl", self.bn_shl_helper),
+                                 ("nv_bn_bitlen_low", self.bn_bitlen_low_helper)):
+                self.runtime_function(symbol, body)
 
     def bn_set_u64_helper(self) -> None:
         """`nv_bn_set_u64(rdi = bn, rsi = value)`: the bignum holding one machine word."""
@@ -3940,6 +3969,267 @@ class Generator:
     def bn_mul_pow10_helper(self) -> None:
         """`nv_bn_mul_pow10(rdi = a, rsi = n)`: `a *= 10**n`."""
         self.bn_mul_power_helper("bnp10", 10)
+
+    def bn_div_small_helper(self) -> None:
+        """`nv_bn_div_small(rdi = a, rsi = k)` -> `rax` = the rest: `a /= k`.
+
+        Long division from the top limb down, for a `k` no larger than the base:
+        the rest carried into a limb is below `k`, so `rest * base + limb` stays
+        under 10^18 and one `div` by `k` answers both the limb and the rest that
+        is carried on.
+        The high limbs the value has left are then cleared, so the length keeps
+        saying where it ends.
+        """
+        code = self.code
+        loop, strip = self.local("bnv_loop"), self.local("bnv_strip")
+        strip_loop, stripped = (self.local("bnv_strip_loop"),
+                                self.local("bnv_stripped"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R10, RDI, 0)                  # the index of the highest limb
+        code.xor_reg(R11, R11)                  # nothing carried down yet
+        code.label(loop)
+        code.test_reg(R10)
+        code.jcc("e", strip)
+        code.dec(R10)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(RCX, R10)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.add_reg(RDI, RCX)
+        code.load(RCX, RDI, 8)                  # the limb
+        code.mov_reg(RAX, R11)
+        code.mov_imm(R9, self.BN_BASE)
+        code.imul_reg(RAX, R9)                  # the rest, promoted a whole limb
+        code.add_reg(RAX, RCX)
+        code.xor_reg(RDX, RDX)
+        code.div(RSI)                           # rax = the limb, rdx = the rest
+        code.store(RDI, 8, RAX)
+        code.mov_reg(R11, RDX)
+        code.jmp(loop)
+        # The value may have lost its top limb: say so, or a later comparison
+        # would read limbs that hold nothing.
+        code.label(strip)
+        code.load(RDI, RBP, -8)
+        code.load(R8, RDI, 0)
+        code.label(strip_loop)
+        code.test_reg(R8)
+        code.jcc("e", stripped)
+        code.mov_reg(RCX, R8)
+        code.dec(RCX)
+        code.mov_imm(RDX, 8)
+        code.imul_reg(RCX, RDX)
+        code.mov_reg(R9, RDI)
+        code.add_reg(R9, RCX)
+        code.load(R9, R9, 8)
+        code.test_reg(R9)
+        code.jcc("ne", stripped)
+        code.dec(R8)
+        code.jmp(strip_loop)
+        code.label(stripped)
+        code.store(RDI, 0, R8)
+        code.mov_reg(RAX, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_drop_limbs_helper(self) -> None:
+        """`nv_bn_drop_limbs(rdi = a, rsi = q)` -> 1 when what fell away was not 0.
+
+        `a` loses its low `q` limbs, which is its quotient by ten to the ninth
+        raised to the `q`: the rest move down and the ones above them are
+        cleared. A quotient is a floor, so the limbs that fall away are a
+        fraction of the value the reader is after — and whether that fraction is
+        zero is the one thing the rounding below needs to know about it.
+        """
+        code = self.code
+        gone, gone_zero = self.local("bndl_gone"), self.local("bndl_gone_zero")
+        taken = self.local("bndl_taken")
+        taken_loop, taken_done = (self.local("bndl_taken_loop"),
+                                  self.local("bndl_taken_done"))
+        move, move_loop, move_done = (self.local("bndl_move"),
+                                      self.local("bndl_move_loop"),
+                                      self.local("bndl_move_done"))
+        clear_loop, cleared = (
+                                      self.local("bndl_clear_loop"),
+                                      self.local("bndl_cleared"))
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.load(R8, RDI, 0)                   # the length
+        code.cmp_reg(RSI, R8)
+        code.jcc("ae", gone)                    # everything falls away
+        code.sub_reg(R8, RSI)
+        code.store(RBP, -24, R8)                # the length that is left
+        code.store(RBP, -40, R8)
+        code.load(R9, RDI, 0)
+        code.store(RBP, -48, R9)                # the length there was
+        # -- is there anything in the limbs that go? ------------------------
+        code.xor_reg(RAX, RAX)
+        code.xor_reg(R10, R10)
+        code.label(taken_loop)
+        code.cmp_reg(R10, RSI)
+        code.jcc("ae", taken_done)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(R11, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, RDI)
+        code.load(R11, R11, 8)
+        code.test_reg(R11)
+        code.jcc("e", taken)
+        code.mov_imm(RAX, 1)
+        code.label(taken)
+        code.inc(R10)
+        code.jmp(taken_loop)
+        code.label(taken_done)
+        code.store(RBP, -32, RAX)               # the one bit
+        # -- the rest move down ---------------------------------------------
+        code.xor_reg(R10, R10)
+        code.label(move_loop)
+        code.cmp_reg(R10, R8)
+        code.jcc("ae", move_done)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(R11, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, RDI)
+        code.load(RCX, RBP, -16)
+        code.add_reg(RCX, R10)
+        code.mov_reg(RAX, RCX)
+        code.mov_imm(R9, 8)
+        code.imul_reg(RAX, R9)
+        code.add_reg(RAX, RDI)
+        code.load(RAX, RAX, 8)                  # the limb that far up
+        code.store(R11, 8, RAX)
+        code.inc(R10)
+        code.jmp(move_loop)
+        code.label(move_done)
+        # -- and nothing is left above them ----------------------------------
+        code.label(clear_loop)
+        code.load(R9, RBP, -48)
+        code.cmp_reg(R10, R9)
+        code.jcc("ae", cleared)
+        code.load(RDI, RBP, -8)
+        code.mov_reg(R11, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R11, R9)
+        code.add_reg(R11, RDI)
+        code.xor_reg(RAX, RAX)
+        code.store(R11, 8, RAX)
+        code.inc(R10)
+        code.jmp(clear_loop)
+        code.label(cleared)
+        code.load(RDI, RBP, -8)
+        code.load(R8, RBP, -24)
+        code.store(RDI, 0, R8)
+        code.load(RAX, RBP, -32)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        code.label(gone)
+        code.load(RDI, RBP, -8)
+        code.load(RAX, RDI, 0)                  # nonzero is something that fell
+        code.test_reg(RAX)
+        code.jcc("e", gone_zero)
+        code.mov_imm(RAX, 1)
+        code.label(gone_zero)
+        code.xor_reg(R8, R8)
+        code.store(RDI, 0, R8)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_shl_helper(self) -> None:
+        """`nv_bn_shl(rdi = a, rsi = n)`: `a *= 2**n`.
+
+        A shift of a decimal bignum is a multiplication, and the cheapest one
+        goes twenty-nine bits at a time: 2^29 is below the base, so each step is
+        one pass of `nv_bn_mul_small` over the limbs rather than twenty-nine of
+        them. What is left over is that many single doublings.
+        """
+        code = self.code
+        loop, done = self.local("bnsh_loop"), self.local("bnsh_done")
+        rest, rest_done = self.local("bnsh_rest"), self.local("bnsh_rest_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.label(loop)
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R11, 29)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", rest)
+        code.load(RDI, RBP, -8)
+        code.mov_imm(RSI, 1 << 29)
+        code.call("nv_bn_mul_small")
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R11, 29)
+        code.sub_reg(RAX, R11)
+        code.store(RBP, -16, RAX)
+        code.jmp(loop)
+        code.label(rest)
+        code.load(RAX, RBP, -16)
+        code.test_reg(RAX)
+        code.jcc("e", done)
+        code.load(RDI, RBP, -8)
+        code.mov_imm(RSI, 2)
+        code.call("nv_bn_mul_small")
+        code.load(RAX, RBP, -16)
+        code.dec(RAX)
+        code.store(RBP, -16, RAX)
+        code.jmp(rest)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def bn_bitlen_low_helper(self) -> None:
+        """`nv_bn_bitlen_low(rdi = a)`: a number of bits `a` cannot be under.
+
+        Twenty-nine for every limb below the highest, counted exactly in the
+        highest one: 10^9 sits between 2^29 and 2^30, so the limbs below the top
+        are worth twenty-nine bits and a fraction, and dropping the fraction
+        leaves a bound that holds. The reader asks for the shift that lifts a
+        quotient into its window, and a bound that is too low is a shift that
+        is too long — which it undoes — where a bound too high would be one it
+        could not.
+        """
+        code = self.code
+        empty, loop, done = (self.local("bnbl_empty"), self.local("bnbl_loop"),
+                             self.local("bnbl_done"))
+        code.load(R8, RDI, 0)
+        code.test_reg(R8)
+        code.jcc("e", empty)
+        code.dec(R8)
+        code.mov_reg(RCX, RDI)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R8, R9)
+        code.add_reg(RCX, R8)
+        code.load(RCX, RCX, 8)                  # the highest limb
+        code.xor_reg(RAX, RAX)
+        code.label(loop)
+        code.test_reg(RCX)
+        code.jcc("e", done)
+        code.inc(RAX)
+        code.shr_imm(RCX, 1)
+        code.jmp(loop)
+        code.label(done)
+        code.load(R8, RDI, 0)
+        code.dec(R8)
+        code.mov_imm(R9, 29)
+        code.imul_reg(R8, R9)
+        code.add_reg(RAX, R8)
+        code.ret()
+        code.label(empty)
+        code.xor_reg(RAX, RAX)
+        code.ret()
 
 
     def format_f64_helper(self) -> None:
@@ -5345,6 +5635,761 @@ class Generator:
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.ret()
+
+    def read_f64_helper(self) -> None:
+        """`nv_read_f64()` -> the next whitespace-delimited decimal, as its bits.
+
+        The C runtime reads a token, satisfies itself that the token is a plain
+        decimal number, and hands it to `strtod`, which answers the nearest
+        `f64` to the exact value it names. So this is a conversion that cannot
+        guess, and does not. The digits become a decimal bignum; the power of
+        ten the exponent asks for is met with a shift and a whole number of
+        limbs, which is exact where a division would not be; what is still too
+        wide is divided down by powers of two until fifty-six bits are left, and
+        those bits — with the one that says whether anything at all fell away
+        below them — decide the rounding exactly, a tie going to the even
+        neighbour. The five refusals before that are the C runtime's, in its
+        order and with its words; the sixth, a value outside the range of the
+        type, is the one it catches after `strtod` has answered.
+        """
+        code = self.code
+        SIGN, LENGTH, START = -8, -16, -24
+        COUNT, FRAC, EXP = -32, -40, -48
+        E10, ABITS, F = -56, -64, -72
+        SHIFT, STICKY, SCALE = -80, -88, -96
+        ABITS_HI, TEN_LO, TEN_HI = -104, -112, -120
+        POWER, POWER_HI, QUOTIENT = -128, -136, -144
+        TEN, VALUE, E1 = -152, -160, -168
+        WIDTH, BELOW, ANSWER = -176, -184, -192
+        END, LIMBS, LOW, HIGH = -200, -208, -216, -224
+        NEGATIVE = -232
+
+        def slot(name: int, register: int) -> None:
+            code.load(register, RBP, name)
+
+        def put(name: int, register: int) -> None:
+            code.store(RBP, name, register)
+
+        def at(register: int, offset: int) -> None:
+            code.lea(register, RBP, offset)
+
+        def byte_at(register: int, index: int) -> None:
+            """`register` = the token byte at `index`; `r9` is spent, `index` is kept."""
+            at(R9, self.R_TOKEN)
+            code.add_reg(R9, index)
+            code.load_byte(register, R9, 0)
+
+        def scan(index: int, counter: int) -> None:
+            """Advance `index` over ASCII digits, counting them into `counter`."""
+            loop, done = self.local("f64_scan"), self.local("f64_scan_done")
+            code.label(loop)
+            byte_at(RAX, index)
+            code.mov_imm(R11, 48)
+            code.cmp_reg(RAX, R11)
+            code.jcc("b", done)
+            code.mov_imm(R11, 57)
+            code.cmp_reg(RAX, R11)
+            code.jcc("a", done)
+            code.inc(index)
+            code.inc(counter)
+            code.jmp(loop)
+            code.label(done)
+
+        skip, token_loop, token_done = (self.local("f64_skip"),
+                                        self.local("f64_token"),
+                                        self.local("f64_token_done"))
+        no_token, too_long = self.local("f64_none"), self.local("f64_long")
+        not_decimal, bad_exponent = self.local("f64_plain"), self.local("f64_bare")
+        bad_tail, outside, zero, done = (self.local("f64_tail"),
+                                         self.local("f64_outside"),
+                                         self.local("f64_zero"),
+                                         self.local("f64_done"))
+        signed, whole_part, no_fraction = (self.local("f64_signed"),
+                                           self.local("f64_whole"),
+                                           self.local("f64_nopoint"))
+        exponent, exponent_sign, exponent_digits = (self.local("f64_e"),
+                                                    self.local("f64_esigned"),
+                                                    self.local("f64_edigits"))
+        tail = self.local("f64_end")
+        positive, start_digits = self.local("f64_plus"), self.local("f64_start")
+        sign_step = self.local("f64_sign_step")
+        count_fraction = self.local("f64_count")
+        read_exponent, exponent_plain = (self.local("f64_reade"),
+                                         self.local("f64_eplain"))
+        exponent_step, exponent_value = (self.local("f64_estep"),
+                                         self.local("f64_evalue"))
+        exponent_done = self.local("f64_edone")
+        clamped, clamp_done = self.local("f64_clamped"), self.local("f64_cdone")
+        limb_done, low_ready = self.local("f64_limbs"), self.local("f64_low")
+        digit_done, stripped = self.local("f64_digits"), self.local("f64_stripped")
+        shrink, wide = self.local("f64_shrink"), self.local("f64_wide")
+        bounds_done, narrow_side = self.local("f64_bounds"), self.local("f64_narrow")
+        only_extra, power_ready = self.local("f64_extra"), self.local("f64_ready")
+        coarse_on, fine_on = self.local("f64_coarse_on"), self.local("f64_fine_on")
+        narrow, one_limb = self.local("f64_narrowed"), self.local("f64_word")
+        whole_window, window_ready = (self.local("f64_full"),
+                                      self.local("f64_window"))
+        round_up, rounded = self.local("f64_up"), self.local("f64_rounded")
+        carry_done = self.local("f64_carried")
+        power_normal = self.local("f64_pnormal")
+        bits_done, apply_sign = self.local("f64_counted"), self.local("f64_signed")
+        shift_ready = self.local("f64_shift")
+        fine = self.local("f64_fine_top")
+        moved = self.local("f64_moved")
+        move_loop = self.local("f64_move")
+        clamp_loop = self.local("f64_clamp")
+        limb_loop = self.local("f64_limb")
+        digit_loop = self.local("f64_digit")
+        strip_loop = self.local("f64_strip")
+        coarse = self.local("f64_coarse")
+        fine_loop = self.local("f64_fine")
+        power_loop = self.local("f64_power")
+        power_done = self.local("f64_power_done")
+        ten_ready = self.local("f64_ten_ready")
+        carry_loop = self.local("f64_carry")
+        subnormal_loop = self.local("f64_subnormal")
+        normal_loop = self.local("f64_normal")
+        bits_loop = self.local("f64_bits")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(self.READ_FRAME)
+        # -- the token -------------------------------------------------------
+        code.label(skip)
+        code.call("nv_getc")
+        code.mov_imm(R11, -1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", no_token)
+        self.read_space(RAX, skip)
+        code.xor_reg(R10, R10)
+        put(LENGTH, R10)
+        code.label(token_loop)
+        code.mov_imm(R11, -1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", token_done)
+        self.read_space(RAX, token_done)
+        slot(LENGTH, R10)
+        code.mov_reg(R11, R10)
+        code.inc(R11)
+        code.mov_imm(R9, 512)
+        code.cmp_reg(R11, R9)
+        code.jcc("ae", too_long)                # a 512th byte would not fit
+        at(R9, self.R_TOKEN)
+        code.add_reg(R9, R10)
+        code.store_byte(R9, 0, RAX)
+        put(LENGTH, R11)
+        code.call("nv_getc")
+        code.jmp(token_loop)
+        code.label(token_done)
+        slot(LENGTH, R10)
+        at(R9, self.R_TOKEN)
+        code.add_reg(R9, R10)
+        code.store_byte_imm(R9, 0, 0)           # the end the C runtime writes
+        # -- the syntax ------------------------------------------------------
+        # The token is walked twice, as the C runtime walks it: once to say what
+        # it is, once to read it. A refusal here is a refusal there, in the same
+        # order and with the same words.
+        code.xor_reg(R10, R10)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 43)                   # '+'
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", signed)
+        code.mov_imm(R11, 45)                   # '-'
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", whole_part)
+        code.label(signed)
+        code.inc(R10)
+        code.label(whole_part)
+        code.xor_reg(R8, R8)
+        scan(R10, R8)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 46)                   # '.'
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", no_fraction)
+        code.inc(R10)
+        scan(R10, R8)
+        code.label(no_fraction)
+        code.test_reg(R8)
+        code.jcc("e", not_decimal)              # not one digit between them
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 101)                  # 'e'
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", exponent)
+        code.mov_imm(R11, 69)                   # 'E'
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", tail)
+        code.label(exponent)
+        code.inc(R10)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 43)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", exponent_sign)
+        code.mov_imm(R11, 45)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", exponent_digits)
+        code.label(exponent_sign)
+        code.inc(R10)
+        code.label(exponent_digits)
+        code.xor_reg(R8, R8)
+        scan(R10, R8)
+        code.test_reg(R8)
+        code.jcc("e", bad_exponent)
+        code.label(tail)
+        slot(LENGTH, R11)
+        code.cmp_reg(R10, R11)
+        code.jcc("ne", bad_tail)
+        # -- the value -------------------------------------------------------
+        code.xor_reg(R10, R10)
+        put(SIGN, R10)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 45)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", positive)
+        code.mov_imm(R11, 1)
+        put(SIGN, R11)
+        code.label(positive)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 43)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", sign_step)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 45)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", start_digits)
+        code.label(sign_step)
+        code.inc(R10)
+        code.label(start_digits)
+        put(START, R10)
+        code.xor_reg(R8, R8)
+        scan(R10, R8)                           # the digits before the point
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 46)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", count_fraction)
+        # The point is not part of the number: close the gap it leaves, so that
+        # every digit of the significand is one run the limbs can be read from.
+        code.mov_reg(R9, R10)
+        code.label(move_loop)
+        slot(LENGTH, R11)
+        code.cmp_reg(R9, R11)
+        code.jcc("ae", moved)
+        at(RCX, self.R_TOKEN)
+        code.add_reg(RCX, R9)
+        code.load_byte(RAX, RCX, 1)
+        code.store_byte(RCX, 0, RAX)
+        code.inc(R9)
+        code.jmp(move_loop)
+        code.label(moved)
+        slot(LENGTH, R11)
+        code.dec(R11)
+        put(LENGTH, R11)
+        code.label(count_fraction)
+        code.xor_reg(R8, R8)
+        scan(R10, R8)                           # the digits after the point
+        put(FRAC, R8)
+        put(END, R10)                            # one past the last digit
+        slot(START, R11)
+        code.sub_reg(R10, R11)
+        put(COUNT, R10)                         # every digit but the point
+        # -- the exponent ----------------------------------------------------
+        slot(END, R10)                          # where the digit run ended
+        code.xor_reg(R8, R8)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 101)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", read_exponent)
+        code.mov_imm(R11, 69)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", exponent_done)
+        code.label(read_exponent)
+        code.inc(R10)
+        code.xor_reg(R9, R9)                    # not negative
+        put(NEGATIVE, R9)                       # a byte's address is not a place to keep it
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 45)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", exponent_plain)
+        code.mov_imm(R9, 1)
+        put(NEGATIVE, R9)
+        code.label(exponent_plain)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 43)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", exponent_step)
+        code.mov_imm(R11, 45)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ne", exponent_value)
+        code.label(exponent_step)
+        code.inc(R10)
+        code.label(exponent_value)
+        code.xor_reg(R8, R8)
+        code.label(clamp_loop)
+        byte_at(RAX, R10)
+        code.mov_imm(R11, 48)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", clamp_done)
+        code.mov_imm(R11, 57)
+        code.cmp_reg(RAX, R11)
+        code.jcc("a", clamp_done)
+        code.mov_imm(R11, 48)
+        code.sub_reg(RAX, R11)                  # the digit itself
+        code.mov_imm(R11, 100000)
+        code.cmp_reg(R8, R11)
+        code.jcc("ae", clamped)                 # far past anything a digit changes
+        code.mov_imm(RCX, 10)
+        code.imul_reg(R8, RCX)
+        code.add_reg(R8, RAX)
+        code.inc(R10)
+        code.jmp(clamp_loop)
+        code.label(clamped)
+        code.mov_imm(R8, 100000)
+        code.label(clamp_done)
+        slot(NEGATIVE, R9)
+        code.test_reg(R9)
+        code.jcc("e", exponent_done)
+        code.neg(R8)
+        code.label(exponent_done)
+        put(EXP, R8)
+        slot(EXP, R8)
+        slot(FRAC, R11)
+        code.sub_reg(R8, R11)
+        put(E10, R8)                            # the power of ten it stands for
+        # -- the digits into limbs -------------------------------------------
+        slot(START, RAX)
+        slot(COUNT, R11)
+        code.add_reg(RAX, R11)
+        put(END, RAX)                           # one past the last digit
+        slot(COUNT, RAX)
+        code.add_imm8(RAX, 8)
+        code.mov_imm(R9, 9)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        put(LIMBS, RAX)                         # nine digits to a limb
+        code.xor_reg(R10, R10)
+        code.label(limb_loop)
+        slot(LIMBS, R11)
+        code.cmp_reg(R10, R11)
+        code.jcc("ae", limb_done)
+        slot(END, RAX)                          # nine digits, counted from the end
+        code.mov_reg(R8, R10)
+        code.inc(R8)
+        code.mov_imm(R9, 9)
+        code.imul_reg(R8, R9)
+        code.sub_reg(RAX, R8)
+        slot(START, R11)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ge", low_ready)               # signed: the first group runs under
+        code.mov_reg(RAX, R11)                  # the first group is the short one
+        code.label(low_ready)
+        put(LOW, RAX)
+        slot(END, RAX)
+        code.mov_reg(R8, R10)
+        code.mov_imm(R9, 9)
+        code.imul_reg(R8, R9)
+        code.sub_reg(RAX, R8)
+        put(HIGH, RAX)
+        code.xor_reg(RCX, RCX)
+        slot(LOW, R8)
+        code.label(digit_loop)
+        slot(HIGH, R11)
+        code.cmp_reg(R8, R11)
+        code.jcc("ae", digit_done)
+        byte_at(RAX, R8)
+        code.mov_imm(R11, 48)
+        code.sub_reg(RAX, R11)
+        code.mov_imm(R9, 10)
+        code.imul_reg(RCX, R9)
+        code.add_reg(RCX, RAX)
+        code.inc(R8)
+        code.jmp(digit_loop)
+        code.label(digit_done)
+        at(RDI, self.R_VALUE)
+        code.mov_reg(R8, R10)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R8, R9)
+        code.add_reg(R8, RDI)
+        code.store(R8, 8, RCX)
+        code.inc(R10)
+        code.jmp(limb_loop)
+        code.label(limb_done)
+        at(RDI, self.R_VALUE)
+        slot(LIMBS, RAX)
+        code.store(RDI, 0, RAX)
+        # A leading zero leaves a limb with nothing in it.
+        code.label(strip_loop)
+        code.load(RAX, RDI, 0)
+        code.test_reg(RAX)
+        code.jcc("e", stripped)
+        code.dec(RAX)
+        code.mov_reg(R8, RAX)
+        code.mov_imm(R9, 8)
+        code.imul_reg(R8, R9)
+        code.add_reg(R8, RDI)
+        code.load(R8, R8, 8)
+        code.test_reg(R8)
+        code.jcc("ne", stripped)
+        code.store(RDI, 0, RAX)
+        code.jmp(strip_loop)
+        code.label(stripped)
+        code.load(RAX, RDI, 0)
+        code.test_reg(RAX)
+        code.jcc("e", zero)
+        # -- how wide the answer is ------------------------------------------
+        at(RDI, self.R_VALUE)
+        code.call("nv_bn_bitlen_low")
+        put(ABITS, RAX)
+        at(RDI, self.R_VALUE)
+        code.load(R8, RDI, 0)
+        slot(ABITS, RAX)
+        code.add_reg(RAX, R8)                   # the widest those limbs could be
+        put(ABITS_HI, RAX)
+        # 10**n is between 2**(3.321928 n) and 2**(3.322 n), so both bounds on
+        # the power of ten are decided without a logarithm to hand.
+        slot(E10, RAX)
+        code.test_reg(RAX)
+        code.jcc("s", shrink)
+        code.xor_reg(R8, R8)
+        put(F, R8)
+        code.mov_imm(R9, 3321928)
+        code.imul_reg(RAX, R9)
+        code.mov_imm(R9, 1000000)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        put(TEN_LO, RAX)
+        slot(E10, RAX)
+        code.mov_imm(R9, 3322)
+        code.imul_reg(RAX, R9)
+        code.mov_imm(R9, 999)
+        code.add_reg(RAX, R9)
+        code.mov_imm(R9, 1000)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        code.inc(RAX)
+        put(TEN_HI, RAX)
+        code.jmp(wide)
+        code.label(shrink)
+        code.neg(RAX)
+        put(F, RAX)
+        code.mov_imm(R9, 3322)
+        code.imul_reg(RAX, R9)
+        code.mov_imm(R9, 999)
+        code.add_reg(RAX, R9)
+        code.mov_imm(R9, 1000)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        code.inc(RAX)
+        put(TEN_HI, RAX)                        # the most the divisor can be
+        slot(F, RAX)
+        code.mov_imm(R9, 3321928)
+        code.imul_reg(RAX, R9)
+        code.mov_imm(R9, 1000000)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        put(TEN_LO, RAX)
+        code.label(wide)
+        # Far outside the range of the type, on either side: both bounds are a
+        # hundred bits clear of it, so neither of these two answers is a guess.
+        # What falls between them the arithmetic below decides exactly.
+        slot(E10, RAX)
+        code.test_reg(RAX)
+        code.jcc("s", narrow_side)
+        slot(ABITS, RAX)
+        slot(TEN_LO, R11)
+        code.add_reg(RAX, R11)
+        code.mov_imm(R9, 1100)
+        code.cmp_reg(RAX, R9)
+        code.jcc("g", outside)
+        code.jmp(bounds_done)
+        code.label(narrow_side)
+        slot(ABITS_HI, RAX)
+        slot(TEN_HI, R11)
+        code.sub_reg(RAX, R11)
+        code.mov_imm(R9, -1200)
+        code.cmp_reg(RAX, R9)
+        code.jcc("l", zero)
+        code.label(bounds_done)
+        # -- the power of ten -------------------------------------------------
+        # A limb is nine decimal digits, so a whole number of them comes off the
+        # value exactly; the eight digits left over are multiplied in, and the
+        # width that is still wrong is met with a shift of two, which is exact
+        # where a division by ten would not be.
+        slot(F, RAX)
+        code.mov_imm(R9, 9)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        code.mov_reg(RAX, R9)
+        code.sub_reg(RAX, RDX)
+        code.mov_imm(R9, 9)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        put(TEN, RDX)                           # the digits that make a whole limb
+        slot(F, RAX)
+        slot(TEN, R11)
+        code.add_reg(RAX, R11)
+        put(POWER, RAX)                         # every digit of the power of ten
+        code.mov_imm(R9, 9)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        put(LIMBS, RAX)                         # the limbs that come off
+        slot(E10, RSI)
+        code.test_reg(RSI)
+        code.jcc("s", only_extra)
+        slot(TEN, R11)
+        code.add_reg(RSI, R11)
+        code.jmp(ten_ready)
+        code.label(only_extra)
+        slot(TEN, RSI)
+        code.label(ten_ready)
+        at(RDI, self.R_VALUE)
+        code.call("nv_bn_mul_pow10")
+        slot(POWER, RAX)
+        code.mov_imm(R9, 3322)
+        code.imul_reg(RAX, R9)
+        code.mov_imm(R9, 999)
+        code.add_reg(RAX, R9)
+        code.mov_imm(R9, 1000)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)
+        code.inc(RAX)
+        code.mov_imm(R11, 58)
+        code.add_reg(RAX, R11)
+        put(POWER_HI, RAX)                      # the widest the divisor could be
+        at(RDI, self.R_VALUE)
+        code.call("nv_bn_bitlen_low")
+        slot(POWER_HI, R11)
+        code.sub_reg(R11, RAX)                  # the shift, if there is one at all
+        code.test_reg(R11)
+        code.jcc("ns", shift_ready)
+        code.xor_reg(R11, R11)
+        code.label(shift_ready)
+        put(SHIFT, R11)
+        at(RDI, self.R_VALUE)
+        code.mov_reg(RSI, R11)
+        code.call("nv_bn_shl")
+        at(RDI, self.R_VALUE)
+        slot(LIMBS, RSI)
+        code.call("nv_bn_drop_limbs")
+        put(STICKY, RAX)                        # whether anything fell away
+        # -- into the window ---------------------------------------------------
+        # Fifty-six bits, no more and no fewer: the rounding below reads the
+        # three above the fifty-three it keeps, and everything that leaves the
+        # value on the way down is remembered as one bit.
+        code.xor_reg(R11, R11)
+        put(SCALE, R11)
+        code.label(coarse)
+        at(RDI, self.R_VALUE)
+        code.load(RAX, RDI, 0)
+        code.mov_imm(R11, 4)
+        code.cmp_reg(RAX, R11)
+        code.jcc("b", fine)
+        at(RDI, self.R_VALUE)
+        code.mov_imm(RSI, 1 << 29)
+        code.call("nv_bn_div_small")
+        code.test_reg(RAX)
+        code.jcc("e", coarse_on)
+        code.mov_imm(R11, 1)
+        put(STICKY, R11)
+        code.label(coarse_on)
+        slot(SCALE, R11)
+        code.add_imm8(R11, 29)
+        put(SCALE, R11)
+        code.jmp(coarse)
+        code.label(fine)
+        at(RDI, self.R_LIMIT)
+        code.mov_imm(RSI, 1 << 56)
+        code.call("nv_bn_set_u64")
+        code.label(fine_loop)
+        at(RDI, self.R_VALUE)
+        at(RSI, self.R_LIMIT)
+        code.call("nv_bn_cmp")
+        code.test_reg(RAX)
+        code.jcc("s", narrow)                   # below 2**56: it is in the window
+        at(RDI, self.R_VALUE)
+        code.mov_imm(RSI, 2)
+        code.call("nv_bn_div_small")
+        code.test_reg(RAX)
+        code.jcc("e", fine_on)
+        code.mov_imm(R11, 1)
+        put(STICKY, R11)
+        code.label(fine_on)
+        slot(SCALE, R11)
+        code.inc(R11)
+        put(SCALE, R11)
+        code.jmp(fine_loop)
+        code.label(narrow)
+        # -- one machine word ---------------------------------------------------
+        at(RDI, self.R_VALUE)
+        code.load(RAX, RDI, 8)
+        code.load(R8, RDI, 0)
+        code.mov_imm(R11, 2)
+        code.cmp_reg(R8, R11)
+        code.jcc("b", one_limb)
+        code.mov_imm(R9, self.BN_BASE)
+        code.load(R8, RDI, 16)
+        code.imul_reg(R8, R9)
+        code.add_reg(RAX, R8)
+        code.label(one_limb)
+        put(VALUE, RAX)
+        # -- the rounding -------------------------------------------------------
+        code.mov_imm(RAX, 55)
+        slot(SCALE, R11)
+        code.add_reg(RAX, R11)
+        slot(SHIFT, R11)
+        code.sub_reg(RAX, R11)
+        put(E1, RAX)                            # the binary exponent of the value
+        code.mov_imm(R11, -1022)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ge", whole_window)
+        code.mov_imm(R11, -1075)
+        code.cmp_reg(RAX, R11)
+        code.jcc("l", zero)                     # under half of the smallest
+        code.mov_imm(R11, 1075)
+        code.add_reg(RAX, R11)                  # a subnormal keeps that many bits
+        code.jmp(window_ready)
+        code.label(whole_window)
+        code.mov_imm(RAX, 53)
+        code.label(window_ready)
+        put(BELOW, RAX)
+        code.mov_imm(RAX, 56)
+        slot(BELOW, R11)
+        code.sub_reg(RAX, R11)
+        put(WIDTH, RAX)                         # the bits that decide it
+        code.mov_imm(R9, 1)
+        code.mov_reg(RCX, RAX)
+        code.label(power_loop)
+        code.test_reg(RCX)
+        code.jcc("e", power_done)
+        code.shl_imm(R9, 1)
+        code.dec(RCX)
+        code.jmp(power_loop)
+        code.label(power_done)
+        code.mov_reg(R8, R9)
+        code.shr_imm(R8, 1)                     # the halfway point
+        slot(VALUE, RAX)
+        code.xor_reg(RDX, RDX)
+        code.div(R9)                            # rax = what is kept, rdx = what is not
+        put(ANSWER, RAX)
+        code.cmp_reg(RDX, R8)
+        code.jcc("a", round_up)
+        code.jcc("b", rounded)
+        slot(STICKY, R11)
+        code.test_reg(R11)
+        code.jcc("ne", round_up)                # a tie with something below it
+        slot(ANSWER, RAX)
+        code.and_imm32(RAX, 1)
+        code.test_reg(RAX)
+        code.jcc("e", rounded)                  # a tie, and this one is the even
+        code.label(round_up)
+        slot(ANSWER, RAX)
+        code.inc(RAX)
+        put(ANSWER, RAX)
+        slot(BELOW, R11)
+        code.test_reg(R11)
+        code.jcc("e", rounded)                  # no window to carry out of
+        code.mov_reg(RCX, R11)
+        code.mov_imm(R9, 1)
+        code.label(carry_loop)
+        code.test_reg(RCX)
+        code.jcc("e", carry_done)
+        code.shl_imm(R9, 1)
+        code.dec(RCX)
+        code.jmp(carry_loop)
+        code.label(carry_done)
+        slot(ANSWER, R11)
+        code.cmp_reg(R11, R9)
+        code.jcc("ne", rounded)
+        code.shr_imm(R11, 1)
+        put(ANSWER, R11)
+        slot(E1, RAX)
+        code.inc(RAX)
+        put(E1, RAX)
+        code.label(rounded)
+        # -- the answer --------------------------------------------------------
+        slot(E1, RAX)
+        slot(BELOW, R11)
+        code.sub_reg(RAX, R11)
+        code.inc(RAX)
+        put(SCALE, RAX)                         # 2**this, times the answer
+        code.mov_imm(R11, -1022)
+        code.cmp_reg(RAX, R11)
+        code.jcc("ge", power_normal)
+        code.mov_imm(R11, 1074)
+        code.add_reg(RAX, R11)
+        code.mov_reg(R9, RAX)
+        code.mov_imm(RCX, 1)                    # the smallest subnormal, stepped up
+        code.label(subnormal_loop)
+        code.test_reg(R9)
+        code.jcc("e", power_ready)
+        code.shl_imm(RCX, 1)
+        code.dec(R9)
+        code.jmp(subnormal_loop)
+        code.jmp(power_ready)
+        code.label(power_normal)
+        code.mov_imm(R11, 1023)
+        code.add_reg(RAX, R11)
+        code.mov_reg(RCX, RAX)
+        code.mov_imm(R9, 52)
+        code.label(normal_loop)
+        code.test_reg(R9)
+        code.jcc("e", power_ready)
+        code.shl_imm(RCX, 1)
+        code.dec(R9)
+        code.jmp(normal_loop)
+        code.label(power_ready)
+        slot(ANSWER, RAX)
+        code.cvtsi2sd(XMM0, RAX)
+        code.movq_xmm(XMM1, RCX)
+        code.mulsd(XMM0, XMM1)
+        # The exponent of the answer, counted rather than compared: it is above
+        # the largest the type holds exactly when those two do not fit.
+        slot(ANSWER, RAX)
+        code.xor_reg(R8, R8)
+        code.label(bits_loop)
+        code.test_reg(RAX)
+        code.jcc("e", bits_done)
+        code.inc(R8)
+        code.shr_imm(RAX, 1)
+        code.jmp(bits_loop)
+        code.label(bits_done)
+        code.dec(R8)
+        slot(SCALE, R11)
+        code.add_reg(R8, R11)
+        code.mov_imm(R9, 1023)
+        code.cmp_reg(R8, R9)
+        code.jcc("g", outside)
+        code.movq_xmm_to_reg(RAX, XMM0)
+        code.jmp(apply_sign)
+        code.label(zero)
+        code.xor_reg(RAX, RAX)
+        code.jmp(apply_sign)
+        code.label(apply_sign)
+        slot(SIGN, R11)
+        code.test_reg(R11)
+        code.jcc("e", done)
+        code.mov_imm(R11, 1 << 63)
+        code.xor_reg(RAX, R11)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+        # -- the refusals ------------------------------------------------------
+        code.label(no_token)
+        self.fail("expected an f64, reached end of input")
+        code.jmp(done)
+        code.label(too_long)
+        self.fail("f64 input token is too long")
+        code.jmp(done)
+        code.label(not_decimal)
+        self.fail("expected a decimal f64")
+        code.jmp(done)
+        code.label(bad_exponent)
+        self.fail("malformed exponent in f64 input")
+        code.jmp(done)
+        code.label(bad_tail)
+        self.fail("invalid character in f64 input")
+        code.jmp(done)
+        code.label(outside)
+        self.fail("f64 input is outside the f64 range")
+        code.jmp(done)
 
     def fail_helper(self) -> None:
         """`nv_fail(rdi)`: the C runtime's message on stderr, then the trace, then exit."""

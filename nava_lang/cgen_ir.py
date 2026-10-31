@@ -110,6 +110,7 @@ BUILTIN_HELPERS = {
     "str_split": ("nv_str_split", 3),
     "chars_len": ("nv_chars_len", 1),
     "str_from_f64": ("nv_str_from_f64", 1),
+    "read_f64": ("nv_read_f64", 0),
 }
 #: `print` of a value, per type. The three helpers print exactly what the native
 #: backend's three writers print, which is what the differential compares.
