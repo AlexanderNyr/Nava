@@ -1519,10 +1519,23 @@ unreachable, which the representation states rather than leaving to a backend to
 
 Text is compared and built: `==` and `!=` on two `str` compare the **text**
 (`TextCompare` in the representation, `nv_str_cmp` in the runtime), and the string
-operations `bytes_len`, `byte_at`, `str_concat`, `str_slice` and `str_from_i64` are
-runtime routines, as are the number conversions `to_i64` and `to_f64` and the reader
-`read_i64` — with the C runtime's four ways of refusing a number it cannot read, word
-for word and status for status.
+operations `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64` and
+`str_split` are runtime routines, as are the number conversions `to_i64` and `to_f64`,
+the reader `read_i64`, the two argument functions `arg_count` and `arg_at`, and the
+three clock readings `clock_seconds`, `clock_millis` and `clock_monotonic_millis` —
+with the C runtime's words for every refusal, status for status.
+
+`str_split` **copies** each field into the arena and appends it to the vector it was
+given, so the pieces outlive the text they came from and cannot be moved by a later
+push to the builder that produced it; an empty separator is a trap with the C
+runtime's words, because the only other thing an empty separator could be is a loop
+that never ends. `arg_count` counts the words *after* the program's own name and
+`arg_at` answers one of them as a `str` — a copy of a NUL-terminated word the kernel
+handed over, which is why it concatenates, compares and splits like any other text —
+with `argument index N is out of bounds for M argument(s)` for an index that is
+negative or too large. The three clock readings go to the kernel directly
+(`clock_gettime`, one `struct timespec` on the stack) and a reading the kernel
+refuses stops the program rather than answering `0`.
 
 A slice is a **view and not a copy**, on both backends: `a[i..j]` answers two words — how
 many elements and where the first of them is — pointing into the parent's elements, and
@@ -1542,11 +1555,10 @@ address it holds. Both name the same link-time symbol a direct call does, so a f
 reached through a value and the same function called by name are one address, and the
 linker sees one definition of it.
 
-Everything else — `String`, a generic function, an enum payload of struct type, a struct
-field that owns storage (`String`, `Vec`, a map, a set, an array), and the
-builtins not listed above (`chars_len`, `str_from_f64`, `read_f64`, the filesystem,
-argument functions and the clock) — is refused with `E0901`, **naming the construct and
-the function**. A
+Everything else — a generic function, an enum payload of struct type, a struct field
+that owns storage (`String`, `Vec`, a map, a set, an array), and the builtins not
+listed above (`chars_len`, `str_from_f64`, `read_f64` and the filesystem) — is refused
+with `E0901`, **naming the construct and the function**. A
 builtin is refused by the *instruction* rather than by the lowering: the IR says what
 the program means, and the backend says which routine it does not have. So is a generic
 function with more than one instantiation: an instantiation carries no type argument in
@@ -1588,11 +1600,13 @@ whichever way the file was produced; and every array operation goes through the 
 runtime helper (`nv_arr_i64_get`, `nv_arr_i64_set`, `nv_arr_i64_free`), so ownership and
 bounds checks do not depend on how the program reached the backend.
 
-The rest of the language is still printed by the AST walk: slices, `String`, `Vec`,
-`HashMap`, `HashSet`, generics, the builtins the runtime does not have, and `print` of an
-`f64` (`nv_print_f64` is the AST path's) are not
-printable
-from the representation yet, and a program using them is printed the old way. A float
+Since N14n the AST walk prints no fixture in the corpus: slices, `String`, `Vec`,
+`HashMap`, `HashSet`, generics, `print` of an `f64` and every builtin the runtime has
+are printable from the representation, and the guard that says so asks each fixture
+rather than trusting a list (`test_no_fixture_in_the_corpus_is_printed_by_the_ast_walk`).
+`NAVA_C_FROM_IR=0` still asks for the old path explicitly, which is what a bisect needs
+when the two disagree; what is no longer true is that any program in the corpus needs
+it. A float
 sum, a text comparison and the eight builtins above are printable: an `f64` sum is `+`
 on two `double`s, which is IEEE and checks nothing because there is nothing to check,
 and a text comparison is `strcmp`, never `==` on two addresses. A struct,

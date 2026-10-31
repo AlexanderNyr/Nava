@@ -44,16 +44,18 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "numerical", "fmt_table", "read_i64", "runtime_bad_input",
                  "enums_basic", "enums_state", "defer_labels", "results_basic",
                  "results_chain", "slices_basic", "struct_arrays", "floats",
-                 "map_basics", "set_basics")
+                 "map_basics", "set_basics", "self_test")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident.
-#: `self_test` lowers since a function became a value. What it still needs is
-#: `str_split` and the three `clock_*` builtins -- `String` arrived with N14m, so the
-#: gap is now the builtins the runtime has no native form of.
-LOWERED_NOT_PRINTED = ("self_test",)
+#: Empty since N14n: `self_test` was the last, and the six builtins it was waiting
+#: for (`str_split`, the three clock readings and the two argument functions) are
+#: now on the printed side of the boundary, so every fixture the lowering accepts
+#: is printed from the IR and the AST walk carries a fixture no longer.
+LOWERED_NOT_PRINTED = ()
 #: Programs whose C must still come from the AST walk, because the lowering refuses
 #: them by name (`E0901`). Empty: the lowering now accepts every fixture, which is
-#: what makes the second list the only gap left.
+#: what makes the second list the only gap left -- and that list is empty too, so
+#: the AST walk is dead code for the fixture corpus and is measured as such.
 OUTSIDE_THE_SUBSET = ()
 MARKER = "A lowering of the shared IR"
 
@@ -75,6 +77,24 @@ def lowered(name: str):
     except NavaError as error:
         if getattr(error, "code", None) == "E0901":
             return None
+        raise
+
+
+def lowered_with_types(name: str):
+    """The fixture's IR module and its function-type table, or `(None, None)`.
+
+    `supports` spells a function value through the typedef names
+    `cgen.function_types` builds, so a program that holds a function as a value
+    is printable only when they are handed over together: asked without them,
+    `supports` declines a program it prints, which is a false gap.
+    """
+    path = fixture(name)
+    program = program_of(path.read_text(encoding="utf-8"), path=path)
+    try:
+        return lower.lower(program), cgen.function_types(program)
+    except NavaError as error:
+        if getattr(error, "code", None) == "E0901":
+            return None, None
         raise
 
 
@@ -126,9 +146,9 @@ class CFromIRTests(unittest.TestCase):
     def test_every_program_in_the_subset_is_printed_from_the_ir(self):
         for name in IN_THE_SUBSET:
             with self.subTest(fixture=name):
-                module = lowered(name)
+                module, fnptr = lowered_with_types(name)
                 self.assertIsNotNone(module, f"{name} was refused by the lowering")
-                self.assertTrue(cgen_ir.supports(module),
+                self.assertTrue(cgen_ir.supports(module, fnptr),
                                 f"{name} lowers to IR the C printer cannot print")
                 text = emitted(fixture(name).read_text(encoding="utf-8"),
                                path=fixture(name))
@@ -144,6 +164,38 @@ class CFromIRTests(unittest.TestCase):
                 text = emitted(fixture(name).read_text(encoding="utf-8"),
                                path=fixture(name))
                 self.assertNotIn(MARKER, text)
+
+    def test_no_fixture_in_the_corpus_is_printed_by_the_ast_walk(self):
+        """An empty gap is a claim, so it is checked rather than left to read as one.
+
+        `LOWERED_NOT_PRINTED` is empty since N14n. A list of nothing passes every
+        loop written over it, which is exactly why this test exists: it asks each
+        fixture in the corpus, instead of trusting the tuple, whether the C it
+        gets came from the IR. The marker is the answer, and it is the one thing
+        the AST walk cannot put in a file it wrote.
+        """
+        for name in sorted(path.stem for path in FIXTURES.glob("*.nv")):
+            with self.subTest(fixture=name):
+                if name in OUTSIDE_THE_SUBSET:
+                    continue
+                module, fnptr = lowered_with_types(name)
+                self.assertIsNotNone(module, f"{name} was refused by the lowering")
+                self.assertTrue(cgen_ir.supports(module, fnptr),
+                                f"{name} lowers to IR the C printer cannot print")
+                self.assertNotIn(name, LOWERED_NOT_PRINTED)
+                text = emitted(fixture(name).read_text(encoding="utf-8"),
+                               path=fixture(name))
+                self.assertIn(MARKER, text,
+                              f"{name} is printed by the AST walk, not from the IR")
+
+    def test_the_three_lists_name_fixtures_and_do_not_overlap(self):
+        """A name on a list is a claim about a file, so the file has to exist."""
+        self.assertFalse(set(LOWERED_NOT_PRINTED) & set(IN_THE_SUBSET),
+                         "a fixture cannot be both printed and not printed")
+        self.assertFalse(set(OUTSIDE_THE_SUBSET) & set(IN_THE_SUBSET))
+        for name in (*IN_THE_SUBSET, *LOWERED_NOT_PRINTED, *OUTSIDE_THE_SUBSET):
+            with self.subTest(fixture=name):
+                self.assertTrue(fixture(name).exists(), f"{name} is not a fixture")
 
     def test_every_lowered_program_named_unprintable_says_why(self):
         """A gap is a named instruction, not a program that quietly takes one path.
@@ -167,9 +219,9 @@ class CFromIRTests(unittest.TestCase):
         """
         for name in LOWERED_NOT_PRINTED:
             with self.subTest(fixture=name):
-                module = lowered(name)
+                module, fnptr = lowered_with_types(name)
                 self.assertIsNotNone(module, f"{name} no longer lowers")
-                self.assertFalse(cgen_ir.supports(module),
+                self.assertFalse(cgen_ir.supports(module, fnptr),
                                  f"{name} is printable now; move it to IN_THE_SUBSET")
                 text = emitted(fixture(name).read_text(encoding="utf-8"),
                                path=fixture(name))

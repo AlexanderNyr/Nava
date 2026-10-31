@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+N14n: **`str_split`, the argument functions and the clock** — and `self_test`, the last
+fixture printed by the AST walk, now printed from the IR.
+
+- `str_split(text, sep, out)` appends each field to the vector it is given. It is a
+  **copy**, not a window: the separator is searched for one position at a time and each
+  field goes into the arena before it is pushed, so the pieces outlive the text they
+  came from. An empty separator is the C runtime's trap instead of a loop.
+- `arg_count()` counts the words after the program's own name and `arg_at(i)` answers
+  one of them as a `str`. `argc` and `argv` are on the stack when `_start` runs and
+  nowhere afterwards, so they are copied into the data segment there — and only for a
+  program that asks: a binary that reads neither carries neither symbol.
+- `clock_seconds()`, `clock_millis()` and `clock_monotonic_millis()` go to the kernel
+  directly (`clock_gettime`, one `struct timespec`) and share one helper. A reading the
+  kernel refuses stops the program rather than answering `0`.
+- `self_test` is built three ways — C from the IR, C from the AST walk, and native — and
+  the three agree byte for byte. Every fixture in the corpus is now printed from the IR;
+  the guard asks each fixture rather than trusting a list.
+
 N14m: **`String` through one IR** — text a piece at a time, with the copy that makes
 it a `str`.
 

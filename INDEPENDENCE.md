@@ -1367,6 +1367,9 @@ the differential records.
 | N14g | **Enums and `match` through one IR**: a variant value, its tag and a payload field as instructions, the enum layouts in the module, `match` lowered to a chain of tag comparisons against the checker's numbering with one join, and an `unreachable` terminator for the block a finished choice leaves dead | **Delivered** (record below) |
 | N14f | **Text and numbers through one IR**: a comparison of two `str` as its own instruction (`TextCompare`, never a pointer compare), and the eight builtins the runtime has — `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`, `to_i64`, `to_f64`, `read_i64` — implemented by the native runtime with the C runtime's words for every trap | **Delivered** (record below) |
 | N14e | **The rest of the value model in the IR**: `f64` arithmetic and comparison, struct values with cells for the storage a field write needs, one layout per struct type in the module, and a builtin as an instruction — compiled by the native backend, printed by the C backend, and refused by name where either cannot | **Delivered** (record below) |
+| N14l | **A function as a value through one IR**: one word, the address of its code, with no closure — `funcref` and an indirect `call` in the IR, `lea` and `call *%r11` on the native side, a function-pointer `typedef` on the C side, and a reachability walk that follows a value as well as a name | **Delivered** (record below) |
+| N14m | **`String` through one IR**: a builder of three words that doubles its buffer from 32, `string_text` as a **copy** into the arena (the buffer moves, so a `str` must never point into it), the two traps a byte can trip, and the same builtins printed from the IR on the C side | **Delivered** (record below) |
+| N14n | **`str_split`, the two argument functions and the three clock readings**: a split that copies each field into the arena and appends it, `arg_count`/`arg_at` with the C runtime's numbered trap, `clock_gettime` as one syscall with the reading checked, and `self_test` — the last fixture printed by the AST walk — printed from the IR | **Delivered** (record below) |
 | N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
 
 #### Delivery record N14a (2026-10-29)
@@ -2161,6 +2164,95 @@ filesystem, the argument functions or the clock exist natively (each is still re
 name, which is why `self_test` is still printed from the AST walk); or that the builder
 is fast — no benchmark was run, and a byte-at-a-time append is a byte-at-a-time append on
 either backend.
+
+---
+
+#### Delivery record N14n (2026-10-31)
+
+**`str_split`, the two argument functions and the three clock readings — and, with them,
+the end of the AST walk.** These six were what `self_test` was waiting for. It lowered
+already; what it could not do was be *printed* from the IR, because the C printer's
+helper table named none of the six. Now it is built three ways — C from the IR, C from
+the AST walk and native machine code — and the three agree byte for byte on stdout,
+stderr and status. Every fixture in the corpus is printed from the IR, and the guard
+that says so asks each fixture rather than trusting a list
+(`test_no_fixture_in_the_corpus_is_printed_by_the_ast_walk`), because an empty gap is
+exactly the claim a loop over an empty tuple would pass without noticing.
+
+**`str_split` is a copy, not a window.** The C runtime says `strstr` and
+`nv_arena_text`; this runtime has neither, so the separator is searched for one position
+at a time and each field is copied into the arena before it is pushed. That is not a
+restriction the native side invented — it is the same decision `string_text` made in
+N14m, for the same reason: a builder's buffer moves when it grows, so a `str` must never
+point into it. The test splits a builder's text, pushes 512 more bytes so the buffer has
+to move, and reads the three fields back: `3 / a / bb / ccc / 520`. An empty separator
+is the C runtime's trap rather than a loop that never ends, and `str_split` counts as a
+grower of the vector it fills, which is the link error the first version raised — a push
+the *runtime* writes is a push the program did not have to spell.
+
+**`arg_count` and `arg_at` are the only builtins whose value is not in the program.**
+`argc` and `argv` are on the stack when `_start` runs and nowhere afterwards, so the
+count without the program's own name and the address of the first word after it are
+copied into the data segment there — and only for a program that asks: a binary that
+never calls either carries neither symbol and is smaller than one that does. `arg_at`
+answers a `str`, which is a conversion rather than a pointer: the word the kernel handed
+over is NUL-terminated, and a Nava `str` is a length and then its bytes, so it is copied
+into the arena by the same `nv_text_from_bytes` that `string_text` and `str_split` use.
+The trap is the C runtime's, plural included — `argument index 9 is out of bounds for 1
+argument`, and `arguments` for every other count — and both backends are run with the
+same words after the name so that the comparison is about the runtime and not about how
+a test happens to invoke a binary.
+
+**The clock is one syscall, and a reading that fails stops the program.** Three readings
+share one helper: `clock_gettime(228)` with a `struct timespec` on the stack, and
+`sec * 1000 + nsec / 1000000` in the C runtime's order. A negative return is a trap
+rather than a plausible `0`, because a clock that invented a value would be a wrong
+measurement instead of a visible failure. The one place the two runtimes differ is a
+path neither can reach: C ends that message with `strerror(errno)`, and this one stops
+at the operation, because turning a number into a sentence about it is `strerror`'s and
+the native runtime links no library that has one. A clock cannot be asserted to a value,
+so what is compared is the shape — milliseconds within a second of the seconds, a
+monotonic reading that does not decrease — and, once, the two binaries' readings against
+each other, run close enough together to be within one second.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| Splitting agrees on every shape | `NativeSplitArgumentClockTests.test_a_split_agrees_with_the_c_backend_on_every_shape` | 14 (text, separator) pairs — empty text, an empty separator's own trap apart, a separator longer than the text, an overlapping one (`"aaa"` by `"aa"`), a two-character one, non-ASCII — and the pieces match Python's own `split` on both backends |
+| A field is a copy, not a window | `test_a_piece_is_a_copy_and_not_a_window` | `3 / a / bb / ccc / 520` after 512 pushes moved the buffer |
+| `str_split` appends | `test_a_split_fills_a_vector_a_program_already_holds` | two splits into one vector: `5 / a / b / c / d / e` |
+| An empty separator is the C runtime's trap | `test_an_empty_separator_is_the_c_runtime_s_trap` | `nava runtime error: str_split needs a non-empty separator`, status 1, empty stdout, on both |
+| A runtime push grows the vector | `test_a_split_needs_no_push_the_program_wrote` | a program that never writes `vec_push` builds and links — the `nv_vec_str_reserve` link error the first version raised |
+| The two argument functions | `test_the_two_argument_functions_agree_word_for_word` | 7 word lists — none, one, five, an empty word, one with a space, one with a tab, non-ASCII — both binaries run with the same words; `arg_count` and every `arg_at` identical |
+| A word is a `str` | `test_a_word_is_a_str_and_not_a_borrow` | concatenate, compare and split the word: `al-pha! / false / 2` |
+| An index out of bounds | `test_an_index_out_of_bounds_is_the_c_runtime_s_trap` | `argument index 9 is out of bounds for {0 arguments, 1 argument, 2 arguments}`, character for character |
+| A negative index | `test_a_negative_index_is_refused_the_same_way` | `argument index -1 is out of bounds for 0 arguments` |
+| A program that asks for nothing pays nothing | `test_a_program_that_asks_for_no_word_pays_nothing` | `nv_argc`/`nv_argv` are symbols of the binary that reads them and absent from the one that does not, which is smaller |
+| The clock reads a time | `test_the_clock_reads_a_time_and_never_goes_backwards` | seven relations — seconds past 2023, milliseconds within a second of them, a monotonic reading that does not decrease — all `true` on both |
+| The two backends read the same second | `test_the_two_backends_read_the_same_second` | two binaries, built and run seconds apart: the seconds differ by at most 1 |
+| A failed reading stops the program | `test_a_failed_reading_would_stop_the_program` | all three helpers emitted, and both `clock_gettime(CLOCK_REALTIME) failed` and `... CLOCK_MONOTONIC) failed` are in the image — asserted in the bytes, because the path is unreachable and a test that pretended otherwise would be a lie |
+| One reading, one helper | `test_a_program_with_only_a_clock_links` | a program that reads only the monotonic clock emits `nv_clock_monotonic_millis` and neither of the other two |
+| **`self_test` leaves the AST walk** | `test_self_test_builds_and_runs_from_the_ir_on_both_backends` | `nava emit-c` prints `A lowering of the shared IR`; both backends build and run it with identical stdout, stderr and status |
+| No fixture is printed by the AST walk | `CFromIRTests.test_no_fixture_in_the_corpus_is_printed_by_the_ast_walk` | every fixture: lowers, is supported by the IR printer, and carries the marker |
+| `supports` is asked with its typedefs | `lowered_with_types` | `supports` spells a function value through `cgen.function_types`; asked without them it declined a program it prints, which is a false gap — the old call was a latent bug this increment's fixture exposed |
+
+The audit is re-measured: **22 695 lines, 27 modules, 788 functions** (22 317 / 27 / 781
+at N14m) — no new module, 7 functions: `clock_read`, `arg_count`, `arg_at`,
+`fail_argument`, `text_from_bytes`, `str_split` and `keep_arguments`. The suite is
+**1 120 tests** with **1 730 subtests**, `tests/registry.py` reports **1 050 registered
+tests** with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic codes, and
+the overhead record is re-measured rather than assumed: **108 832 tokens**, unchanged,
+because the guide describes the language and this increment changed no word of it.
+
+What this increment does **not** claim: that the AST walk is *deleted* — it is still
+there behind `NAVA_C_FROM_IR=0`, and what is claimed is only that no fixture in the
+corpus needs it, which is the precondition for deleting it and not the deletion; that
+`str_from_f64`, `read_f64`, `chars_len` or the filesystem exist natively (each is still
+refused by name); that a failed clock reading is reachable with a valid clock id, or
+that the two runtimes' wording for one would agree if it were (`strerror` is a library
+this runtime does not link); that `str_split` is fast — a substring search one position
+at a time is quadratic in the worst case, and no benchmark was run; or that `arg_at` can
+be called before `_start` has run, which no program can arrange and no test claims.
+
 
 ---
 

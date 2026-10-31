@@ -84,8 +84,11 @@ CONTAINER_BUILTINS = {
     "set_clear": 1,
 }
 #: The container builtins that answer nothing: they are statements, not values.
+#: The builtins that answer nothing: they are statements, not values. `str_split`
+#: is one of them — the pieces go into the vector it was handed, so what it answers
+#: is nothing and what it changes is that vector.
 CONTAINER_STATEMENTS = {"vec_push", "vec_set", "map_set", "map_clear", "set_add",
-                        "set_clear"}
+                        "set_clear", "str_split"}
 #: The builtins the C printer can print: an IR `builtin` name -> the runtime function
 #: that implements it, with how many arguments it takes. The native backend has its own
 #: list, and a builtin that is on only one list is a gap in one backend — which is a
@@ -99,6 +102,12 @@ BUILTIN_HELPERS = {
     "to_i64": ("nv_to_i64", 1),
     "to_f64": ("nv_to_f64", 1),
     "read_i64": ("nv_read_i64", 0),
+    "clock_seconds": ("nv_clock_seconds", 0),
+    "clock_millis": ("nv_clock_millis", 0),
+    "clock_monotonic_millis": ("nv_clock_monotonic_millis", 0),
+    "arg_count": ("nv_arg_count", 0),
+    "arg_at": ("nv_arg_at", 1),
+    "str_split": ("nv_str_split", 3),
 }
 #: `print` of a value, per type. The three helpers print exactly what the native
 #: backend's three writers print, which is what the differential compares.

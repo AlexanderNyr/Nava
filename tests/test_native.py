@@ -4043,3 +4043,388 @@ fn main() -> i64 {
 }
 """)
         self.assertEqual(getattr(caught.exception, "code", None), "E0323")
+
+
+class NativeSplitArgumentClockTests(unittest.TestCase):
+    """`str_split`, the two argument functions and the three clock readings.
+
+    What the three have in common is that each is a runtime the native backend
+    had to write from nothing, and each has a C runtime whose words are already
+    the language's: the separator trap, `argument index N is out of bounds for M
+    argument(s)`, and a reading of the clock. A differential is only as good as
+    the oracle, so every claim here is a comparison against the C backend
+    rather than an expectation written down twice.
+
+    The two that are *not* comparable by output are handled the only honest way
+    a non-deterministic value can be: the clock is compared **in shape** — a
+    millisecond reading is within a second of a second reading, and a monotonic
+    reading does not go backwards — and the argument functions are compared by
+    running both binaries with the same words after the program's own name.
+    """
+
+    EDITION = "edition 2;\n"
+
+    def agrees(self, source: str, name: str = "split") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def trap(self, source: str, name: str = "trapped") -> tuple[str, str, int]:
+        """A run-time refusal: the same stop, on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[0], "")
+        self.assertEqual(native_out[2], 1)
+        return native_out
+
+    def words(self, source: str, arguments: list[str],
+              name: str = "args") -> tuple[list[str], list[str]]:
+        """Both backends' stdout, run with the same words after the name."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = subprocess.run([str(c_binary), *arguments], capture_output=True,
+                                   text=True, timeout=120)
+            native_out = subprocess.run([str(native_binary), *arguments],
+                                        capture_output=True, text=True, timeout=120)
+        self.assertEqual((native_out.stdout, native_out.stderr,
+                          native_out.returncode),
+                         (c_out.stdout, c_out.stderr, c_out.returncode))
+        return c_out.stdout.splitlines(), native_out.stdout.splitlines()
+
+    SPLIT_PROGRAM = """fn main() -> i64 {
+    let parts: Vec(str) = vec_new()
+    str_split(TEXT, SEP, parts)
+    print(vec_len(parts))
+    for part in parts { print(part) }
+    return 0
+}
+"""
+
+    def split_of(self, text: str, separator: str) -> list[str]:
+        """The pieces of `text` by `separator`, on both backends."""
+        source = (self.EDITION + self.SPLIT_PROGRAM
+                  .replace("TEXT", '"' + text + '"').replace("SEP", '"' + separator + '"'))
+        return self.agrees(source)
+
+    def test_a_split_agrees_with_the_c_backend_on_every_shape(self):
+        """The pieces, in order, for the separators a program actually writes."""
+        cases = [("a,b,c", ","), ("a,bb,,ccc", ","), ("", ","), (",", ","),
+                 (",,", ","), ("abc", ","), ("abc", "abc"), ("abc", "abcd"),
+                 ("aXbXc", "X"), ("one two  three", "  "), ("//", "/"),
+                 ("Привет мир", " "), ("aaa", "aa"), ("abab", "ab")]
+        for text, separator in cases:
+            with self.subTest(text=text, separator=separator):
+                pieces = self.split_of(text, separator)
+                expected = text.split(separator) if separator else []
+                self.assertEqual(pieces[0], str(len(expected)))
+                self.assertEqual(pieces[1:], expected)
+
+    def test_a_piece_is_a_copy_and_not_a_window(self):
+        """The pieces outlive the text they came from, which a view would not.
+
+        `str_split` copies each piece into the arena, so a builder that grows
+        after the split cannot move a piece the program is already holding: the
+        split is taken, the builder is pushed past its capacity, and the pieces
+        are read again.
+        """
+        source = self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push(s, "a,bb,ccc")
+    let parts: Vec(str) = vec_new()
+    str_split(string_text(s), ",", parts)
+    let i = 0
+    while i < 512 { string_push(s, "x"); i = i + 1 }
+    print(vec_len(parts))
+    print(vec_get(parts, 0))
+    print(vec_get(parts, 1))
+    print(vec_get(parts, 2))
+    print(string_len(s))
+    return 0
+}
+"""
+        # 8 bytes of text, then 512 more: the builder has moved, the pieces have not.
+        self.assertEqual(self.agrees(source), ["3", "a", "bb", "ccc", "520"])
+
+    def test_a_split_fills_a_vector_a_program_already_holds(self):
+        """`str_split` appends: two splits of one vector are six pieces."""
+        source = self.EDITION + """fn main() -> i64 {
+    let parts: Vec(str) = vec_new()
+    str_split("a-b", "-", parts)
+    str_split("c-d-e", "-", parts)
+    print(vec_len(parts))
+    for part in parts { print(part) }
+    return 0
+}
+"""
+        self.assertEqual(self.agrees(source), ["5", "a", "b", "c", "d", "e"])
+
+    def test_an_empty_separator_is_the_c_runtime_s_trap(self):
+        """An empty separator would loop forever, so it is a stop with a message."""
+        stderr = self.trap(self.EDITION + """fn main() -> i64 {
+    let parts: Vec(str) = vec_new()
+    str_split("abc", "", parts)
+    return 0
+}
+""")[1]
+        self.assertEqual(stderr, "nava runtime error: "
+                                 "str_split needs a non-empty separator\n")
+
+    def test_a_split_needs_no_push_the_program_wrote(self):
+        """`str_split` pushes, so the vector family includes `push` and `reserve`.
+
+        A program that never writes `vec_push` still has to grow the vector it
+        hands to `str_split`. This is the link error the first version raised:
+        `nv_vec_str_reserve` was emitted from what the program *said*, and the
+        runtime's own push was not counted as saying it.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "onlysplit", self.EDITION + """fn main() -> i64 {
+    let parts: Vec(str) = vec_new()
+    str_split("a-b-c-d-e-f-g-h-i-j", "-", parts)
+    print(vec_len(parts))
+    return 0
+}
+""")
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "native"),
+                         "--backend", "native"])
+        self.assertEqual(built.returncode, 0, built.stderr)
+        self.assertNotIn("undefined symbol", built.stderr, built.stderr)
+
+    def test_the_two_argument_functions_agree_word_for_word(self):
+        """`arg_count` is the words after the name; `arg_at` is one of them."""
+        source = self.EDITION + """fn main() -> i64 {
+    print(arg_count())
+    let i = 0
+    while i < arg_count() {
+        print(arg_at(i))
+        i = i + 1
+    }
+    return 0
+}
+"""
+        for arguments in ([], ["one"], ["one", "two"], ["a", "b", "c", "d", "e"],
+                          ["", "x"], ["with space", "tab\there"], ["Привет"]):
+            with self.subTest(arguments=arguments):
+                c_lines, native_lines = self.words(source, arguments)
+                self.assertEqual(c_lines, [str(len(arguments)), *arguments])
+                self.assertEqual(native_lines, c_lines)
+
+    def test_a_word_is_a_str_and_not_a_borrow(self):
+        """`arg_at` answers a `str`: it concatenates, splits and compares."""
+        source = self.EDITION + """fn main() -> i64 {
+    let first = arg_at(0)
+    print(str_concat(first, "!"))
+    print(first == "alpha")
+    let parts: Vec(str) = vec_new()
+    str_split(first, "-", parts)
+    print(vec_len(parts))
+    return 0
+}
+"""
+        c_lines, native_lines = self.words(source, ["al-pha"])
+        self.assertEqual(c_lines, ["al-pha!", "false", "2"])
+        self.assertEqual(native_lines, c_lines)
+
+    def test_an_index_out_of_bounds_is_the_c_runtime_s_trap(self):
+        """`argument index N is out of bounds for M arguments` — plural and all."""
+        source = self.EDITION + """fn main() -> i64 {
+    print(arg_at(9))
+    return 0
+}
+"""
+        for arguments, expected in (([], "0 arguments"), (["only"], "1 argument"),
+                                    (["a", "b"], "2 arguments")):
+            with self.subTest(arguments=arguments):
+                with tempfile.TemporaryDirectory() as temp:
+                    directory = pathlib.Path(temp)
+                    path = write_source(directory, "oob", source)
+                    c_binary, native_binary = build_both(path, directory)
+                    c_out = subprocess.run([str(c_binary), *arguments],
+                                           capture_output=True, text=True, timeout=120)
+                    native_out = subprocess.run([str(native_binary), *arguments],
+                                                capture_output=True, text=True,
+                                                timeout=120)
+                self.assertEqual((native_out.stdout, native_out.stderr,
+                                  native_out.returncode),
+                                 (c_out.stdout, c_out.stderr, c_out.returncode))
+                self.assertEqual(
+                    native_out.stderr,
+                    f"nava runtime error: argument index 9 is out of bounds "
+                    f"for {expected}\n")
+
+    def test_a_negative_index_is_refused_the_same_way(self):
+        """`-1` is below the first word, and the message names it."""
+        stderr = self.trap(self.EDITION + """fn main() -> i64 {
+    print(arg_at(0 - 1))
+    return 0
+}
+""")[1]
+        self.assertEqual(stderr, "nava runtime error: argument index -1 is out of "
+                                 "bounds for 0 arguments\n")
+
+    def test_a_program_that_asks_for_no_word_pays_nothing(self):
+        """`nv_argc`/`nv_argv` exist only for a program that reads them.
+
+        The words are on the stack when `_start` runs and nowhere afterwards, so
+        the copy into the data segment is the only place it can happen — and a
+        program that never asks for one is not given it.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            plain = write_source(directory, "plain", self.EDITION + """fn main() -> i64 {
+    return 0
+}
+""")
+            asking = write_source(directory, "asking", self.EDITION + """fn main() -> i64 {
+    print(arg_count())
+    return 0
+}
+""")
+            for path in (plain, asking):
+                built = run([*NAVA, "build", str(path), "-o",
+                             str(directory / f"{path.stem}-n"), "--backend", "native"])
+                self.assertEqual(built.returncode, 0, built.stderr)
+            plain_names = {symbol.name for symbol in reader.read(directory / "plain-n").symbols}
+            asking_names = {symbol.name
+                            for symbol in reader.read(directory / "asking-n").symbols}
+            image = (directory / "asking-n").read_bytes()
+            plain_image = (directory / "plain-n").read_bytes()
+        # The two words live in the data segment, so their symbols carry its prefix.
+        for word in ("nv_argc", "nv_argv"):
+            self.assertNotIn(f"runtime.data.{word}", plain_names)
+            self.assertIn(f"runtime.data.{word}", asking_names)
+        self.assertNotIn("nv_arg_count", plain_names)
+        self.assertIn("nv_arg_count", asking_names)
+        self.assertLess(len(plain_image), len(image),
+                        "a program that asks for no word emits less, not the same")
+
+    def test_the_clock_reads_a_time_and_never_goes_backwards(self):
+        """Three readings, compared in shape because a clock is not a constant.
+
+        A reading cannot be asserted to a value, so what is compared is the
+        relation the C runtime promises: milliseconds are the seconds scaled,
+        and a monotonic reading never decreases.
+        """
+        source = self.EDITION + """fn main() -> i64 {
+    let seconds = clock_seconds()
+    let millis = clock_millis()
+    let mono = clock_monotonic_millis()
+    print(seconds > 1700000000)
+    print(millis >= seconds * 1000)
+    print(millis < (seconds + 2) * 1000)
+    print(mono > 0)
+    print(clock_monotonic_millis() >= mono)
+    print(clock_millis() >= millis)
+    print(clock_seconds() >= seconds)
+    return 0
+}
+"""
+        self.assertEqual(self.agrees(source),
+                         ["true", "true", "true", "true", "true", "true", "true"])
+
+    def test_the_two_backends_read_the_same_second(self):
+        """A reading is a *time*, so the two binaries are run close together.
+
+        The strongest comparison available for a non-deterministic value: build
+        both, run both, and assert the seconds are within one of each other.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "clock", self.EDITION + """fn main() -> i64 {
+    print(clock_seconds())
+    print(clock_millis())
+    return 0
+}
+""")
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)[0].splitlines()
+            native_out = run_binary(native_binary)[0].splitlines()
+        c_seconds, c_millis = int(c_out[0]), int(c_out[1])
+        n_seconds, n_millis = int(native_out[0]), int(native_out[1])
+        self.assertLessEqual(abs(n_seconds - c_seconds), 1,
+                             "the two backends read the wall clock a second apart")
+        self.assertLessEqual(abs(n_millis - c_millis), 1500)
+        self.assertGreaterEqual(n_millis, n_seconds * 1000)
+        self.assertLess(n_millis, (n_seconds + 2) * 1000)
+
+    def test_a_failed_reading_would_stop_the_program(self):
+        """The refusal is in the code, not in the test: the clock cannot fail.
+
+        `clock_gettime` with a valid clock id does not fail, so the trap is
+        unreachable — which is why this test asserts only that the helper is
+        emitted with its stop in it, rather than pretending to reach it.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "clock", self.EDITION + """fn main() -> i64 {
+    print(clock_seconds() >= 0)
+    print(clock_millis() >= 0)
+    print(clock_monotonic_millis() >= 0)
+    return 0
+}
+""")
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "n"),
+                         "--backend", "native"])
+            self.assertEqual(built.returncode, 0, built.stderr)
+            names = {symbol.name for symbol in reader.read(directory / "n").symbols}
+            image = (directory / "n").read_bytes()
+        for name in ("nv_clock_seconds", "nv_clock_millis",
+                     "nv_clock_monotonic_millis"):
+            self.assertIn(name, names, f"{name} was not emitted")
+        self.assertIn(b"clock_gettime(CLOCK_REALTIME) failed", image)
+        self.assertIn(b"clock_gettime(CLOCK_MONOTONIC) failed", image)
+
+    def test_a_program_with_only_a_clock_links(self):
+        """One reading pulls in one helper, and the syscall number is `228`."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "mono", self.EDITION + """fn main() -> i64 {
+    print(clock_monotonic_millis() > 0)
+    return 0
+}
+""")
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "n"),
+                         "--backend", "native"])
+            self.assertEqual(built.returncode, 0, built.stderr)
+            names = {symbol.name for symbol in reader.read(directory / "n").symbols}
+        self.assertIn("nv_clock_monotonic_millis", names)
+        self.assertNotIn("nv_clock_seconds", names,
+                         "a program that reads one clock emits one reader")
+        self.assertNotIn("nv_clock_millis", names)
+
+    def test_self_test_builds_and_runs_from_the_ir_on_both_backends(self):
+        """`self_test` was the last fixture printed by the AST walk.
+
+        It needs all six — `str_split`, the three clock readings and the two
+        argument functions — so it is the one program that says the gap is
+        closed, and it is compared on stdout, stderr and status.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, "self_test", fixture_text("self_test"))
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+            emitted = subprocess.run([*NAVA, "emit-c", str(path)], capture_output=True,
+                                     text=True, timeout=300)
+        self.assertEqual(emitted.returncode, 0, emitted.stderr)
+        self.assertIn("A lowering of the shared IR", emitted.stdout,
+                      "self_test is still printed by the AST walk")
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        self.assertTrue(native_out[0].strip(), "self_test printed nothing")

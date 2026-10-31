@@ -71,6 +71,15 @@ MAX_ELEMENTS = limits.MAX_ARRAY_ELEMENTS
 #: The two system calls the arena needs, with the flags a private anonymous
 #: mapping takes on x86-64 Linux.
 SYSCALL_MMAP = 9
+#: `clock_gettime(clockid, struct timespec *)`: the one syscall behind all three
+#: readings. `CLOCK_REALTIME` is the wall clock and can be corrected backwards;
+#: `CLOCK_MONOTONIC` only moves forward and does not count time the machine spent
+#: asleep, which is why it is the one a duration is measured with.
+SYSCALL_CLOCK_GETTIME = 228
+CLOCK_REALTIME, CLOCK_MONOTONIC = 0, 1
+#: A `struct timespec` is two words: whole seconds, then nanoseconds.
+NANOS_IN_MILLI = 1000000
+MILLIS_IN_SECOND = 1000
 PROT_READ, PROT_WRITE = 1, 2
 MAP_PRIVATE, MAP_ANONYMOUS = 2, 0x20
 I64_MIN = -(2 ** 63)
@@ -103,6 +112,12 @@ BUILTIN_ROUTINES = {
     "to_i64": ("nv_to_i64", 1),
     "to_f64": ("nv_to_f64", 1),
     "read_i64": ("nv_read_i64", 0),
+    "clock_seconds": ("nv_clock_seconds", 0),
+    "clock_millis": ("nv_clock_millis", 0),
+    "clock_monotonic_millis": ("nv_clock_monotonic_millis", 0),
+    "arg_count": ("nv_arg_count", 0),
+    "arg_at": ("nv_arg_at", 1),
+    "str_split": ("nv_str_split", 3),
 }
 #: How many bytes one word of a struct takes. A struct is a record of words — an
 #: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
@@ -2122,6 +2137,29 @@ class Generator:
                              ("nv_read_i64", self.read_i64_helper)):
             self.runtime_function(symbol, body)
         self.bn_runtime()
+        for name, body in (("clock_seconds", "seconds"), ("clock_millis", "millis"),
+                           ("clock_monotonic_millis", "millis")):
+            if self.uses_builtin(name):
+                self.runtime_function(
+                    f"nv_{name}",
+                    lambda body=body: self.clock_read(
+                        CLOCK_MONOTONIC if name == "clock_monotonic_millis"
+                        else CLOCK_REALTIME, body))
+        if self.uses_builtin("arg_count") or self.uses_builtin("arg_at"):
+            self.runtime_function("nv_arg_count", self.arg_count)
+        if self.uses_builtin("arg_at"):
+            self.runtime_function("nv_arg_at", self.arg_at)
+            self.runtime_function("nv_fail_argument", self.fail_argument)
+        if self.uses_builtin("str_split"):
+            self.runtime_function("nv_str_split", self.str_split)
+        if (self.uses_builtin("string_text") or self.uses_builtin("str_split")
+                or self.uses_builtin("arg_at")):
+            # One copier, shared by `string_text`, `str_split` and `arg_at`: all
+            # three answer a `str` out of bytes that are not one — a builder's
+            # bytes, a piece of a text, or a word the kernel handed over — and
+            # the answer is the same shape whichever asked, a length and then
+            # the bytes.
+            self.runtime_function("nv_text_from_bytes", self.text_from_bytes)
         if any(self.uses_builtin(name) for name in self.STRING_BUILTINS):
             # The family is one per program, not one per type: a `String` has no
             # element type to generate from. `reserve` is not a builtin the program
@@ -2154,14 +2192,21 @@ class Generator:
             # `reserve` is not a builtin the program calls — it is what `push`
             # needs — so the family is emitted from what the program uses rather
             # than from the shape of the type.
-            growing = self.uses_builtin("vec_push") or self.uses_builtin("vec_set")
+            # `str_split` pushes, and a push that cannot grow is a push that
+            # writes past the end — so it counts as a grower however the program
+            # spells its own pushes.
+            growing = (self.uses_builtin("vec_push") or self.uses_builtin("vec_set")
+                       or self.uses_builtin("str_split"))
             for name, body in (("new", self.vec_new), ("reserve", self.vec_reserve),
                                ("push", self.vec_push), ("pop", self.vec_pop),
                                ("get", self.vec_get), ("set", self.vec_set)):
                 if name == "reserve" and not growing:
                     continue
                 if name != "reserve" and not self.uses_builtin(f"vec_{name}"):
-                    continue
+                    # `str_split` pushes into the vector it was given, so it needs
+                    # `push` even in a program that never writes `vec_push`.
+                    if not (name == "push" and self.uses_builtin("str_split")):
+                        continue
                 self.runtime_function(f"nv_vec_{self.vector_tag(typ)}_{name}",
                                       lambda body=body, typ=typ: body(typ))
         for typ in self.module.tables:
@@ -2237,6 +2282,7 @@ class Generator:
         code.mov_reg(RBP, RSP)
         code.sub_rsp(24)
         self.trace_variable(flag)
+        self.keep_arguments()
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.call(ir.symbol(main))
@@ -2246,6 +2292,37 @@ class Generator:
             code.movzx_byte(RDI, RAX)
         code.mov_imm(RAX, 60)
         code.syscall()
+
+    def keep_arguments(self) -> None:
+        """The words after the program's own name, counted and pointed at.
+
+        `_start` is the only place that sees `argc` and `argv`, and it sees them
+        once: the kernel put them on the stack and nothing else will. So they are
+        copied into the data segment here — the count without the program's own
+        name, and the address of the first word that follows it, which is what
+        `nv_argc` and `nv_argv` in the C runtime hold and what `arg_count` and
+        `arg_at` read. A program that asks for neither pays nothing.
+        """
+        if not (self.uses_builtin("arg_count") or self.uses_builtin("arg_at")):
+            return
+        code = self.code
+        count = self.raw("nv_argc", bytes(8), DATA)
+        base = self.raw("nv_argv", bytes(8), DATA)
+        code.load(RAX, RBP, 8)                  # argc
+        code.xor_reg(R10, R10)
+        code.test_reg(RAX)
+        code.jcc("e", "nv_keep_arguments_shift")
+        code.mov_imm(R10, 1)                    # the program's own name is not one
+        code.label("nv_keep_arguments_shift")
+        code.sub_reg(RAX, R10)
+        code.lea_rip(R11, count)
+        code.store(R11, 0, RAX)
+        code.lea(RAX, RBP, 16)                  # argv[0]
+        code.mov_imm(R11, FIELD_SIZE)
+        code.imul_reg(R10, R11)
+        code.add_reg(RAX, R10)                  # argv[0], or argv[1] when there is one
+        code.lea_rip(R11, base)
+        code.store(R11, 0, RAX)
 
     def trace_variable(self, flag: str) -> None:
         """Set `flag` when `NAVA_TRACE` is in the environment.
@@ -3046,24 +3123,215 @@ class Generator:
         NUL-terminated instead of length-prefixed.
         """
         code = self.code
-        loop, done = self.local("str_text_loop"), self.local("str_text_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.store(RBP, -8, RDI)
+        code.load(RSI, RDI, STRING_LENGTH)
+        code.load(RDI, RDI, STRING_DATA)
+        code.call("nv_text_from_bytes")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def clock_read(self, clock: int, shape: str) -> None:
+        """`nv_clock_<shape>(void)`: one reading, in seconds or in milliseconds.
+
+        The arithmetic is the C runtime's, unchecked and in its order: whole
+        seconds times a thousand, plus the nanoseconds divided by a million. A
+        reading that the kernel refuses stops the program, because a clock that
+        answered 0 instead would be a wrong measurement wearing a plausible face —
+        which is the reason this helper exists at all rather than leaving the
+        syscall's result in a register.
+
+        The C runtime ends that message with `: ` and `strerror(errno)`, and this
+        one stops at the operation: turning a number into a sentence about it is
+        `strerror`'s, and the native runtime links no library that has one. The
+        two agree on every reachable path, which is the only path a differential
+        can walk.
+        """
+        code = self.code
+        failed = self.local("clock_failed")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(40)
+        code.mov_imm(RDI, clock)
+        code.lea(RSI, RBP, -16)                 # struct timespec
+        code.mov_imm(RAX, SYSCALL_CLOCK_GETTIME)
+        code.syscall()
+        code.test_reg(RAX)
+        code.jcc("ns", failed)
+        self.fail(f"clock_gettime({'CLOCK_MONOTONIC' if clock == CLOCK_MONOTONIC else 'CLOCK_REALTIME'}) failed")
+        code.label(failed)
+        if shape == "seconds":
+            code.load(RAX, RBP, -16)            # the whole seconds
+        else:
+            # The nanoseconds are divided first and the seconds are scaled
+            # after, because the quotient of `div` lands in `rax` and the
+            # seconds are what the quotient is added to: the reading is
+            # `sec * 1000 + nsec / 1000000`, in the C runtime's order.
+            code.load(RAX, RBP, -8)             # the nanoseconds
+            code.mov_imm(RCX, NANOS_IN_MILLI)
+            code.xor_reg(RDX, RDX)
+            code.div(RCX)
+            code.store(RBP, -24, RAX)
+            code.load(RAX, RBP, -16)            # the whole seconds
+            code.mov_imm(R11, MILLIS_IN_SECOND)
+            code.imul_reg(RAX, R11)
+            code.load(R11, RBP, -24)
+            code.add_reg(RAX, R11)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def arg_count(self) -> None:
+        """`nv_arg_count(void)`: how many words followed the program's own name."""
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.lea_rip(RAX, self.raw("nv_argc", bytes(8), DATA))
+        code.load(RAX, RAX, 0)
+        code.pop(RBP)
+        code.ret()
+
+    def arg_at(self) -> None:
+        """`nv_arg_at(rdi = index)` -> one word, as a `str`.
+
+        The words the process was started with are NUL-terminated C strings in
+        memory the kernel laid out, and a Nava `str` is a length and then its
+        bytes — so this is a conversion, not a pointer: the text is copied into
+        the arena and the answer belongs to the program. The bounds check is the
+        C runtime's, and its message states both numbers.
+        """
+        code = self.code
+        inside, length, copy = (self.local("arg_inside"), self.local("arg_length"),
+                                self.local("arg_copy"))
+        done = self.local("arg_done")
         code.push(RBP)
         code.mov_reg(RBP, RSP)
         code.sub_rsp(32)
-        code.store(RBP, -8, RDI)
-        code.load(R11, RDI, STRING_LENGTH)
-        code.mov_reg(RAX, R11)
-        code.mov_imm(R10, FIELD_SIZE)           # the length word
+        code.store(RBP, -8, RDI)                # the index
+        code.lea_rip(RAX, self.raw("nv_argc", bytes(8), DATA))
+        code.load(R11, RAX, 0)                  # how many there are
+        code.test_reg(RDI)
+        code.jcc("s", "nv_arg_at_trap")
+        code.cmp_reg(RDI, R11)
+        code.jcc("l", inside)
+        code.label("nv_arg_at_trap")
+        code.lea_rip(RAX, self.raw("nv_argc", bytes(8), DATA))
+        code.load(RSI, RAX, 0)
+        code.call("nv_fail_argument")
+        code.label(inside)
+        code.lea_rip(RAX, self.raw("nv_argv", bytes(8), DATA))
+        code.load(RAX, RAX, 0)                  # char **, pointing at the first word
+        code.load(R10, RBP, -8)
+        code.mov_imm(R11, FIELD_SIZE)
+        code.imul_reg(R10, R11)
         code.add_reg(RAX, R10)
+        code.load(R10, RAX, 0)                  # the word itself
+        code.mov_imm(RCX, 0)
+        code.label(length)
+        code.load_byte(RAX, R10, 0)
+        code.test_reg(RAX)
+        code.jcc("e", done)
+        code.inc(R10)
+        code.inc(RCX)
+        code.jmp(length)
+        code.label(done)
+        code.store(RBP, -16, RCX)               # how many bytes it is
+        code.mov_reg(RDI, R10)
+        code.sub_reg(RDI, RCX)                  # back to the first of them
+        code.mov_reg(RSI, RCX)
+        code.call("nv_text_from_bytes")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def fail_argument(self) -> None:
+        """`nv_fail_argument(rdi = index, rsi = count)`: one numbered trap.
+
+        The message is the C runtime's, plural included: `argument index N is out
+        of bounds for M arguments`, and `argument` in the singular when there is
+        exactly one. A fifth kind of `nv_fail_pair` would have been the other
+        shape this could take, and would have made that helper branch on a
+        plural it is the only message to need.
+        """
+        code = self.code
+        plural = self.local("arg_plural")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)
+        code.store(RBP, -16, RSI)
+        code.lea_rip(RSI, self.number_buffer(5))
+        code.call("nv_format")
+        code.store(RBP, -24, RAX)
+        code.store(RBP, -32, RDX)
+        code.load(RDI, RBP, -16)
+        code.lea_rip(RSI, self.number_buffer(6))
+        code.call("nv_format")
+        code.store(RBP, -40, RAX)
+        code.store(RBP, -48, RDX)
+        code.lea_rip(RSI, self.raw("nv_prefix", FAIL_PREFIX.encode()))
+        code.mov_imm(RDX, len(FAIL_PREFIX))
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+        self.write_bytes("argument index ")
+        self.write_number(-24, -32)
+        self.write_bytes(" is out of bounds for ")
+        self.write_number(-40, -48)
+        self.write_bytes(" argument")
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R11, 1)
+        code.cmp_reg(RAX, R11)
+        code.jcc("e", plural)
+        self.write_bytes("s")
+        code.label(plural)
+        self.newline_to(2)
+        flag = self.raw("nv_trace_flag", bytes(8), DATA)
+        no_trace = self.local("no_trace")
+        code.lea_rip(RAX, flag)
+        code.load(RAX, RAX, 0)
+        code.test_reg(RAX)
+        code.jcc("e", no_trace)
+        code.mov_reg(RDI, RBP)
+        code.call("nv_trace_stack")
+        code.label(no_trace)
+        code.mov_imm(RDI, 1)
+        code.mov_imm(RAX, 60)
+        code.syscall()
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def text_from_bytes(self) -> None:
+        """`nv_text_from_bytes(rdi = bytes, rsi = length)` -> a `str` in the arena.
+
+        A Nava string is its length and then its bytes, so the answer costs one
+        word more than the text: the length is the first thing every reader of a
+        `str` asks for. The C runtime's `nv_arena_text` allocates one byte fewer
+        and ends the copy with a NUL instead, and the two answers read the same
+        because both are asked for a length and then for that many bytes.
+        """
+        code = self.code
+        loop, done = self.local("text_loop"), self.local("text_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)                # the bytes
+        code.store(RBP, -16, RSI)               # how many
+        code.load(RAX, RBP, -16)
+        code.mov_imm(R11, FIELD_SIZE)           # the length word
+        code.add_reg(RAX, R11)
         self.overflow("add")
         code.mov_reg(RDI, RAX)
         code.call("nv_alloc")
-        code.store(RBP, -16, RAX)               # the new string
-        code.load(R9, RBP, -8)
-        code.load(R11, R9, STRING_LENGTH)
-        code.store(RAX, 0, R11)                 # its length
-        code.lea(R8, RAX, FIELD_SIZE)           # its bytes
-        code.load(R10, R9, STRING_DATA)
+        code.store(RBP, -24, RAX)               # the new string
+        code.load(R11, RBP, -16)
+        code.store(RAX, 0, R11)
+        code.lea(R8, RAX, FIELD_SIZE)
+        code.load(R10, RBP, -8)
         code.mov_reg(RCX, R11)
         code.label(loop)
         code.test_reg(RCX)
@@ -3075,7 +3343,108 @@ class Generator:
         code.dec(RCX)
         code.jmp(loop)
         code.label(done)
-        code.load(RAX, RBP, -16)
+        code.load(RAX, RBP, -24)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def str_split(self) -> None:
+        """`nv_str_split(rdi = value, rsi = sep, rdx = out)`: the pieces, in order.
+
+        The separator is searched for by hand — one position at a time, and the
+        bytes at each — because a substring search is a library call and this
+        runtime makes none. Each piece is **copied** before it is pushed, so the
+        vector holds `str`s and not windows into the text being split; and an
+        empty separator is a trap rather than an infinite loop, which is the only
+        other thing it could have been.
+        """
+        code = self.code
+        positions, compare, advance = (self.local("split_positions"),
+                                       self.local("split_compare"),
+                                       self.local("split_advance"))
+        found, tail = self.local("split_found"), self.local("split_tail")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(64)
+        code.store(RBP, -8, RDI)                # the text
+        code.store(RBP, -16, RSI)               # the separator
+        code.store(RBP, -24, RDX)               # the vector the pieces go into
+        code.load(R11, RSI, 0)                  # how long the separator is
+        code.store(RBP, -32, R11)
+        code.test_reg(R11)
+        code.jcc("ne", "nv_str_split.separator")
+        self.fail("str_split needs a non-empty separator")
+        code.label("nv_str_split.separator")
+        code.load(RAX, RBP, -8)
+        code.lea(RAX, RAX, FIELD_SIZE)          # the bytes of the text
+        code.store(RBP, -40, RAX)               # where the next piece starts
+        code.load(RAX, RBP, -8)
+        code.load(RAX, RAX, 0)
+        code.store(RBP, -48, RAX)               # how much of it is left
+        code.label(positions)
+        code.load(RAX, RBP, -48)
+        code.load(R11, RBP, -32)
+        code.cmp_reg(RAX, R11)
+        code.jcc("l", tail)                     # too little left to hold the separator
+        code.load(R8, RBP, -40)                 # the candidate
+        code.load(RAX, RBP, -48)
+        code.sub_reg(RAX, R11)
+        code.mov_reg(R10, RAX)
+        code.inc(R10)                           # how many positions to try
+        code.label(compare)
+        code.test_reg(R10)
+        code.jcc("e", tail)                     # no occurrence in what is left
+        code.mov_reg(R11, R8)
+        code.load(R9, RBP, -16)
+        code.lea(R9, R9, FIELD_SIZE)            # the bytes of the separator
+        code.load(RCX, RBP, -32)
+        code.label("nv_str_split.bytes")
+        code.test_reg(RCX)
+        code.jcc("e", found)                    # every byte matched
+        code.load_byte(RAX, R11, 0)
+        code.load_byte(RDX, R9, 0)
+        code.cmp_reg(RAX, RDX)
+        code.jcc("ne", advance)
+        code.inc(R11)
+        code.inc(R9)
+        code.dec(RCX)
+        code.jmp("nv_str_split.bytes")
+        code.label(advance)
+        code.inc(R8)
+        code.dec(R10)
+        code.jmp(compare)
+        code.label(found)
+        # The piece is the bytes from `start` up to the occurrence.
+        code.mov_reg(RAX, R8)
+        code.load(R11, RBP, -40)
+        code.sub_reg(RAX, R11)
+        code.store(RBP, -56, RAX)               # how long the piece is
+        code.mov_reg(RDI, R11)
+        code.mov_reg(RSI, RAX)
+        code.call("nv_text_from_bytes")
+        code.mov_reg(RSI, RAX)
+        code.load(RDI, RBP, -24)
+        code.call(f"nv_vec_{self.vector_tag('Vec(str)')}_push")
+        code.load(R8, RBP, -40)
+        code.load(RAX, RBP, -56)
+        code.add_reg(R8, RAX)
+        code.load(R11, RBP, -32)
+        code.add_reg(R8, R11)                   # past the piece and the separator
+        code.store(RBP, -40, R8)
+        code.load(RAX, RBP, -56)
+        code.load(R11, RBP, -32)
+        code.add_reg(RAX, R11)
+        code.load(R11, RBP, -48)
+        code.sub_reg(R11, RAX)
+        code.store(RBP, -48, R11)
+        code.jmp(positions)
+        code.label(tail)
+        code.load(RDI, RBP, -40)
+        code.load(RSI, RBP, -48)
+        code.call("nv_text_from_bytes")
+        code.mov_reg(RSI, RAX)
+        code.load(RDI, RBP, -24)
+        code.call(f"nv_vec_{self.vector_tag('Vec(str)')}_push")
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.ret()
