@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+N14o: **`chars_len` and `str_from_f64`** — characters, and the text of a float.
+
+- `chars_len(s)` counts **characters**, not bytes: it decodes UTF-8 and refuses the
+  six ways a byte sequence is not one — a continuation byte with nothing to
+  continue, an overlong form, half of a surrogate pair, a value above `U+10FFFF`,
+  a lead byte no form begins with, and a form that runs off the end — with
+  `chars_len of a string that is not valid UTF-8`, the C runtime's words.
+- `str_from_f64(x)` answers the text `print(x)` writes, because it goes through the
+  same decimal conversion: one routine, two callers, so the two cannot drift.
+- `str_from_i64` now shares one copier with `string_text`, `str_split`, `arg_at` and
+  `str_from_f64` instead of writing its own copy loop.
+
+
 N14n: **`str_split`, the argument functions and the clock** — and `self_test`, the last
 fixture printed by the AST walk, now printed from the IR.
 

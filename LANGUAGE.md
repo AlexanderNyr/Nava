@@ -1519,11 +1519,20 @@ unreachable, which the representation states rather than leaving to a backend to
 
 Text is compared and built: `==` and `!=` on two `str` compare the **text**
 (`TextCompare` in the representation, `nv_str_cmp` in the runtime), and the string
-operations `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64` and
-`str_split` are runtime routines, as are the number conversions `to_i64` and `to_f64`,
-the reader `read_i64`, the two argument functions `arg_count` and `arg_at`, and the
-three clock readings `clock_seconds`, `clock_millis` and `clock_monotonic_millis` —
-with the C runtime's words for every refusal, status for status.
+operations `bytes_len`, `byte_at`, `str_concat`, `str_slice`, `str_from_i64`,
+`str_from_f64`, `str_split` and `chars_len` are runtime routines, as are the number
+conversions `to_i64` and `to_f64`, the reader `read_i64`, the two argument functions
+`arg_count` and `arg_at`, and the three clock readings `clock_seconds`, `clock_millis`
+and `clock_monotonic_millis` — with the C runtime's words for every refusal, status
+for status.
+
+`chars_len` is the only one of them that has to know what a character *is* rather than
+how many bytes it takes: it decodes, and it refuses the six ways a byte sequence is not
+one — a continuation byte with nothing to continue, an overlong form, half of a
+surrogate pair, a value above `U+10FFFF`, a lead byte no form begins with, and a form
+that runs off the end of the text — with `chars_len of a string that is not valid
+UTF-8`. `str_from_f64` is the other direction of the conversion `print` of an `f64`
+already used, so the two cannot drift: one decimal conversion, two callers.
 
 `str_split` **copies** each field into the arena and appends it to the vector it was
 given, so the pieces outlive the text they came from and cannot be moved by a later
@@ -1557,7 +1566,7 @@ linker sees one definition of it.
 
 Everything else — a generic function, an enum payload of struct type, a struct field
 that owns storage (`String`, `Vec`, a map, a set, an array), and the builtins not
-listed above (`chars_len`, `str_from_f64`, `read_f64` and the filesystem) — is refused
+listed above (`read_f64` and the filesystem) — is refused
 with `E0901`, **naming the construct and the function**. A
 builtin is refused by the *instruction* rather than by the lowering: the IR says what
 the program means, and the backend says which routine it does not have. So is a generic

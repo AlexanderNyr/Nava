@@ -672,9 +672,9 @@ fn main() -> i64 {
     #: the lowering: the IR says what the program means, and the backend says what it
     #: cannot compile.
     CODEGEN_REFUSALS = {
-        "builtin 'chars_len'": """\
+        "builtin 'read_f64'": """\
 fn main() -> i64 {
-    print(chars_len("abc"))
+    print(read_f64())
     return 0
 }
 """,
@@ -4428,3 +4428,221 @@ class NativeSplitArgumentClockTests(unittest.TestCase):
         self.assertEqual(native_out, c_out)
         self.assertEqual(native_out[2], 0)
         self.assertTrue(native_out[0].strip(), "self_test printed nothing")
+
+
+class NativeCharactersFloatTextTests(unittest.TestCase):
+    """`chars_len` and `str_from_f64`: characters, and the text of a float.
+
+    The two are the last builtins the language has that are about *text* rather
+    than about bytes, and each is the mirror of something already built:
+    `str_from_f64` is the same decimal conversion `print` of an `f64` goes
+    through (N14j's, on base-10^9 bignums), and `chars_len` is the first
+    routine that has to know what a character *is* rather than how many bytes
+    it takes. Neither can be checked against a value written down twice — the
+    float's text is 17 significant digits of a rule, and the character count is
+    a decoder — so the oracle is the other backend, and the corpus is bigger
+    than a fixture because both are the kind of thing that agrees on a sample
+    and disagrees on the four-thousandth value.
+    """
+
+    EDITION = "edition 2;\n"
+
+    def agrees(self, source: str, name: str = "text") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def count_of(self, text: str) -> list[str]:
+        """`bytes_len` and `chars_len` of a literal, on both backends."""
+        return self.agrees(self.EDITION + f"""fn main() -> i64 {{
+    print(bytes_len("{text}"))
+    print(chars_len("{text}"))
+    return 0
+}}
+""")
+
+    def built(self, pushes: list[int], name: str = "built") -> list[str]:
+        """`chars_len` of bytes assembled at run time, on both backends."""
+        body = "".join(f"    string_push_byte(s, {byte})\n" for byte in pushes)
+        return self.agrees(self.EDITION + f"""fn main() -> i64 {{
+    let s: String = string_new()
+{body}    print(chars_len(string_text(s)))
+    return 0
+}}
+""", name=name)
+
+    def test_chars_len_agrees_on_every_width(self):
+        """One byte to four, and the code points where the width changes."""
+        for text in ("", "a", "hello", "  ты ", "aé中😀", "naïve café"):
+            with self.subTest(text=text):
+                count = len(text)
+                size = len(text.encode("utf-8"))
+                self.assertEqual(self.count_of(text), [str(size), str(count)])
+
+    def test_the_width_changes_exactly_at_the_four_boundaries(self):
+        """`U+7F`, `U+7FF`, `U+FFFF`, `U+10FFFF` — one byte to four, by one."""
+        for code_point in (0x41, 0x7F, 0x80, 0x7FF, 0x800, 0xFFFF, 0x10000,
+                           0x10FFFF, 0xD7FF, 0xE000):
+            with self.subTest(code_point=f"U+{code_point:04X}"):
+                text = chr(code_point)
+                self.assertEqual(self.count_of(text),
+                                 [str(len(text.encode("utf-8"))), "1"])
+
+    def test_a_generated_text_agrees_on_its_character_count(self):
+        """Sixty seeded texts, counted by both backends and by Python's own."""
+        import random
+
+        rng = random.Random(20261031)
+        for index in range(60):
+            text = "".join(chr(rng.choice([
+                rng.randint(0x20, 0x7E), rng.randint(0x80, 0x7FF),
+                rng.randint(0x800, 0xD7FF), rng.randint(0xE000, 0xFFFF),
+                rng.randint(0x10000, 0x10FFFF)]))
+                for _ in range(rng.randint(1, 24)))
+            with self.subTest(index=index, text=text):
+                self.assertEqual(self.built(list(text.encode("utf-8")),
+                                            name=f"gen{index}"),
+                                 [str(len(text))])
+
+    #: Six ways a byte sequence is not a character. Each is its own program,
+    #: because the refusal stops the one it is in.
+    NOT_A_CHARACTER = {
+        "a continuation with nothing to continue": [0x41, 0xBF],
+        "an overlong two-byte NUL": [0xC0, 0x80],
+        "an overlong three-byte form": [0xE0, 0x9F, 0xBF],
+        "half of a surrogate pair": [0xED, 0xA0, 0x80],
+        "one past the last code point": [0xF4, 0x90, 0x80, 0x80],
+        "a three-byte lead with no body": [0xE2, 0x82],
+    }
+
+    def test_the_ways_a_sequence_is_not_a_character_are_the_same_refusal(self):
+        """`chars_len of a string that is not valid UTF-8`, word for word.
+
+        A decoder that accepted an overlong form would let the same character be
+        spelled two ways; one that accepted a surrogate half would count a
+        value the language cannot hold in a `str`. Both are refusals here, and
+        the message is the C runtime's.
+        """
+        for description, pushes in self.NOT_A_CHARACTER.items():
+            with self.subTest(sequence=description):
+                with tempfile.TemporaryDirectory() as temp:
+                    directory = pathlib.Path(temp)
+                    body = "".join(f"    string_push_byte(s, {byte})\n"
+                                   for byte in pushes)
+                    path = write_source(directory, "bad", self.EDITION + f"""fn main() -> i64 {{
+    let s: String = string_new()
+{body}    print(chars_len(string_text(s)))
+    return 0
+}}
+""")
+                    c_binary, native_binary = build_both(path, directory)
+                    c_out = run_binary(c_binary)
+                    native_out = run_binary(native_binary)
+                self.assertEqual(native_out, c_out)
+                self.assertEqual(native_out[0], "")
+                self.assertEqual(native_out[2], 1)
+                self.assertEqual(native_out[1],
+                                 "nava runtime error: chars_len of a string "
+                                 "that is not valid UTF-8\n")
+
+    #: The values a float's text is most likely to disagree about: the curated
+    #: edges, a sample of the powers of two where the gap is half of itself,
+    #: and random patterns where the exponent is not round.
+    FLOAT_VALUES = (
+        [0.0, -0.0, 1.0, -1.0, 0.5, 0.1, 1.0 / 3.0, 2.0 ** 53, 5e-324,
+         1.7976931348623157e308, 2.2250738585072014e-308, 2.0 ** -1017,
+         1e16, 1e-5, 123456.789, -2.5, 100.0]
+        + [2.0 ** exponent for exponent in range(-1074, 1024, 37)]
+        + [3.0 * 2.0 ** exponent for exponent in range(-1074, 1024, 53)]
+        + [float.fromhex("0x1.fffffffffffffp+1023"),
+           float.fromhex("0x0.0000000000001p-1022")]
+    )
+
+    def float_values(self) -> list[float]:
+        import random
+
+        rng = random.Random(7717)
+        values = list(self.FLOAT_VALUES)
+        while len(values) < 320:
+            bits = rng.getrandbits(64)
+            value = struct.unpack("<d", struct.pack("<Q", bits))[0]
+            if value == value and value not in (float("inf"), float("-inf")):
+                values.append(value)
+        values.extend(struct.unpack("<d", struct.pack("<Q", rng.getrandbits(52)))[0]
+                      for _ in range(40))
+        return values
+
+    def test_str_from_f64_agrees_with_the_c_backend_on_a_corpus(self):
+        """Three hundred and sixty values, printed as text rather than as a number."""
+        values = self.float_values()
+        body = "".join(f"    print(str_from_f64({value!r}))\n" for value in values)
+        lines = self.agrees(self.EDITION + f"""fn main() -> i64 {{
+{body}    return 0
+}}
+""", name="fromf64")
+        # Not compared against Python's own `repr`: that is a *different* rule
+        # (shortest text that round-trips, without the fixed-notation window),
+        # so agreeing with it would be a coincidence and disagreeing with it
+        # would be noise. What is asserted is the two backends, and `float`
+        # round-tripping every literal the corpus was written from.
+        self.assertEqual(len(lines), len(values))
+        for value, line in zip(values, lines):
+            self.assertEqual(float(line), value)
+
+    def test_the_text_of_a_float_is_the_text_print_writes(self):
+        """`print(x)` and `print(str_from_f64(x))` are one line, twice.
+
+        There is one decimal conversion in this runtime and both answers come
+        out of it, so a program that prints both is a check that they did: the
+        even lines are `print`'s and the odd ones are `str_from_f64`'s, and
+        every pair has to be the same text.
+        """
+        values = self.float_values()[:120]
+        body = "".join(f"    print({value!r})\n"
+                       f"    print(str_from_f64({value!r}))\n" for value in values)
+        lines = self.agrees(self.EDITION + f"""fn main() -> i64 {{
+{body}    return 0
+}}
+""", name="same_text")
+        self.assertEqual(len(lines), 2 * len(values))
+        for index, value in enumerate(values):
+            with self.subTest(value=value):
+                self.assertEqual(lines[2 * index], lines[2 * index + 1])
+
+    def test_the_three_names_are_text_and_not_numbers(self):
+        """`inf`, `-inf` and `nan` are what the language says they are called."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let zero = 0.0
+    print(str_from_f64(1.0 / zero))
+    print(str_from_f64(-1.0 / zero))
+    print(str_from_f64(zero / zero))
+    return 0
+}
+"""), ["inf", "-inf", "nan"])
+
+    def test_str_from_i64_answers_the_text_print_writes(self):
+        """The one copier: `str_from_i64` shares it with three other callers.
+
+        It used to write its own copy loop; `str_from_f64`, `string_text` and
+        `arg_at` all needed the same thing, so there is one now and this is the
+        test that says the change did not move a byte.
+        """
+        values = (0, -1, 42, -42, 12345, 9223372036854775807,
+                  -9223372036854775807 - 1)
+        body = "".join(f"    print({value})\n    print(str_from_i64({value}))\n"
+                       for value in values)
+        lines = self.agrees(self.EDITION + f"""fn main() -> i64 {{
+{body}    return 0
+}}
+""", name="fromi64")
+        for index, value in enumerate(values):
+            with self.subTest(value=value):
+                self.assertEqual(lines[2 * index], str(value))
+                self.assertEqual(lines[2 * index + 1], str(value))

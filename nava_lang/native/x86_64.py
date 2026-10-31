@@ -118,6 +118,8 @@ BUILTIN_ROUTINES = {
     "arg_count": ("nv_arg_count", 0),
     "arg_at": ("nv_arg_at", 1),
     "str_split": ("nv_str_split", 3),
+    "chars_len": ("nv_chars_len", 1),
+    "str_from_f64": ("nv_str_from_f64", 1),
 }
 #: How many bytes one word of a struct takes. A struct is a record of words — an
 #: `i64`, a `bool`, an `f64` or a string pointer — so a field is a position in it.
@@ -2134,7 +2136,11 @@ class Generator:
                              ("nv_to_f64", self.to_f64_helper),
                              ("nv_format_f64", self.format_f64_helper),
                              ("nv_getc", self.getc_helper),
-                             ("nv_read_i64", self.read_i64_helper)):
+                             ("nv_read_i64", self.read_i64_helper),
+                             ("nv_text_from_bytes", self.text_from_bytes),
+                             ("nv_str_from_f64", self.str_from_f64_helper),
+                             ("nv_chars_len", self.chars_len_helper),
+                             ("nv_utf8_width", self.utf8_width_helper)):
             self.runtime_function(symbol, body)
         self.bn_runtime()
         for name, body in (("clock_seconds", "seconds"), ("clock_millis", "millis"),
@@ -2152,14 +2158,6 @@ class Generator:
             self.runtime_function("nv_fail_argument", self.fail_argument)
         if self.uses_builtin("str_split"):
             self.runtime_function("nv_str_split", self.str_split)
-        if (self.uses_builtin("string_text") or self.uses_builtin("str_split")
-                or self.uses_builtin("arg_at")):
-            # One copier, shared by `string_text`, `str_split` and `arg_at`: all
-            # three answer a `str` out of bytes that are not one — a builder's
-            # bytes, a piece of a text, or a word the kernel handed over — and
-            # the answer is the same shape whichever asked, a length and then
-            # the bytes.
-            self.runtime_function("nv_text_from_bytes", self.text_from_bytes)
         if any(self.uses_builtin(name) for name in self.STRING_BUILTINS):
             # The family is one per program, not one per type: a `String` has no
             # element type to generate from. `reserve` is not a builtin the program
@@ -4927,6 +4925,200 @@ class Generator:
         code.pop(RBP)
         code.ret()
 
+    def str_from_f64_helper(self) -> None:
+        """`nv_str_from_f64(rdi = the bits of one)` -> its text, as a `str`.
+
+        The digits are `nv_format_f64`'s — the same routine `print` of an `f64`
+        goes through, and the same one that produced the 12 330-value corpus —
+        so the text `str_from_f64(x)` answers and the text `print(x)` writes
+        cannot disagree. There is one decimal conversion in this runtime and
+        both answers come out of it.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.store(RBP, -8, RDI)
+        code.lea_rip(RSI, self.f64_buffer())
+        code.call("nv_format_f64")              # rax = the first byte, rdx = how many
+        code.mov_reg(RDI, RAX)
+        code.mov_reg(RSI, RDX)
+        code.call("nv_text_from_bytes")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def utf8_width_helper(self) -> None:
+        """`nv_utf8_width(rdi = bytes, rsi = how many are left)` -> a width, or 0.
+
+        The C runtime's `nv_utf8_decode` without the code point it writes: a
+        decoder has to refuse more than it accepts — a continuation byte where
+        no continuation belongs, an overlong form that spells a small value in
+        more bytes than it needs, half of a surrogate pair, a value above
+        `U+10FFFF` — and every one of those refusals is a sequence that would
+        otherwise be counted as a character it is not. `0` is the C runtime's
+        answer for "this is not a character", so it is this one's.
+
+        The code point is computed and then compared, rather than the four
+        checks being folded into tests on the lead byte: a folded test is
+        shorter and much easier to get wrong, and the comparison is against the
+        same three bounds the specification names.
+        """
+        code = self.code
+        one, two, three, four = (self.local("utf8_one"), self.local("utf8_two"),
+                                 self.local("utf8_three"), self.local("utf8_four"))
+        bad, valid, done = (self.local("utf8_bad"), self.local("utf8_valid"),
+                            self.local("utf8_done"))
+        code.load_byte(R8, RDI, 0)              # the lead byte
+        code.mov_imm(RDX, 0x80)
+        code.cmp_reg(R8, RDX)
+        code.jcc("b", one)
+        for mask, expected, label in ((0xE0, 0xC0, two), (0xF0, 0xE0, three),
+                                      (0xF8, 0xF0, four)):
+            code.mov_reg(R9, R8)
+            code.and_imm32(R9, mask)
+            code.mov_imm(RDX, expected)
+            code.cmp_reg(R9, RDX)
+            code.jcc("e", label)
+        code.jmp(bad)                           # a lead byte no form begins with
+        code.label(one)
+        code.mov_imm(RAX, 1)
+        code.jmp(done)
+        code.label(two)
+        self.utf8_continuations(2, bad)
+        # value = (b0 & 0x1F) << 6 | (b1 & 0x3F)
+        code.mov_reg(RCX, R8)
+        code.and_imm32(RCX, 0x1F)
+        code.shl_imm(RCX, 6)
+        code.load_byte(R9, RDI, 1)
+        code.mov_reg(R10, R9)
+        code.and_imm32(R10, 0x3F)
+        code.add_reg(RCX, R10)                  # the fields are disjoint, so add is or
+        code.mov_imm(RDX, 0x80)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("b", bad)                      # an overlong two-byte form
+        code.mov_imm(RAX, 2)
+        code.jmp(done)
+        code.label(three)
+        self.utf8_continuations(3, bad)
+        # value = (b0 & 0x0F) << 12 | (b1 & 0x3F) << 6 | (b2 & 0x3F)
+        code.mov_reg(RCX, R8)
+        code.and_imm32(RCX, 0x0F)
+        code.shl_imm(RCX, 12)
+        for index, shift in ((1, 6), (2, 0)):
+            code.load_byte(R9, RDI, index)
+            code.mov_reg(R10, R9)
+            code.and_imm32(R10, 0x3F)
+            if shift:
+                code.shl_imm(R10, shift)
+            code.add_reg(RCX, R10)
+        code.mov_imm(RDX, 0x800)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("b", bad)                      # an overlong three-byte form
+        code.mov_imm(RDX, 0xD800)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("b", valid)                    # below the surrogates
+        code.mov_imm(RDX, 0xDFFF)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("be", bad)                     # half of a surrogate pair
+        code.label(valid)
+        code.mov_imm(RAX, 3)
+        code.jmp(done)
+        code.label(four)
+        self.utf8_continuations(4, bad)
+        # value = (b0 & 0x07) << 18 | (b1 & 0x3F) << 12 | (b2 & 0x3F) << 6 | (b3 & 0x3F)
+        code.mov_reg(RCX, R8)
+        code.and_imm32(RCX, 0x07)
+        code.shl_imm(RCX, 18)
+        for index, shift in ((1, 12), (2, 6), (3, 0)):
+            code.load_byte(R9, RDI, index)
+            code.mov_reg(R10, R9)
+            code.and_imm32(R10, 0x3F)
+            if shift:
+                code.shl_imm(R10, shift)
+            code.add_reg(RCX, R10)
+        code.mov_imm(RDX, 0x10000)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("b", bad)                      # an overlong four-byte form
+        code.mov_imm(RDX, 0x10FFFF)
+        code.cmp_reg(RCX, RDX)
+        code.jcc("a", bad)                      # above the last code point
+        code.mov_imm(RAX, 4)
+        code.jmp(done)
+        code.label(bad)
+        code.xor_reg(RAX, RAX)                  # the C runtime's 0: not a character
+        code.label(done)
+        code.ret()
+
+    def utf8_continuations(self, count: int, bad: str) -> None:
+        """Refuse, by jumping to `bad`, unless `count` bytes are there and continue.
+
+        `rdi` is the first byte and `rsi` how many of them are left, so a form
+        that runs off the end of the text is the same refusal as one whose
+        continuation byte is wrong: the C runtime reads the NUL there and
+        rejects it for the same reason.
+        """
+        code = self.code
+        code.mov_imm(RDX, count)
+        code.cmp_reg(RSI, RDX)
+        code.jcc("b", bad)
+        for index in range(1, count):
+            code.load_byte(R9, RDI, index)
+            code.mov_reg(R10, R9)
+            code.and_imm32(R10, 0xC0)
+            code.mov_imm(RDX, 0x80)
+            code.cmp_reg(R10, RDX)
+            code.jcc("ne", bad)
+
+    def chars_len_helper(self) -> None:
+        """`nv_chars_len(rdi = str)` -> how many characters its bytes spell.
+
+        A `str` is bytes and a character is one to four of them, so this is a
+        walk and not a length: each step decodes one character, refuses the
+        sequence that is not one, and advances by the width the decoder
+        answered. The walk is over the length the `str` carries rather than up
+        to a NUL the C runtime scans for — the two agree because a Nava `str`
+        has no NUL in it to stop at, and because the decoder refuses a form
+        that runs off the end just as it refuses one whose bytes are wrong.
+        """
+        code = self.code
+        loop, done = self.local("chars_loop"), self.local("chars_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.load(R11, RDI, 0)                  # how many bytes
+        code.store(RBP, -16, R11)
+        code.lea(R11, RDI, FIELD_SIZE)          # and the first of them
+        code.store(RBP, -24, R11)
+        code.xor_reg(R11, R11)
+        code.store(RBP, -32, R11)               # how many characters so far
+        code.label(loop)
+        code.load(R11, RBP, -16)
+        code.test_reg(R11)
+        code.jcc("e", done)
+        code.load(RDI, RBP, -24)
+        code.mov_reg(RSI, R11)
+        code.call("nv_utf8_width")
+        code.test_reg(RAX)
+        code.jcc("e", "nv_chars_len.bad")
+        code.load(R11, RBP, -24)
+        code.add_reg(R11, RAX)
+        code.store(RBP, -24, R11)
+        code.load(R11, RBP, -16)
+        code.sub_reg(R11, RAX)
+        code.store(RBP, -16, R11)
+        code.load(R11, RBP, -32)
+        code.inc(R11)
+        code.store(RBP, -32, R11)
+        code.jmp(loop)
+        code.label("nv_chars_len.bad")
+        self.fail("chars_len of a string that is not valid UTF-8")
+        code.label(done)
+        code.load(RAX, RBP, -32)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
     def str_from_i64_helper(self) -> None:
         """`nv_str_from_i64(rdi)` -> the decimal digits as a string.
 
@@ -4934,34 +5126,14 @@ class Generator:
         text of `str_from_i64(-42)` and the text `print(-42)` writes cannot disagree.
         """
         code = self.code
-        loop, finished = self.local("from_loop"), self.local("from_done")
         code.push(RBP)
         code.mov_reg(RBP, RSP)
-        code.sub_rsp(64)
+        code.sub_rsp(16)
         code.lea_rip(RSI, self.number_buffer(3))
         code.call("nv_format")                  # rax = the first digit, rdx = how many
-        code.store(RBP, -8, RAX)
-        code.store(RBP, -16, RDX)
-        code.mov_reg(RDI, RDX)
-        code.add_imm8(RDI, FIELD_SIZE)
-        code.call("nv_alloc")
-        code.store(RBP, -24, RAX)
-        code.load(R11, RBP, -16)
-        code.store(RAX, 0, R11)                 # the length
-        code.lea(R8, RAX, 8)
-        code.load(R9, RBP, -8)
-        code.load(R10, RBP, -16)
-        code.label(loop)
-        code.test_reg(R10)
-        code.jcc("e", finished)
-        code.load_byte(RDX, R9, 0)
-        code.store_byte(R8, 0, RDX)
-        code.inc(R8)
-        code.inc(R9)
-        code.dec(R10)
-        code.jmp(loop)
-        code.label(finished)
-        code.load(RAX, RBP, -24)
+        code.mov_reg(RDI, RAX)
+        code.mov_reg(RSI, RDX)
+        code.call("nv_text_from_bytes")
         code.mov_reg(RSP, RBP)
         code.pop(RBP)
         code.ret()

@@ -1370,6 +1370,7 @@ the differential records.
 | N14l | **A function as a value through one IR**: one word, the address of its code, with no closure — `funcref` and an indirect `call` in the IR, `lea` and `call *%r11` on the native side, a function-pointer `typedef` on the C side, and a reachability walk that follows a value as well as a name | **Delivered** (record below) |
 | N14m | **`String` through one IR**: a builder of three words that doubles its buffer from 32, `string_text` as a **copy** into the arena (the buffer moves, so a `str` must never point into it), the two traps a byte can trip, and the same builtins printed from the IR on the C side | **Delivered** (record below) |
 | N14n | **`str_split`, the two argument functions and the three clock readings**: a split that copies each field into the arena and appends it, `arg_count`/`arg_at` with the C runtime's numbered trap, `clock_gettime` as one syscall with the reading checked, and `self_test` — the last fixture printed by the AST walk — printed from the IR | **Delivered** (record below) |
+| N14o | **`chars_len` and `str_from_f64`**: a UTF-8 decoder that refuses the six ways a byte sequence is not a character, and the text of an `f64` taken from the same decimal conversion `print` uses, so the two cannot drift | **Delivered** (record below) |
 | N14e | **The rest of the language in the IR**: `f64`, slices, `String`, `Vec`, `HashMap`, `HashSet`, structs, enums, `defer`, `?`, generics and the builtins, so that `cgen.py`'s AST walk can be deleted rather than kept beside the printer | specified (added by N14d, see its record) |
 
 #### Delivery record N14a (2026-10-29)
@@ -2252,6 +2253,77 @@ that the two runtimes' wording for one would agree if it were (`strerror` is a l
 this runtime does not link); that `str_split` is fast — a substring search one position
 at a time is quadratic in the worst case, and no benchmark was run; or that `arg_at` can
 be called before `_start` has run, which no program can arrange and no test claims.
+
+
+---
+
+#### Delivery record N14o (2026-10-31)
+
+**`chars_len` counts characters, and `str_from_f64` is the text `print` already
+writes.** The two are the last builtins about *text* rather than about bytes, and each
+is the mirror of something that was already there: `str_from_f64` goes through
+`nv_format_f64`, the conversion N14j built on base-10^9 bignums, and `chars_len` is the
+first routine that has to know what a character *is*.
+
+That second one is the reason this increment is a decoder and not a loop. A character is
+one to four bytes, and a decoder has to refuse more than it accepts: a continuation byte
+with nothing to continue, an overlong form that spells a small value in more bytes than
+it needs, half of a surrogate pair, a value above `U+10FFFF`, a lead byte no form begins
+with, and a form that runs off the end of the text. Every one of those refusals is a
+sequence that would otherwise be counted as a character it is not, and accepting an
+overlong form would let the same character be spelled two ways. The code point is
+computed and *then* compared against the three bounds, rather than the checks being
+folded into tests on the lead byte: a folded test is shorter and much easier to get
+wrong, and the comparison is against the same bounds the specification names.
+
+The walk is over the length the `str` carries, not up to a NUL the C runtime scans for.
+The two agree because a Nava `str` has no NUL in it to stop at, and because a form that
+runs off the end is refused for the same reason as one whose continuation byte is
+wrong — the C runtime reads the NUL there and rejects it just the same.
+
+**`str_from_f64` needed no new arithmetic.** `nv_format_f64` already answers the
+shortest decimal that reads back, so this is a call, a copy into the arena, and nothing
+else: one decimal conversion in the runtime and two callers of it. The test that says
+so is a program that prints every value twice, once as itself and once through
+`str_from_f64`, and asserts the two lines are the same text — which is a stronger claim
+than comparing either against a table, because a table would have to be a third opinion
+about the same rule.
+
+**One copier, four callers.** `str_from_i64` used to write its own copy loop; with
+`string_text`, `str_split`, `arg_at` and `str_from_f64` all needing the same thing,
+there is one now. It is the smallest change in this increment and the one most worth
+making: two copies of "a length and then the bytes" is two places to fix the same bug.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| Characters, not bytes | `NativeCharactersFloatTextTests.test_chars_len_agrees_on_every_width` | `hello` 5/5, `  ты ` 7/5, `aé中😀` 10/4, `naïve café` 12/11, `""` 0/0 — `bytes_len` then `chars_len`, on both |
+| The width changes at the four boundaries | `test_the_width_changes_exactly_at_the_four_boundaries` | `U+7F`/`U+80`/`U+7FF`/`U+800`/`U+FFFF`/`U+10000`/`U+10FFFF`, and `U+D7FF`/`U+E000` on either side of the surrogates: one character each, with the byte count the width says |
+| Sixty seeded texts | `test_a_generated_text_agrees_on_its_character_count` | 60 random strings over all four widths, assembled at run time with `string_push_byte`, every count equal to Python's own |
+| Six ways not to be a character | `test_the_ways_a_sequence_is_not_a_character_are_the_same_refusal` | a stray continuation, an overlong two-byte NUL, an overlong three-byte form, `U+D800`, `U+110000`, and a truncated three-byte form: `chars_len of a string that is not valid UTF-8`, status 1, empty stdout, on both |
+| A float's text, on a corpus | `test_str_from_f64_agrees_with_the_c_backend_on_a_corpus` | 360 values — the curated edges, every 37th power of two across the whole range, `3 × 2**k` for every 53rd, both ends of the normal range, random 64-bit patterns and 40 subnormals — identical text on both backends, and every line reads back as the value it was written from |
+| The text is `print`'s text | `test_the_text_of_a_float_is_the_text_print_writes` | 120 values printed twice each: `print(x)` and `print(str_from_f64(x))` are the same line, 120 times |
+| The three names | `test_the_three_names_are_text_and_not_numbers` | `inf`, `-inf`, `nan` |
+| The one copier | `test_str_from_i64_answers_the_text_print_writes` | `0`, `±1`, `42`, `12345`, `i64` max and `i64` min: `print(n)` and `print(str_from_i64(n))` agree |
+| Outside the suite | a generated corpus of 12 327 values | `str_from_f64` of every value in `tools/f64_corpus.py`'s corpus: both backends' stdout and stderr byte-identical |
+| Outside the suite | a 94-sequence decoder corpus | 75 valid sequences agree and every count matches Python's; 19 invalid ones trap with the same message |
+
+The audit is re-measured: **22 869 lines, 27 modules, 792 functions** (22 695 / 27 / 788
+at N14n) — no new module, 4 functions: `chars_len`, `utf8_width`, `utf8_continuations`
+and `str_from_f64`, and `str_from_i64` is 30 lines shorter than it was. The suite is
+**1 128 tests** with **1 939 subtests**, `tests/registry.py` reports **1 058 registered
+tests** with the same 11 tasks, 76 cases, 192 spec fixtures and 173 diagnostic codes,
+and the overhead record is re-measured rather than assumed: **108 832 tokens**,
+unchanged, because the guide describes the language and this increment changed no word
+of it.
+
+What this increment does **not** claim: that `chars_len` is fast — it is one call per
+character, and no benchmark was run; that a `str` built by any path other than the ones
+the language offers can hold invalid UTF-8 (it cannot: `String` refuses a NUL, and
+every other path produces a literal or a piece of one); that the C runtime's scan to a
+NUL and this walk over a length would agree on a `str` that *did* contain one, since
+neither backend can build such a value; or that `read_f64` or the filesystem exist
+natively — `read_f64` is still refused by name, and it is the last builtin the runtime
+lacks before the filesystem.
 
 
 ---
