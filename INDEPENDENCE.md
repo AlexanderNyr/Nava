@@ -2086,6 +2086,84 @@ benchmark was run).
 
 ---
 
+#### Delivery record N14m (2026-10-30)
+
+**`String` — text a piece at a time, and the copy that makes it a `str`.** Every owning
+value before this one was a container of *elements*: a vector of words, a table of slots.
+A `String` is the first whose size is **text** — it grows a byte at a time, its buffer
+moves while the program is holding the result of an earlier read, and the language's
+`str` is a length and some bytes rather than a NUL-terminated C string. All three of
+those are differences that a translation that looked right would have got wrong.
+
+A `String` is **three words behind a handle** — where the bytes are, how many are text,
+how many the buffer holds — which is the C runtime's `nv_string` in the same order, so
+the two backends agree about what a `String` value *is* and `string_len` and
+`string_capacity` are one load on both. The capacity doubles from 32 the way a vector's
+doubles from 4, the limit is the array's (a buffer of bytes is an array of them, and the
+message for one that is too long is the language's), and the old buffer is left to the
+arena rather than freed — which is this backend's documented limit, not a difference a
+program can observe.
+
+The one design decision worth stating is that **`string_text` copies**. The C runtime
+says `nv_arena_text(data, len)`, and the reason is the whole point of the type: the
+buffer moves when it grows, so a `str` must never point into it. On this side the copy
+goes into the arena as a length and then the bytes, which is one word more than the C
+runtime allocates — that one is NUL-terminated instead of length-prefixed. A backend
+that answered a view would pass every short test and fail the first time a program took
+a `str` and then pushed past the capacity.
+
+Two traps, both with the C runtime's words. A byte outside `0..255` names the byte it
+was given, and `nv_fail_byte` is its own helper rather than a fifth kind of
+`nv_fail_pair` — `nv_fail_pair` branches on the *shape* of four messages that all open
+with a number and close with a length or a bound, and this one opens with a phrase
+instead. A NUL byte is refused on its own, because a `String` is NUL-terminated and a
+NUL inside it would make its own length a lie.
+
+| Claim | How it was checked | Result |
+|---|---|---|
+| New, `push`, `len`, `capacity`, `text`, `clear` | `NativeStringTests.test_a_builder_agrees_with_the_c_backend` | `Hello, world` / `12` / `32` / `0` / an empty line, on both |
+| Growth keeps every byte | `test_growth_keeps_every_byte` | 200 pushes of `"ab"`: `400`, `512`, and 400 bytes on both |
+| The text is a copy, not a view | `test_the_text_is_a_copy_and_not_a_view` | a `str` taken at 400 bytes, then 2 more pushed: `400 false 402` — the old `str` did not move |
+| `clear` keeps the capacity | `test_clear_keeps_the_capacity` | `0 512 again 512` — emptied and refilled without allocating twice |
+| An empty builder | `test_an_empty_builder_answers_an_empty_text` | `0 0 0` and an empty line |
+| A byte at a time | `test_a_byte_at_a_time` | `ABCDE`, then `6` after a `255` |
+| A byte outside the range | `test_a_byte_outside_the_range_is_the_c_runtime_s_trap` | `a string byte must be in 0..255, got N` for `300`, `-1`, `256` and `i64` maximum, byte for byte |
+| A NUL byte | `test_a_nul_byte_is_refused_on_its_own` | `a String cannot contain a NUL byte`, status 1, empty stdout, on both |
+| Text counts bytes, not characters | `test_a_utf8_text_counts_bytes_and_not_characters` | `Привет` is `12` on both |
+| A builder crosses a function | `test_a_builder_crosses_a_function_both_ways` | a `String` parameter, a `String` result, and one reassigned in a loop (so a cell of the module holds it): `x... 4 y y. y.. y... 4` |
+| Sequences, not fixtures | `test_a_generated_sequence_agrees_on_every_answer` | three seeded programs of 300 operations — pushes, byte pushes, clears and snapshots — and every length and capacity matches the model the sequence was generated from |
+| The IR states it as instructions | `test_the_ir_states_the_builder_as_instructions` | `builtin String string_new()`, `builtin void string_push(%0, %1)`, `builtin str string_text(%0)` |
+| The family is only what is used | `test_the_family_is_emitted_for_what_the_program_uses` | a program with no push emits neither `reserve` nor `nv_fail_byte`; one with `string_push_byte` emits both and not `nv_string_push` |
+| A `String` in a struct field is refused | `test_a_string_in_a_struct_field_is_refused_by_name` | `E0901` naming `String` and the field |
+| A `String` is not printable | `test_a_string_is_not_printable_because_it_is_not_a_str` | `E0323` from the checker, before either backend |
+| The corpus holds | the fixture sweep | **31 of 32** fixtures build and run identically, **0 differ**, 1 refused by name (`self_test`) |
+
+What this increment did **not** have to invent is worth saying too: the lowering already
+turned every builtin into one `ir.Builtin`, so `String` needed no new instruction and no
+new value type in the IR — the whole of it is a runtime and a printer. That is the
+argument the IR was built for, and it is the first construct to collect on it.
+
+The audit is re-measured: **22 317 lines, 27 modules, 781 functions** (21 877 / 27 / 772
+at N14l) — no new module, 9 functions: the six runtime helpers, `fail_byte`, and the two
+halves of the dispatch. The suite is **1 103 tests, 1 643 subtests**,
+`tests/registry.py` reports 1 033 registered tests with the same 11 tasks, 76 cases, 192
+spec fixtures and 173 diagnostic codes, and the overhead record is re-measured rather
+than assumed: **108 832 tokens**, unchanged, because the guide describes the language
+and this increment changed which backend compiles which part of it.
+
+What this increment does **not** claim: that a `String` can be stored in a struct field,
+an enum payload or a container element — a holder of storage needs a **copy** when it is
+stored and a **release** when it goes, and this backend makes neither (`E0901` names the
+type); that a `String` is ever given back (the arena does not return memory, so a builder
+in a loop grows it until the program exits — which the C backend does not do, and which
+no output can show); that `str_split`, `str_from_f64`, `read_f64`, `chars_len`, the
+filesystem, the argument functions or the clock exist natively (each is still refused by
+name, which is why `self_test` is still printed from the AST walk); or that the builder
+is fast — no benchmark was run, and a byte-at-a-time append is a byte-at-a-time append on
+either backend.
+
+---
+
 ### Phase N15 — Self-hosting and bootstrap
 
 **Objective:** Nava compiles Nava.

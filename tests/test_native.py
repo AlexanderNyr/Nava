@@ -3658,3 +3658,388 @@ fn main() -> i64 {
         self.assertNotEqual(built.returncode, 0,
                             "a program the checker refused was compiled anyway")
         self.assertIn("E0437", built.stderr)
+
+
+class NativeStringTests(unittest.TestCase):
+    """`String` — text a piece at a time, and the copy that makes it a `str`.
+
+    A `String` is the one owning value whose size is *text*: it grows a byte at a
+    time behind a handle of three words, and its bytes are not a `str` until
+    `string_text` copies them into the arena. That copy is the whole point — a
+    builder's buffer moves when it grows, so a `str` must never point into it — and
+    `test_the_text_is_a_copy_and_not_a_view` is the test that says so.
+
+    The oracle is the other backend, and the sequences are longer than a fixture
+    because a buffer that loses a byte loses it on the fourth doubling.
+    """
+
+    EDITION = "edition 2;\n"
+
+    def agrees(self, source: str, name: str = "string") -> list[str]:
+        """What the program prints, asserted identical on both backends."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[2], 0)
+        return native_out[0].splitlines()
+
+    def trap(self, source: str, name: str = "trapped") -> tuple[str, str, int]:
+        """A byte the runtime refuses: the same stop, on both backends.
+
+        An out-of-range byte is not a compile-time refusal but a trap, so what is
+        compared is the run: empty stdout, the C runtime's line on standard error
+        and status 1.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            c_binary, native_binary = build_both(path, directory)
+            c_out = run_binary(c_binary)
+            native_out = run_binary(native_binary)
+        self.assertEqual(native_out, c_out)
+        self.assertEqual(native_out[0], "")
+        self.assertEqual(native_out[2], 1)
+        return native_out
+
+    def test_a_builder_agrees_with_the_c_backend(self):
+        """New, `push`, `len`, `capacity`, `text` and `clear`."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push(s, "Hello, ")
+    string_push(s, "world")
+    print(string_text(s))
+    print(string_len(s))
+    print(string_capacity(s))
+    string_clear(s)
+    print(string_len(s))
+    print(string_text(s))
+    return 0
+}
+"""), ["Hello, world", "12", "32", "0", ""])
+
+    def test_growth_keeps_every_byte(self):
+        """Two hundred pushes: five doublings, and all four hundred bytes."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    let i = 0
+    while i < 200 {
+        string_push(s, "ab")
+        i = i + 1
+    }
+    print(string_len(s))
+    print(string_capacity(s))
+    print(string_text(s))
+    return 0
+}
+"""), ["400", "512", "ab" * 200])
+
+    def test_the_text_is_a_copy_and_not_a_view(self):
+        """`string_text` answers bytes the next push cannot move.
+
+        A `str` taken from a builder and a builder pushed past its capacity: if the
+        answer were a pointer into the buffer, the second print would show the new
+        bytes through the old `str`.
+        """
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    let i = 0
+    while i < 200 {
+        string_push(s, "ab")
+        i = i + 1
+    }
+    let t: str = string_text(s)
+    string_push(s, "ZZ")
+    print(bytes_len(t))
+    print(t == string_text(s))
+    print(bytes_len(string_text(s)))
+    return 0
+}
+"""), ["400", "false", "402"])
+
+    def test_clear_keeps_the_capacity(self):
+        """A builder that is emptied and filled again does not allocate twice."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    let i = 0
+    while i < 200 {
+        string_push(s, "ab")
+        i = i + 1
+    }
+    string_clear(s)
+    print(string_len(s))
+    print(string_capacity(s))
+    string_push(s, "again")
+    print(string_text(s))
+    print(string_capacity(s))
+    return 0
+}
+"""), ["0", "512", "again", "512"])
+
+    def test_an_empty_builder_answers_an_empty_text(self):
+        """Nothing pushed: length 0, capacity 0, and a `str` of no bytes."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    print(string_len(s))
+    print(string_capacity(s))
+    print(bytes_len(string_text(s)))
+    print(string_text(s))
+    return 0
+}
+"""), ["0", "0", "0", ""])
+
+    def test_a_byte_at_a_time(self):
+        """`string_push_byte` takes the eight bits it is given and no more."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    let i = 0
+    while i < 5 {
+        string_push_byte(s, 65 + i)
+        i = i + 1
+    }
+    print(string_text(s))
+    print(string_len(s))
+    string_push_byte(s, 255)
+    print(string_len(s))
+    return 0
+}
+"""), ["ABCDE", "5", "6"])
+
+    def test_a_byte_outside_the_range_is_the_c_runtime_s_trap(self):
+        """`a string byte must be in 0..255, got N` — the number, word for word."""
+        for byte, shown in (("300", "300"), ("0 - 1", "-1"), ("256", "256"),
+                            ("9223372036854775807", "9223372036854775807")):
+            with self.subTest(byte=byte):
+                _out, error, _status = self.trap(
+                    self.EDITION + f"""fn main() -> i64 {{
+    let s: String = string_new()
+    string_push_byte(s, {byte})
+    return 0
+}}
+""")
+                self.assertEqual(
+                    error,
+                    f"nava runtime error: a string byte must be in 0..255, "
+                    f"got {shown}\n")
+
+    def test_a_nul_byte_is_refused_on_its_own(self):
+        """A `String` is NUL-terminated, so a NUL inside it would lie about its length."""
+        _out, error, _status = self.trap(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push_byte(s, 0)
+    return 0
+}
+""")
+        self.assertEqual(error,
+                         "nava runtime error: a String cannot contain a NUL byte\n")
+
+    def test_a_utf8_text_counts_bytes_and_not_characters(self):
+        """`string_len` is the length of the buffer, which `strlen` is too."""
+        self.assertEqual(self.agrees(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push(s, "Привет")
+    print(string_len(s))
+    print(bytes_len(string_text(s)))
+    print(string_text(s))
+    return 0
+}
+"""), ["12", "12", "Привет"])
+
+    def test_a_builder_crosses_a_function_both_ways(self):
+        """A `String` as a parameter, as a result, and reassigned in a loop.
+
+        The reassignment is the interesting half: a mutable local of owning type
+        lives in a cell, so this is a `String` in the module's slot types too.
+        """
+        self.assertEqual(self.agrees(self.EDITION + """fn build(prefix: str, n: i64) -> String {
+    let s: String = string_new()
+    string_push(s, prefix)
+    let i = 0
+    while i < n {
+        string_push(s, ".")
+        i = i + 1
+    }
+    return s
+}
+
+fn shown(s: String) -> i64 {
+    print(string_text(s))
+    return string_len(s)
+}
+
+fn main() -> i64 {
+    let s: String = build("x", 3)
+    print(shown(s))
+    let i = 0
+    while i < 4 {
+        s = build("y", i)
+        print(string_text(s))
+        i = i + 1
+    }
+    print(string_len(s))
+    return 0
+}
+"""), ["x...", "4", "y", "y.", "y..", "y...", "4"])
+
+    def test_a_generated_sequence_agrees_on_every_answer(self):
+        """Three hundred mixed operations, seeded, through both backends.
+
+        Fixtures find a builder that loses a byte on the first doubling; a sequence
+        this long grows past five of them, clears in the middle and interleaves
+        byte-at-a-time pushes with string ones, which is where a capacity that was
+        computed one byte short would show.
+        """
+        import random
+
+        for seed in (11, 12, 13):
+            with self.subTest(seed=seed):
+                rng = random.Random(seed)
+                lines = ["edition 2;", "", "fn main() -> i64 {",
+                         "    let s: String = string_new()",
+                         "    let held: Vec(str) = vec_new()",
+                         "    let checks = 0"]
+                expected: list[str] = []
+                length, capacity = 0, 0
+
+                def grown(needed: int) -> int:
+                    """What `reserve` leaves the capacity at: doubling, from 32."""
+                    if needed <= capacity:
+                        return capacity
+                    room = capacity if capacity > 0 else 32
+                    while room < needed:
+                        room *= 2
+                    return room
+
+                for step in range(300):
+                    choice = rng.randrange(4)
+                    if choice == 0:
+                        text = rng.choice(["a", "bc", "def", "ghij", "k" * 40])
+                        lines.append(f'    string_push(s, "{text}")')
+                        length += len(text)
+                        # `reserve` is asked for the text and the NUL it keeps.
+                        capacity = grown(length + 1)
+                    elif choice == 1:
+                        byte = rng.randrange(32, 127)
+                        lines.append(f"    string_push_byte(s, {byte})")
+                        length += 1
+                        capacity = grown(length + 1)
+                    elif choice == 2:
+                        lines.append("    string_clear(s)")
+                        length = 0
+                    else:
+                        # A `str` taken now must survive everything that follows.
+                        lines.append("    vec_push(held, string_text(s))")
+                        lines.append("    print(string_len(s))")
+                        lines.append("    print(string_capacity(s))")
+                        expected.append(str(length))
+                        expected.append(str(capacity))
+                lines.append("    print(string_len(s))")
+                expected.append(str(length))
+                lines.append("    print(string_capacity(s))")
+                expected.append(str(capacity))
+                lines.append("    let i = 0")
+                lines.append("    while i < vec_len(held) {")
+                lines.append("        print(bytes_len(vec_get(held, i)))")
+                lines.append("        i = i + 1")
+                lines.append("    }")
+                lines.append("    return 0")
+                lines.append("}")
+                source = "\n".join(lines) + "\n"
+                # The lengths the snapshots had when they were taken, read back the
+                # same way the program prints them.
+                with tempfile.TemporaryDirectory() as temp:
+                    directory = pathlib.Path(temp)
+                    path = write_source(directory, f"sequence{seed}", source)
+                    c_binary, native_binary = build_both(path, directory)
+                    c_out = run_binary(c_binary)
+                    native_out = run_binary(native_binary)
+                self.assertEqual(native_out, c_out)
+                self.assertEqual(native_out[2], 0)
+                printed = native_out[0].splitlines()
+                self.assertEqual(printed[:len(expected)], expected,
+                                 "a length or a capacity disagrees with the model "
+                                 "the sequence was generated from")
+
+    def test_the_ir_states_the_builder_as_instructions(self):
+        """A `String` is not a call: it is one instruction per operation."""
+        text = ir.dump(lower_source(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push(s, "a")
+    print(string_text(s))
+    return 0
+}
+"""))
+        self.assertIn("builtin String string_new()", text)
+        self.assertIn("builtin void string_push(%0, %1)", text)
+        self.assertIn("builtin str string_text(%0)", text)
+
+    def test_the_family_is_emitted_for_what_the_program_uses(self):
+        """`reserve` and the byte trap come only when a push needs them."""
+        plain = self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    print(string_len(s))
+    return 0
+}
+"""
+        units = units_of(plain)
+        runtime = next(unit for unit in units if unit.name == "runtime")
+        names = {symbol.name for symbol in runtime.symbols}
+        self.assertIn("nv_string_new", names)
+        self.assertNotIn("nv_string_reserve", names,
+                         "nothing in the program grows the buffer")
+        self.assertNotIn("nv_string_push", names)
+        self.assertNotIn("nv_fail_byte", names)
+        with_bytes = self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    string_push_byte(s, 65)
+    return 0
+}
+"""
+        names = {symbol.name
+                 for symbol in next(unit for unit in units_of(with_bytes)
+                                    if unit.name == "runtime").symbols}
+        self.assertIn("nv_string_reserve", names, "a push grows the buffer")
+        self.assertIn("nv_fail_byte", names, "a byte may be out of range")
+        self.assertNotIn("nv_string_push", names, "the program pushes no string")
+        self.assertNotIn("nv_string_text", names)
+
+    def compile_refusal(self, source: str, name: str = "refused") -> str:
+        """A program this backend does not implement: the build fails, and says why."""
+        with tempfile.TemporaryDirectory() as temp:
+            directory = pathlib.Path(temp)
+            path = write_source(directory, name, source)
+            built = run([*NAVA, "build", str(path), "-o", str(directory / "native"),
+                         "--backend", "native"])
+        self.assertNotEqual(built.returncode, 0,
+                            "a program this backend does not implement was built")
+        return built.stderr
+
+    def test_a_string_in_a_struct_field_is_refused_by_name(self):
+        """Owning storage in a record is a copy this backend does not make."""
+        stderr = self.compile_refusal(
+            self.EDITION + """struct Bag { text: String, n: i64 }
+
+fn main() -> i64 {
+    let s: String = string_new()
+    string_push(s, "hi")
+    let b: Bag = Bag(text: s, n: 1)
+    print(string_len(b.text))
+    return 0
+}
+""")
+        self.assertIn("E0901", stderr)
+        self.assertIn("String", stderr, "the refusal names the type it refused")
+
+    def test_a_string_is_not_printable_because_it_is_not_a_str(self):
+        """`print(s)` is a type error in the language, not a gap in a backend."""
+        with self.assertRaises(NavaError) as caught:
+            checked(self.EDITION + """fn main() -> i64 {
+    let s: String = string_new()
+    print(s)
+    return 0
+}
+""")
+        self.assertEqual(getattr(caught.exception, "code", None), "E0323")

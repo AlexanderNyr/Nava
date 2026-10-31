@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from .cgen import c_string, function_types, map_tag, set_tag, vec_tag
 from .checker import mangle
-from .model import (is_function_type, is_map, is_set, is_vec, map_parts,
+from .model import (is_function_type, is_map, is_set, is_string, is_vec, map_parts,
                     set_element, vec_element)
 from .native import ir
 
@@ -115,6 +115,11 @@ SUPPORTED = (
     ir.FieldStore, ir.Builtin, ir.Variant, ir.Tag, ir.Payload, ir.Slice, ir.Jump,
     ir.Branch, ir.Ret, ir.Unreachable, ir.Slots, ir.Live, ir.KeyAt, ir.FuncRef,
 )
+#: The `String` builtins. A builder is not a container, but it grows like one and
+#: the two questions about its size are the same shape of question.
+STRING_BUILTINS = {"string_new": 0, "string_len": 1, "string_capacity": 1,
+                   "string_push": 2, "string_push_byte": 2, "string_clear": 1,
+                   "string_text": 1}
 #: The compound-literal element types a strided initialiser can take.
 INITIALISER_TYPES = {"i64": "const int64_t[]", "bool": "const bool[]",
                      "str": "const char *const[]"}
@@ -167,6 +172,10 @@ def c_type(typ: str, structs: dict | None = None,
         return f"nv_map_{map_tag(typ)} *"
     if is_set(typ):
         return f"nv_set_{set_tag(typ)} *"
+    if is_string(typ):
+        # The builder is a pointer: `string_push` may replace its bytes, and every
+        # holder has to see the same builder rather than a copy of it.
+        return "nv_string *"
     pointer = fnptr.get(typ) if fnptr else None
     if pointer is not None:
         return pointer
@@ -196,6 +205,10 @@ def spellable(typ: str, structs: dict | None = None,
         return spellable(key, structs, enums) and spellable(value, structs, enums)
     if is_set(typ):
         return spellable(set_element(typ), structs, enums, fnptr)
+    if is_string(typ):
+        # `nv_string` is declared by the runtime block a `String` builtin pulls in:
+        # the body names `nv_string_new` and the closure keeps the whole unit.
+        return True
     return bool(fnptr and is_function_type(typ) and typ in fnptr)
 
 
@@ -326,6 +339,14 @@ def instruction_supported(instruction, types: dict[str, str],  # noqa: C901
                 return spellable(instruction.typ, structs, enums)
             return container_prefix(instruction.name, types.get(instruction.args[0])) \
                 is not None
+        arity = STRING_BUILTINS.get(instruction.name)
+        if arity is not None:
+            if arity != len(instruction.args):
+                return False
+            if arity == 0:
+                # A constructor states the type it builds in its own result.
+                return spellable(instruction.typ, structs, enums, fnptr)
+            return is_string(types.get(instruction.args[0]))
         routine = BUILTIN_HELPERS.get(instruction.name)
         return routine is not None and routine[1] == len(instruction.args)
     if isinstance(instruction, ir.Bin):
@@ -581,6 +602,25 @@ class Printer:
             return call
         return f"{variable(instruction.value)} = {call};"
 
+    def string_call(self, instruction: ir.Builtin) -> str:
+        """The C line of a `String` builtin.
+
+        The shape is the AST path's: a constructor answers a builder, a query
+        answers a value, and a mutation is a statement. The names are the runtime's,
+        so the identifier that pulls the `nv_string` block into the translation
+        unit is the same one whichever path printed the call.
+        """
+        name = instruction.name
+        if name == "string_new":
+            return f"{variable(instruction.value)} = nv_string_new();"
+        arguments = ", ".join(variable(argument)
+                              for argument in instruction.args[1:])
+        call = f"nv_string_{name[len('string_'):]}({variable(instruction.args[0])}"
+        call += f", {arguments});" if arguments else ");"
+        if instruction.typ == "void":
+            return call
+        return f"{variable(instruction.value)} = {call};"
+
     def block_label(self, function: ir.Function, label: str) -> str:
         """A block label qualified by its function: two functions may both say `entry`."""
         return f"{self.names[ir.symbol(function)]}_{label}"
@@ -633,6 +673,8 @@ class Printer:
         if isinstance(instruction, ir.Builtin):
             if instruction.name in CONTAINER_BUILTINS:
                 return [f"    {self.container_call(instruction, types)}"]
+            if instruction.name in STRING_BUILTINS:
+                return [f"    {self.string_call(instruction)}"]
             helper, _arity = BUILTIN_HELPERS[instruction.name]
             arguments = ", ".join(variable(argument) for argument in instruction.args)
             call = f"{helper}({arguments})"

@@ -47,9 +47,9 @@ IN_THE_SUBSET = ("arrays_basic", "arrays_borrow", "arrays_sieve", "arrays_sort",
                  "map_basics", "set_basics")
 #: Programs the IR expresses but this printer does not print — a narrower gap than a
 #: refusal, and named separately so that neither becomes the other by accident.
-#: `self_test` lowers since a function became a value; what it still needs is the
-#: `String` builder (`string_new`/`string_push`/`string_text`), `str_split` and the
-#: three `clock_*` builtins.
+#: `self_test` lowers since a function became a value. What it still needs is
+#: `str_split` and the three `clock_*` builtins -- `String` arrived with N14m, so the
+#: gap is now the builtins the runtime has no native form of.
 LOWERED_NOT_PRINTED = ("self_test",)
 #: Programs whose C must still come from the AST walk, because the lowering refuses
 #: them by name (`E0901`). Empty: the lowering now accepts every fixture, which is

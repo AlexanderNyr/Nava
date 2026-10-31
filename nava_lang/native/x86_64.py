@@ -46,7 +46,8 @@ from pathlib import Path
 
 from .. import limits
 from ..diagnostics import make
-from ..model import (is_map, is_set, is_vec, map_parts, set_element, vec_element)
+from ..model import (is_map, is_set, is_string, is_vec, map_parts, set_element,
+                     vec_element)
 from . import ir, linker
 from .unit import DATA, RODATA, UnitBuilder
 from .x86 import (
@@ -85,6 +86,14 @@ TRACE_DEPTH = 64
 #: that does the work and how many arguments it takes. A builtin that is not here is
 #: refused by name at code generation, because the IR states the program and the
 #: backend is the half that knows which routines exist.
+#: A `String` is a handle to three words: where its bytes are, how many of them
+#: are text, and how many the buffer holds. `nv_string` in the C runtime is the
+#: same three words in the same order, so the two backends agree on what a
+#: `String` value *is*, and `len` and `capacity` are one load here as there.
+STRING_DATA, STRING_LENGTH, STRING_CAPACITY, STRING_SIZE = 0, 8, 16, 24
+#: The first capacity a builder asks for. The C runtime doubles from 32, so the two
+#: backends print the same number for the same run of pushes.
+STRING_INITIAL_CAPACITY = 32
 BUILTIN_ROUTINES = {
     "bytes_len": ("nv_str_len", 1),
     "byte_at": ("nv_byte_at", 2),
@@ -661,6 +670,13 @@ class Generator:
         "set_new": 0, "set_len": 1, "set_contains": 2, "set_add": 2, "set_remove": 2,
         "set_clear": 1,
     }
+    #: The `String` builtins. A builder is not a container — nothing is stored in
+    #: it by index — but it *grows* like one, and the two questions a program asks
+    #: of its size are the same two words of the same shape of handle.
+    STRING_BUILTINS = {
+        "string_new": 0, "string_len": 1, "string_capacity": 1, "string_push": 2,
+        "string_push_byte": 2, "string_clear": 1, "string_text": 1,
+    }
 
     def builtin(self, instruction: ir.Builtin) -> None:
         """One call, with the arguments in the ABI's registers, exactly like a function.
@@ -675,6 +691,10 @@ class Generator:
         arity = self.CONTAINER_BUILTINS.get(name)
         if arity is not None:
             self.container_builtin(instruction, arity)
+            return
+        arity = self.STRING_BUILTINS.get(name)
+        if arity is not None:
+            self.string_builtin(instruction, arity)
             return
         routine = BUILTIN_ROUTINES.get(name)
         if routine is None:
@@ -733,6 +753,46 @@ class Generator:
         for index, argument in enumerate(instruction.args):
             self.load(argument, ARGUMENT_REGISTERS[index])
         code.call(self.container_routine(name, typ))
+        if instruction.typ != "void":
+            self.store(instruction.value, RAX)
+
+    def string_builtin(self, instruction: ir.Builtin, arity: int) -> None:
+        """A `String` builtin: a builder that grows, and the text it has built.
+
+        `string_len` and `string_capacity` read the handle — one load, no call,
+        which is what a vector's two questions cost. Everything else is a routine,
+        and `string_text` is the only one that answers something other than the
+        handle: the builder's bytes are copied into the arena, so a later push
+        cannot move a `str` the program is already holding.
+        """
+        code = self.code
+        name = instruction.name
+        if len(instruction.args) != arity:
+            raise AssertionError(
+                f"the IR states {name} with {len(instruction.args)} argument(s); "
+                f"the runtime implements {arity}")
+        if arity and not is_string(self.types.get(instruction.args[0])):
+            raise make(
+                "E0901",
+                f"the native backend does not implement '{name}' on a "
+                f"{self.types.get(instruction.args[0])}",
+                None,
+                hint="build with the C backend (the default): `nava build` without "
+                     "--backend native",
+            )
+        if arity == 0:
+            code.call("nv_string_new")
+            self.store(instruction.value, RAX)
+            return
+        if name == "string_len" or name == "string_capacity":
+            self.load(instruction.args[0], RAX)
+            code.load(RAX, RAX, (STRING_LENGTH if name == "string_len"
+                                 else STRING_CAPACITY))
+            self.store(instruction.value, RAX)
+            return
+        for index, argument in enumerate(instruction.args):
+            self.load(argument, ARGUMENT_REGISTERS[index])
+        code.call("nv_string_" + name[len("string_"):])
         if instruction.typ != "void":
             self.store(instruction.value, RAX)
 
@@ -2062,6 +2122,26 @@ class Generator:
                              ("nv_read_i64", self.read_i64_helper)):
             self.runtime_function(symbol, body)
         self.bn_runtime()
+        if any(self.uses_builtin(name) for name in self.STRING_BUILTINS):
+            # The family is one per program, not one per type: a `String` has no
+            # element type to generate from. `reserve` is not a builtin the program
+            # calls — it is what `push` needs.
+            for symbol, body in (("nv_string_new", self.string_new),
+                                 ("nv_string_reserve", self.string_reserve),
+                                 ("nv_string_push", self.string_push),
+                                 ("nv_string_push_byte", self.string_push_byte),
+                                 ("nv_string_clear", self.string_clear),
+                                 ("nv_string_text", self.string_text)):
+                if symbol == "nv_string_reserve" and not (
+                        self.uses_builtin("string_push")
+                        or self.uses_builtin("string_push_byte")):
+                    continue
+                if symbol not in ("nv_string_reserve",) \
+                        and not self.uses_builtin("string" + symbol[len("nv_string"):]):
+                    continue
+                self.runtime_function(symbol, body)
+            if self.uses_builtin("string_push_byte"):
+                self.runtime_function("nv_fail_byte", self.fail_byte)
         # The two hashes are shared: which one a key uses is decided by the key's
         # type, so a `HashMap(str, i64)` and a `HashSet(i64)` in one program need one
         # copy of each and no more.
@@ -2722,6 +2802,324 @@ class Generator:
         code.load(RDI, R11, field_offset)
         code.load(RAX, RBP, -48)
         code.add_reg(RDI, RAX)
+
+    # -- the `String` builder --------------------------------------------------
+    #
+    # A `String` is the one owning value whose size is *text*: it grows a byte at a
+    # time, and the bytes it holds are not a Nava `str` until `string_text` copies
+    # them into the arena. That copy is the whole point — a builder's buffer moves
+    # when it grows, so a `str` must never point into it.
+    def string_new(self) -> None:
+        """`nv_string_new(void)`: an empty builder, zeroed by the arena.
+
+        The C runtime `calloc`s the same three words and frees them when the
+        binding goes; this backend does not give memory back, which is the arena's
+        documented limit and not a difference a program can observe.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.mov_imm(RDI, STRING_SIZE)
+        code.call("nv_alloc")
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def string_reserve(self) -> None:
+        """`nv_string_reserve(rdi = text, rsi = needed)`: room for `needed` bytes.
+
+        The capacity doubles from `STRING_INITIAL_CAPACITY` until it holds what is
+        needed, which is what makes a run of pushes cost amortised constant time
+        per byte. The limit is the array's, because a buffer of bytes *is* an array
+        of them, and the message the C runtime prints for one that is too long is
+        the language's. The old buffer is left to the arena rather than freed.
+        """
+        code = self.code
+        sized, grow, sized_ok, move = (self.local("str_sized"), self.local("str_grow"),
+                                       self.local("str_alloc"), self.local("str_move"))
+        copied, done = self.local("str_copied"), self.local("str_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(48)
+        code.store(RBP, -8, RDI)                # the builder
+        code.store(RBP, -16, RSI)               # how many bytes are needed
+        code.load(R11, RDI, STRING_CAPACITY)
+        code.cmp_reg(RSI, R11)
+        code.jcc("le", done)
+        code.load(R10, RBP, -8)
+        code.load(R10, R10, STRING_CAPACITY)
+        code.mov_imm(R11, 0)
+        code.cmp_reg(R10, R11)
+        code.jcc("g", sized)
+        code.mov_imm(R10, STRING_INITIAL_CAPACITY)
+        code.label(sized)
+        code.label(grow)
+        code.load(R11, RBP, -16)
+        code.cmp_reg(R10, R11)
+        code.jcc("ge", sized_ok)
+        code.mov_reg(RAX, R10)
+        code.mov_imm(R11, 2)
+        code.imul_reg(RAX, R11)
+        self.overflow("mul")
+        code.mov_reg(R10, RAX)
+        code.jmp(grow)
+        code.label(sized_ok)
+        within = self.local("str_within")
+        code.mov_imm(R11, MAX_ELEMENTS)
+        code.cmp_reg(R10, R11)
+        code.jcc("le", within)
+        code.mov_reg(RDI, R10)
+        code.mov_imm(RSI, MAX_ELEMENTS)
+        code.mov_imm(RDX, 1)                    # kind 1: a length above the limit
+        code.call("nv_fail_pair")
+        code.label(within)
+        code.store(RBP, -24, R10)               # the capacity
+        code.mov_reg(RDI, R10)                  # one byte each
+        code.call("nv_alloc")
+        code.store(RBP, -32, RAX)               # the new buffer
+        code.load(R8, RBP, -32)                 # where the bytes go
+        code.load(R9, RBP, -8)
+        code.load(RCX, R9, STRING_DATA)         # the old buffer
+        code.load(R11, R9, STRING_LENGTH)       # how many to move
+        code.label(move)
+        code.test_reg(R11)
+        code.jcc("e", copied)
+        code.load_byte(RAX, RCX, 0)
+        code.store_byte(R8, 0, RAX)
+        code.inc(R8)
+        code.inc(RCX)
+        code.dec(R11)
+        code.jmp(move)
+        code.label(copied)
+        code.load(R9, RBP, -8)
+        code.load(R10, RBP, -32)
+        code.store(R9, STRING_DATA, R10)
+        code.load(R10, RBP, -24)
+        code.store(R9, STRING_CAPACITY, R10)
+        code.label(done)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def string_push(self) -> None:
+        """`nv_string_push(rdi = text, rsi = value)`: the bytes of `value`, then a NUL.
+
+        The new length is computed with the language's checked `+`, so a text that
+        would not fit an `i64` stops here instead of wrapping — the C runtime says
+        `nv_add` for the same two additions, and the message is one message.
+        """
+        code = self.code
+        loop, done = self.local("str_push_loop"), self.local("str_push_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)                # the builder
+        code.store(RBP, -16, RSI)               # the text to append
+        code.load(R11, RSI, 0)                  # how many bytes it is
+        code.store(RBP, -24, R11)
+        code.load(RAX, RDI, STRING_LENGTH)
+        code.add_reg(RAX, R11)
+        self.overflow("add")
+        code.mov_imm(R11, 1)                    # and the NUL the buffer keeps
+        code.add_reg(RAX, R11)
+        self.overflow("add")
+        code.mov_reg(RSI, RAX)
+        code.call("nv_string_reserve")
+        code.load(R9, RBP, -8)
+        code.load(R8, R9, STRING_DATA)
+        code.load(R11, R9, STRING_LENGTH)
+        code.add_reg(R8, R11)                   # where the bytes are appended
+        code.load(R10, RBP, -16)
+        code.lea(R10, R10, FIELD_SIZE)          # the bytes of the text being pushed
+        code.load(RCX, RBP, -24)
+        code.label(loop)
+        code.test_reg(RCX)
+        code.jcc("e", done)
+        code.load_byte(RAX, R10, 0)
+        code.store_byte(R8, 0, RAX)
+        code.inc(R8)
+        code.inc(R10)
+        code.dec(RCX)
+        code.jmp(loop)
+        code.label(done)
+        code.load(R9, RBP, -8)
+        code.load(R11, R9, STRING_LENGTH)
+        code.load(RAX, RBP, -24)
+        code.add_reg(R11, RAX)
+        self.overflow("add")
+        code.store(R9, STRING_LENGTH, R11)
+        code.load(R8, R9, STRING_DATA)
+        code.add_reg(R8, R11)
+        code.store_byte_imm(R8, 0, 0)           # the NUL that ends the text
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def string_push_byte(self) -> None:
+        """`nv_string_push_byte(rdi = text, rsi = byte)`: one byte, then a NUL.
+
+        Two traps, in the C runtime's order and with its words: a byte outside
+        `0..255` names the byte it was given, and a zero byte is refused on its
+        own, because a `String` is a NUL-terminated buffer and a NUL inside it
+        would make its own length a lie.
+        """
+        code = self.code
+        inside, zero = self.local("byte_inside"), self.local("byte_zero")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)                # the builder
+        code.store(RBP, -16, RSI)               # the byte
+        code.mov_imm(R11, 0)
+        code.cmp_reg(RSI, R11)
+        code.jcc("l", zero)
+        code.mov_imm(R11, 255)
+        code.cmp_reg(RSI, R11)
+        code.jcc("le", inside)
+        code.label(zero)
+        code.mov_reg(RDI, RSI)
+        code.call("nv_fail_byte")
+        code.label(inside)
+        code.load(R11, RBP, -16)
+        code.test_reg(R11)
+        code.jcc("ne", "nv_string_push_byte.ok")
+        self.fail("a String cannot contain a NUL byte")
+        code.label("nv_string_push_byte.ok")
+        code.load(R9, RBP, -8)
+        code.load(RAX, R9, STRING_LENGTH)
+        code.mov_imm(R11, 2)                    # the byte and the NUL
+        code.add_reg(RAX, R11)
+        self.overflow("add")
+        code.mov_reg(RSI, RAX)
+        code.mov_reg(RDI, R9)
+        code.call("nv_string_reserve")
+        code.load(R9, RBP, -8)
+        code.load(R8, R9, STRING_DATA)
+        code.load(R11, R9, STRING_LENGTH)
+        code.add_reg(R8, R11)
+        code.load(RAX, RBP, -16)
+        code.store_byte(R8, 0, RAX)
+        code.load(R9, RBP, -8)
+        code.load(R11, R9, STRING_LENGTH)
+        code.mov_imm(R10, 1)
+        code.add_reg(R11, R10)
+        self.overflow("add")
+        code.store(R9, STRING_LENGTH, R11)
+        code.load(R8, R9, STRING_DATA)
+        code.add_reg(R8, R11)
+        code.store_byte_imm(R8, 0, 0)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def string_clear(self) -> None:
+        """`nv_string_clear(rdi = text)`: no bytes, and the buffer is not given back.
+
+        The capacity stays: a builder that is cleared and filled again does not
+        allocate twice, which is the same promise a `Vec` makes.
+        """
+        code = self.code
+        empty = self.local("str_clear_empty")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(16)
+        code.store(RBP, -8, RDI)
+        code.mov_imm(R11, 0)
+        code.store(RDI, STRING_LENGTH, R11)
+        code.load(R11, RDI, STRING_DATA)
+        code.test_reg(R11)
+        code.jcc("e", empty)
+        code.store_byte_imm(R11, 0, 0)
+        code.label(empty)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def string_text(self) -> None:
+        """`nv_string_text(rdi = text)` -> a `str` holding the bytes, copied out.
+
+        The copy is what makes the answer a `str` rather than a view: the buffer
+        will move the next time the builder grows, so a `str` must not point into
+        it. A native string is its length and then its bytes, which is why this
+        allocates one word more than the C runtime's `nv_arena_text` — that one is
+        NUL-terminated instead of length-prefixed.
+        """
+        code = self.code
+        loop, done = self.local("str_text_loop"), self.local("str_text_done")
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.store(RBP, -8, RDI)
+        code.load(R11, RDI, STRING_LENGTH)
+        code.mov_reg(RAX, R11)
+        code.mov_imm(R10, FIELD_SIZE)           # the length word
+        code.add_reg(RAX, R10)
+        self.overflow("add")
+        code.mov_reg(RDI, RAX)
+        code.call("nv_alloc")
+        code.store(RBP, -16, RAX)               # the new string
+        code.load(R9, RBP, -8)
+        code.load(R11, R9, STRING_LENGTH)
+        code.store(RAX, 0, R11)                 # its length
+        code.lea(R8, RAX, FIELD_SIZE)           # its bytes
+        code.load(R10, R9, STRING_DATA)
+        code.mov_reg(RCX, R11)
+        code.label(loop)
+        code.test_reg(RCX)
+        code.jcc("e", done)
+        code.load_byte(RAX, R10, 0)
+        code.store_byte(R8, 0, RAX)
+        code.inc(R8)
+        code.inc(R10)
+        code.dec(RCX)
+        code.jmp(loop)
+        code.label(done)
+        code.load(RAX, RBP, -16)
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
+
+    def fail_byte(self) -> None:
+        """`nv_fail_byte(rdi = byte)`: the one numbered trap that is not a pair.
+
+        `a string byte must be in 0..255, got N` is the only runtime message that
+        carries a number and is not an index, a length or a pair of indices, so it
+        is its own helper rather than a fifth kind of `nv_fail_pair` — a fifth
+        kind would make that helper branch on a shape it does not otherwise have.
+        """
+        code = self.code
+        code.push(RBP)
+        code.mov_reg(RBP, RSP)
+        code.sub_rsp(32)
+        code.mov_reg(RDI, RDI)
+        code.lea_rip(RSI, self.number_buffer(4))
+        code.call("nv_format")
+        code.store(RBP, -16, RAX)               # where the digits start
+        code.store(RBP, -24, RDX)               # how many there are
+        code.lea_rip(RSI, self.raw("nv_prefix", FAIL_PREFIX.encode()))
+        code.mov_imm(RDX, len(FAIL_PREFIX))
+        code.mov_imm(RDI, 2)
+        code.mov_imm(RAX, 1)
+        code.syscall()
+        self.write_bytes("a string byte must be in 0..255, got ")
+        self.write_number(-16, -24)
+        self.newline_to(2)
+        flag = self.raw("nv_trace_flag", bytes(8), DATA)
+        no_trace = self.local("no_trace")
+        code.lea_rip(RAX, flag)
+        code.load(RAX, RAX, 0)
+        code.test_reg(RAX)
+        code.jcc("e", no_trace)
+        code.mov_reg(RDI, RBP)
+        code.call("nv_trace_stack")
+        code.label(no_trace)
+        code.mov_imm(RDI, 1)
+        code.mov_imm(RAX, 60)
+        code.syscall()
+        code.mov_reg(RSP, RBP)
+        code.pop(RBP)
+        code.ret()
 
     # -- text, numbers and input ---------------------------------------------
     def array_view_helper(self) -> None:

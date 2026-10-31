@@ -1413,6 +1413,27 @@ REGISTERED_TESTS = {
     #: so the evidence is that the two backends agree on a function passed, held,
     #: returned and crossed over a module, and that a value and a direct call name
     #: one symbol.
+    #: N14m: `String` — text a piece at a time. A builder grows by doubling and its
+    #: bytes are not a `str` until `string_text` copies them into the arena, so the
+    #: evidence is a sequence long enough to grow past five doublings, the copy, and
+    #: the two traps a byte can trip.
+    "NativeStringTests": {
+        "test_a_builder_agrees_with_the_c_backend",
+        "test_growth_keeps_every_byte",
+        "test_the_text_is_a_copy_and_not_a_view",
+        "test_clear_keeps_the_capacity",
+        "test_an_empty_builder_answers_an_empty_text",
+        "test_a_byte_at_a_time",
+        "test_a_byte_outside_the_range_is_the_c_runtime_s_trap",
+        "test_a_nul_byte_is_refused_on_its_own",
+        "test_a_utf8_text_counts_bytes_and_not_characters",
+        "test_a_builder_crosses_a_function_both_ways",
+        "test_a_generated_sequence_agrees_on_every_answer",
+        "test_the_ir_states_the_builder_as_instructions",
+        "test_the_family_is_emitted_for_what_the_program_uses",
+        "test_a_string_in_a_struct_field_is_refused_by_name",
+        "test_a_string_is_not_printable_because_it_is_not_a_str",
+    },
     "NativeFunctionValueTests": {
         "test_a_function_passed_as_an_argument_runs",
         "test_a_function_held_in_a_local_runs",
@@ -1776,6 +1797,7 @@ def check_skip_state() -> list[str]:
                                (test_native, "NativeF64Tests"),
                                (test_native, "NativeVectorTests"),
                                (test_native, "NativeTableTests"),
+                               (test_native, "NativeStringTests"),
                                (test_native, "NativeFunctionValueTests"),
                                (test_native, "NativeRuntimeTests"),
                                (test_native, "NativeUnitTests"),

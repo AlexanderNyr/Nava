@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+N14m: **`String` through one IR** — text a piece at a time, with the copy that makes
+it a `str`.
+
+- A `String` is three words behind a handle — the bytes, how many are text, how many
+  the buffer holds — grown by doubling from 32 like a vector's, so a run of pushes
+  costs amortised constant time per byte. `string_len` and `string_capacity` read the
+  handle and cost no call, and `string_clear` empties the text without giving the
+  buffer back.
+- **`string_text` copies.** The builder's buffer moves when it grows, so a `str` must
+  never point into it: the bytes go into the arena and the answer is a `str` the next
+  push cannot change. A test takes a `str`, pushes two hundred more pieces and
+  asserts the first answer is still four hundred bytes.
+- Two traps a byte can trip, with the C runtime's words: a byte outside `0..255`
+  names the byte it was given, and a NUL is refused on its own, because a `String` is
+  NUL-terminated and a NUL inside it would make its own length a lie.
+- The C backend prints the same builtins from the IR — one runtime helper each, and
+  the `nv_string` typedef in front of a body the IR produced.
+- Still refused by name: a `String` in a struct field, an enum payload or a container
+  element (a copy this backend does not make), and `str_split`, `str_from_f64`,
+  `read_f64`, `chars_len`, the filesystem, the argument functions and the clock.
+
 N14l: **a function is a value** — one word, the address of its code, with no closure.
 
 - A declared function can now be passed to a function, kept in a local, returned from
